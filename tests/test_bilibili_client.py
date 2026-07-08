@@ -103,6 +103,7 @@ async def fake_get_comments(oid, type_, page_index, order):
 async def fake_get_comments_lazy(oid, type_, offset, order):
     from bilibili_api.utils.network import get_client
 
+    assert order.value == FakeCommentOrderType.TIME.value
     response = await get_client().request(
         method="GET",
         url="https://api.bilibili.com/x/v2/reply/wbi/main",
