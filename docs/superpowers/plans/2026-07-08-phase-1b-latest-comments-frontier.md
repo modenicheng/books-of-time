@@ -1693,6 +1693,7 @@ Expected: commit succeeds. Leave unrelated `README.md` changes unstaged.
   - CLI command `bot collect-latest-comments BVxxxx`
   - CLI flags `--priority 70` and `--max-scan-seconds 55`
   - task payload `{"bvid": bvid, "mode": "latest"}` plus explicit `max_scan_seconds` when supplied by CLI
+  - per-task `max_scan_seconds` override that applies only to that collector invocation and does not mutate the collector default for later tasks
 
 - [ ] **Step 1: Add CLI parser test**
 
@@ -1822,13 +1823,25 @@ async def _enqueue_latest_comments(
     logger.info("Queued latest comments task for %s", bvid)
 ```
 
-Update `LatestCommentCollector.collect()` to honor explicit CLI/test override:
+Update `LatestCommentCollector.collect()` to honor explicit CLI/test override without mutating `self.max_scan_seconds`:
 
 ```python
         configured_max_scan_seconds = task.payload.get("max_scan_seconds")
-        if configured_max_scan_seconds is not None:
-            self.max_scan_seconds = float(configured_max_scan_seconds)
+        max_scan_seconds = (
+            float(configured_max_scan_seconds)
+            if configured_max_scan_seconds is not None
+            else self.max_scan_seconds
+        )
 ```
+
+Update the internal time-budget helpers in `LatestCommentCollector` so this local value is passed through one scan:
+
+```python
+    def _time_expired(self, started_at: float, *, max_scan_seconds: float) -> bool:
+        return self.monotonic() - started_at >= max_scan_seconds
+```
+
+Then pass `max_scan_seconds=max_scan_seconds` from `collect()` into `_run_baseline_tail`, `_run_head_sweep`, and `_run_incremental`, and from those methods into `_fetch_page_with_retry` and `_time_expired`. Keep `self.max_scan_seconds` as the immutable collector default configured by `build_worker`.
 
 - [ ] **Step 5: Run app and CLI tests**
 
