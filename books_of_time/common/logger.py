@@ -2,7 +2,7 @@
 Logger module — Rich-powered logging for books-of-time.
 
 Usage:
-    from utils.logger import get_logger
+    from books_of_time.common.logger import get_logger
 
     logger = get_logger(__name__)
     logger.info("Hello, rich world!")
@@ -10,7 +10,7 @@ Usage:
     logger.error("Something failed", exc_info=True)
 
 Entry-point (optional, for customisation):
-    from utils.logger import setup_logging
+    from books_of_time.common.logger import setup_logging
 
     setup_logging(level="DEBUG", tracebacks_show_locals=True)
 """

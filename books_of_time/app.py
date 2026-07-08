@@ -1,0 +1,74 @@
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+from books_of_time.collectors.video_stats import VideoStatsCollector
+from books_of_time.domain.enums import TaskKind
+from books_of_time.http.client import RawHttpClient
+from books_of_time.http.rate_limiter import RateLimitRule, TokenBucketRateLimiter
+from books_of_time.platforms.bilibili.client import BilibiliPlatformClient
+from books_of_time.storage.filesystem import RawPayloadFileStore
+from books_of_time.worker import Worker
+
+
+def build_session_factory(
+    cfg: dict[str, Any],
+) -> async_sessionmaker[AsyncSession]:
+    db_cfg = cfg["database"]
+    engine = create_async_engine(
+        db_cfg["url"],
+        pool_size=db_cfg.get("pool_size", 5),
+        max_overflow=db_cfg.get("max_overflow", 10),
+        pool_pre_ping=db_cfg.get("pool_pre_ping", True),
+        echo=db_cfg.get("echo", False),
+    )
+    return async_sessionmaker(engine, expire_on_commit=False)
+
+
+def build_rate_limiter(cfg: dict[str, Any]) -> TokenBucketRateLimiter:
+    rules = {
+        key: RateLimitRule(rps=float(value["rps"]), burst=int(value["burst"]))
+        for key, value in cfg.get("rate_limit", {}).items()
+    }
+    return TokenBucketRateLimiter(rules)
+
+
+def build_bilibili_client(cfg: dict[str, Any]) -> BilibiliPlatformClient:
+    http_cfg = cfg.get("http", {})
+    return BilibiliPlatformClient(
+        http_client=RawHttpClient(
+            timeout_seconds=float(http_cfg.get("timeout_seconds", 10)),
+            user_agent=str(
+                http_cfg.get("user_agent", "BooksOfTime/0.1 research collector")
+            ),
+        ),
+        rate_limiter=build_rate_limiter(cfg),
+    )
+
+
+def build_worker(
+    cfg: dict[str, Any],
+    *,
+    run_id: str,
+    lease_owner: str,
+) -> Worker:
+    session_factory = build_session_factory(cfg)
+    client = build_bilibili_client(cfg)
+    raw_dir = Path(cfg.get("storage", {}).get("raw_dir", "./data/raw"))
+    scheduler_cfg = cfg.get("scheduler", {})
+    return Worker(
+        session_factory=session_factory,
+        collectors={
+            TaskKind.FETCH_VIDEO_STATS: VideoStatsCollector(
+                client=client,
+                raw_store=RawPayloadFileStore(raw_dir),
+                run_id=run_id,
+            )
+        },
+        lease_owner=lease_owner,
+        lease_seconds=int(scheduler_cfg.get("lease_seconds", 120)),
+        retry_delay_seconds=int(scheduler_cfg.get("default_retry_delay_seconds", 300)),
+    )

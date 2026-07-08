@@ -1,0 +1,55 @@
+from __future__ import annotations
+
+import json
+from typing import Protocol
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from books_of_time.db.models import CollectionTask
+from books_of_time.db.repositories import (
+    RawPayloadRepository,
+    VideoMetricSnapshotRepository,
+)
+from books_of_time.http.client import FetchResult
+from books_of_time.parsers.video import VIDEO_PARSER_VERSION, parse_video_stats
+from books_of_time.storage.filesystem import RawPayloadFileStore
+
+
+class VideoStatsClient(Protocol):
+    async def get_video_stats(self, bvid: str) -> FetchResult: ...
+
+
+class VideoStatsCollector:
+    def __init__(
+        self,
+        *,
+        client: VideoStatsClient,
+        raw_store: RawPayloadFileStore,
+        run_id: str,
+    ) -> None:
+        self.client = client
+        self.raw_store = raw_store
+        self.run_id = run_id
+
+    async def collect(self, task: CollectionTask, session: AsyncSession) -> None:
+        bvid = str(task.payload.get("bvid") or task.target_id)
+        result = await self.client.get_video_stats(bvid)
+        raw_repo = RawPayloadRepository(session)
+        stored = self.raw_store.save(
+            body=result.body,
+            captured_at=result.captured_at,
+            run_id=self.run_id,
+            suffix=".json",
+        )
+        raw = await raw_repo.insert_from_fetch_result(
+            result=result,
+            stored=stored,
+            parser_version=VIDEO_PARSER_VERSION,
+        )
+
+        parsed = parse_video_stats(
+            json.loads(result.body),
+            captured_at=result.captured_at,
+            raw_payload_id=raw.id,
+        )
+        await VideoMetricSnapshotRepository(session).insert_from_parsed(parsed)

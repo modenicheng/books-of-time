@@ -1,0 +1,80 @@
+# ──────────────────────────────────────────────────────────────
+#  books-of-time  —  应用配置示例
+#  复制为 config.yaml 并填入实际值
+# ──────────────────────────────────────────────────────────────
+
+database:
+  # PostgreSQL 异步连接 URL（asyncpg driver）
+  # 格式: postgresql+asyncpg://user:password@host:port/dbname
+  url: "postgresql+asyncpg://postgres:password@localhost:5432/books_of_time"
+
+  # 连接池设置
+  pool_size: 5
+  max_overflow: 10
+  pool_pre_ping: true
+  echo: false  # SQL 日志（调试时设为 true）
+
+storage:
+  backend: filesystem
+  raw_dir: ./data/raw
+
+http:
+  timeout_seconds: 10
+  user_agent: "BooksOfTime/0.1 research collector"
+
+rate_limit:
+  global:
+    rps: 1.0
+    burst: 3
+  host:bilibili:
+    rps: 0.8
+    burst: 2
+  bilibili:video_stats:
+    rps: 0.5
+    burst: 2
+  bilibili:user_video_list:
+    rps: 0.2
+    burst: 1
+  bilibili:comment_hot:
+    rps: 0.2
+    burst: 1
+  bilibili:comment_latest:
+    rps: 0.2
+    burst: 1
+  bilibili:comment_reply:
+    rps: 0.1
+    burst: 1
+
+scheduler:
+  lease_seconds: 120
+  default_retry_delay_seconds: 300
+  max_retries: 3
+  discovery_scan_seconds: 60
+  core_start_hour: 10
+  core_stop_hour: 22
+  timezone: Asia/Shanghai
+
+request_budget:
+  s:
+    per_round: 200
+    hot_pages: 20
+    latest_pages: 30
+    reply_roots: 30
+  a:
+    per_round: 80
+    hot_pages: 10
+    latest_pages: 10
+    reply_roots: 10
+  b:
+    per_round: 20
+    hot_pages: 3
+    latest_pages: 3
+    reply_roots: 2
+  c:
+    per_round: 3
+    hot_pages: 1
+    latest_pages: 0
+    reply_roots: 0
+
+discovery:
+  matrix_uids: []

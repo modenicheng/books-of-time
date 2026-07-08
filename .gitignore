@@ -1,6 +1,8 @@
 # Python-generated files
 __pycache__/
 *.py[oc]
+.pytest_cache/
+.ruff_cache/
 build/
 dist/
 wheels/
@@ -8,3 +10,15 @@ wheels/
 
 # Virtual environments
 .venv
+
+# ── 数据库 ────────────────────────────────────────────────────
+# 本地配置文件含敏感数据库凭据，不提交
+/config/config.yaml
+
+# 本地采集 raw 归档和运行时数据，不提交
+/data/
+
+# Alembic 迁移脚本——不提交以避免协作冲突
+# 每个开发者独立在本地生成迁移
+alembic/versions/
+!alembic/versions/.gitignore

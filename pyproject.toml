@@ -5,10 +5,15 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "alembic>=1.13",
+    "asyncpg>=0.31.0",
     "bilibili-api-python>=17.4.2",
     "curl-cffi>=0.15.0",
+    "pydantic>=2.0",
     "pyyaml>=6.0.3",
     "rich>=15.0.0",
+    "sqlalchemy[asyncio]>=2.0",
+    "zstandard>=0.25.0",
 ]
 
 # ── 构建工具 ──────────────────────────────────────────────────
@@ -20,7 +25,10 @@ dependencies = [
 # ── 开发依赖 ──────────────────────────────────────────────────
 [dependency-groups]
 dev = [
+    "aiosqlite>=0.22.1",
     "pre-commit>=4.0.0",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
     "ruff>=0.9.0",
 ]
 
@@ -46,7 +54,11 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"__init__.py" = ["F401"]  # 允许未使用的 import（用于 re-export）
+"__init__.py" = ["F401"]
+# 中文注释/文档中的全角标点是故意的
+"books_of_time/config/*.py" = ["RUF002", "RUF003"]
+"books_of_time/db/*.py" = ["RUF002", "RUF003"]
+"books_of_time/schemas/*.py" = ["RUF002", "RUF003"]
 
 [tool.ruff.format]
 # 与项目现有风格保持一致
@@ -54,3 +66,6 @@ quote-style = "double"
 indent-style = "space"
 skip-magic-trailing-comma = false
 line-ending = "lf"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
