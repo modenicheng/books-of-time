@@ -12,6 +12,7 @@ from books_of_time.db.models import (
 )
 from books_of_time.db.repositories import (
     CommentRepository,
+    FrontierStateRepository,
     RawPageObservationRepository,
 )
 from books_of_time.domain.enums import BilibiliRequestType
@@ -95,5 +96,88 @@ async def test_comment_repository_upserts_entity_and_appends_observations() -> N
         assert observations[0].raw_page_observation_id == raw_page.id
         assert observations[0].content == "first comment"
         assert observations[0].author_name == "Alice"
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_frontier_repository_creates_once_and_persists_extra() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    now = datetime(2026, 7, 8, 10, 0, tzinfo=UTC)
+
+    async with session_factory() as session:
+        repo = FrontierStateRepository(session)
+        state = await repo.get_or_create(
+            target_type="video",
+            target_id="BV1abc",
+            frontier_type="latest_comments",
+            now=now,
+        )
+        state.extra = {
+            "baseline_status": "baseline_paused",
+            "seen_cursors": [""],
+        }
+        state.cursor = "offset-2"
+        await repo.save(state)
+        await session.commit()
+
+    async with session_factory() as session:
+        repo = FrontierStateRepository(session)
+        same = await repo.get_or_create(
+            target_type="video",
+            target_id="BV1abc",
+            frontier_type="latest_comments",
+            now=now,
+        )
+
+        assert same.id == state.id
+        assert same.cursor == "offset-2"
+        assert same.extra["baseline_status"] == "baseline_paused"
+        assert same.extra["seen_cursors"] == [""]
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_latest_raw_page_observation_stores_request_cursor() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    parsed = ParsedCommentPage(
+        bvid="BV1abc",
+        oid=777,
+        captured_at=datetime(2026, 7, 8, 10, 0, tzinfo=UTC),
+        raw_payload_id=42,
+        sort_mode="latest",
+        page_number=3,
+        comments=[],
+        extra={
+            "request_offset": "offset-2",
+            "next_offset": "offset-3",
+            "is_end": False,
+        },
+    )
+
+    async with session_factory() as session:
+        raw_page = await RawPageObservationRepository(session).insert_from_parsed_page(
+            parsed,
+            request_type=BilibiliRequestType.COMMENT_LATEST,
+        )
+        await session.commit()
+
+    async with session_factory() as session:
+        saved = await session.scalar(select(RawPageObservation))
+
+        assert saved is not None
+        assert saved.id == raw_page.id
+        assert saved.cursor == "offset-2"
+        assert saved.sort_mode == "latest"
+        assert saved.extra["next_offset"] == "offset-3"
 
     await engine.dispose()

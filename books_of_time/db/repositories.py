@@ -12,6 +12,7 @@ from books_of_time.db.models import (
     CollectionTask,
     CommentEntity,
     CommentObservation,
+    FrontierState,
     RawPageObservation,
     RawPayload,
     VideoMetricSnapshot,
@@ -158,7 +159,7 @@ class RawPageObservationRepository:
             target_type="video",
             target_id=parsed.bvid,
             page_number=parsed.page_number,
-            cursor=None,
+            cursor=parsed.extra.get("request_offset"),
             sort_mode=parsed.sort_mode,
             parser_version=COMMENT_PARSER_VERSION,
             status="success",
@@ -242,6 +243,51 @@ class CommentRepository:
         self.session.add(entity)
         await self.session.flush()
         return entity
+
+
+class FrontierStateRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def get_or_create(
+        self,
+        *,
+        target_type: str,
+        target_id: str,
+        frontier_type: str,
+        now: datetime,
+    ) -> FrontierState:
+        stmt = select(FrontierState).where(
+            FrontierState.target_type == target_type,
+            FrontierState.target_id == target_id,
+            FrontierState.frontier_type == frontier_type,
+        )
+        state = await self.session.scalar(stmt)
+        if state is not None:
+            return state
+
+        state = FrontierState(
+            target_type=target_type,
+            target_id=target_id,
+            frontier_type=frontier_type,
+            frontier_rpid=None,
+            frontier_time=None,
+            cursor=None,
+            last_scan_at=None,
+            last_scan_status=None,
+            last_scan_pages=0,
+            last_scan_truncated=False,
+            extra={},
+            created_at=now,
+            updated_at=now,
+        )
+        self.session.add(state)
+        await self.session.flush()
+        return state
+
+    async def save(self, state: FrontierState) -> FrontierState:
+        await self.session.flush()
+        return state
 
 
 def _hash_params(params: dict[str, Any] | None) -> bytes | None:

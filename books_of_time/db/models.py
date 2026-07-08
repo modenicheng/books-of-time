@@ -244,3 +244,8 @@ class FrontierState(TimestampMixin, Base):
     last_scan_status: Mapped[str | None] = mapped_column(Text)
     last_scan_pages: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     last_scan_truncated: Mapped[bool] = mapped_column(nullable=False, default=False)
+    extra: Mapped[dict[str, Any]] = mapped_column(
+        json_dict_type,
+        nullable=False,
+        default=dict,
+    )
