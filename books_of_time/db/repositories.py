@@ -8,9 +8,21 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from books_of_time.db.models import CollectionTask, RawPayload, VideoMetricSnapshot
-from books_of_time.domain.enums import TaskKind, TaskStatus
+from books_of_time.db.models import (
+    CollectionTask,
+    CommentEntity,
+    CommentObservation,
+    RawPageObservation,
+    RawPayload,
+    VideoMetricSnapshot,
+)
+from books_of_time.domain.enums import BilibiliRequestType, TaskKind, TaskStatus
 from books_of_time.http.client import FetchResult
+from books_of_time.parsers.comments import (
+    COMMENT_PARSER_VERSION,
+    ParsedComment,
+    ParsedCommentPage,
+)
 from books_of_time.parsers.video import ParsedVideoStats
 from books_of_time.storage.filesystem import StoredRawPayload
 
@@ -127,6 +139,109 @@ class RawPayloadRepository:
         self.session.add(raw)
         await self.session.flush()
         return raw
+
+
+class RawPageObservationRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def insert_from_parsed_page(
+        self,
+        parsed: ParsedCommentPage,
+        *,
+        request_type: BilibiliRequestType,
+    ) -> RawPageObservation:
+        observation = RawPageObservation(
+            raw_payload_id=parsed.raw_payload_id,
+            captured_at=parsed.captured_at,
+            request_type=request_type,
+            target_type="video",
+            target_id=parsed.bvid,
+            page_number=parsed.page_number,
+            cursor=None,
+            sort_mode=parsed.sort_mode,
+            parser_version=COMMENT_PARSER_VERSION,
+            status="success",
+            item_count=len(parsed.comments),
+            extra=parsed.extra,
+        )
+        self.session.add(observation)
+        await self.session.flush()
+        return observation
+
+
+class CommentRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def upsert_page(
+        self,
+        parsed: ParsedCommentPage,
+        *,
+        raw_page_observation_id: int,
+    ) -> list[CommentObservation]:
+        observations: list[CommentObservation] = []
+        for comment in parsed.comments:
+            await self._ensure_entity(
+                comment,
+                captured_at=parsed.captured_at,
+                raw_payload_id=parsed.raw_payload_id,
+            )
+            observation = CommentObservation(
+                rpid=comment.rpid,
+                bvid=comment.bvid,
+                oid=comment.oid,
+                captured_at=parsed.captured_at,
+                raw_payload_id=parsed.raw_payload_id,
+                raw_page_observation_id=raw_page_observation_id,
+                sort_mode=parsed.sort_mode,
+                page_number=parsed.page_number,
+                position=comment.position,
+                content=comment.content,
+                content_hash=comment.content_hash,
+                like_count=comment.like_count,
+                reply_count=comment.reply_count,
+                author_mid=comment.author_mid,
+                author_name=comment.author_name,
+                is_deleted=False,
+                visibility="visible",
+                extra={},
+            )
+            self.session.add(observation)
+            observations.append(observation)
+        await self.session.flush()
+        return observations
+
+    async def _ensure_entity(
+        self,
+        comment: ParsedComment,
+        *,
+        captured_at: datetime,
+        raw_payload_id: int,
+    ) -> CommentEntity:
+        entity = await self.session.get(CommentEntity, comment.rpid)
+        if entity is not None:
+            entity.updated_at = captured_at
+            return entity
+
+        entity = CommentEntity(
+            rpid=comment.rpid,
+            oid=comment.oid,
+            bvid=comment.bvid,
+            root_rpid=comment.root_rpid,
+            parent_rpid=comment.parent_rpid,
+            author_mid=comment.author_mid,
+            author_name=comment.author_name,
+            first_content=comment.content,
+            first_content_hash=comment.content_hash,
+            first_seen_at=captured_at,
+            first_raw_payload_id=raw_payload_id,
+            created_at=captured_at,
+            updated_at=captured_at,
+        )
+        self.session.add(entity)
+        await self.session.flush()
+        return entity
 
 
 def _hash_params(params: dict[str, Any] | None) -> bytes | None:
