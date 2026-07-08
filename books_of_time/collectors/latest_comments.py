@@ -127,10 +127,15 @@ class LatestCommentCollector:
     def _time_expired(self, started_at: float) -> bool:
         return self.monotonic() - started_at >= self.max_scan_seconds
 
-    async def _sleep_for_attempt(self, attempt_index: int) -> None:
-        seconds = self.page_retry_backoff_seconds[
+    def _remaining_scan_seconds(self, started_at: float) -> float:
+        return self.max_scan_seconds - (self.monotonic() - started_at)
+
+    def _retry_backoff_seconds(self, attempt_index: int) -> float:
+        return self.page_retry_backoff_seconds[
             min(attempt_index, len(self.page_retry_backoff_seconds) - 1)
         ]
+
+    async def _sleep_for_seconds(self, seconds: float) -> None:
         result = self.sleep(seconds)
         if inspect.isawaitable(result):
             await result
@@ -178,7 +183,17 @@ class LatestCommentCollector:
                         baseline=baseline,
                     )
                     return None
-                await self._sleep_for_attempt(attempts - 1)
+                backoff_seconds = self._retry_backoff_seconds(attempts - 1)
+                if backoff_seconds > self._remaining_scan_seconds(started_at):
+                    self._mark_paused_after_failed_attempts(
+                        state,
+                        cursor=offset,
+                        reason=str(exc),
+                        attempts=attempts,
+                        baseline=baseline,
+                    )
+                    return None
+                await self._sleep_for_seconds(backoff_seconds)
         self._mark_corrupted(state, baseline=baseline)
         return None
 
@@ -211,8 +226,6 @@ class LatestCommentCollector:
                 state.extra["failed_reason"] = "cursor repeated"
                 self._mark_corrupted(state, baseline=True)
                 return
-            seen_cursors.append(offset)
-            state.extra["seen_cursors"] = seen_cursors
 
             result = await self._fetch_page_with_retry(
                 state=state,
@@ -236,6 +249,8 @@ class LatestCommentCollector:
             )
             pages_this_run += 1
             state.last_scan_pages = int(state.last_scan_pages or 0) + 1
+            seen_cursors.append(offset)
+            state.extra["seen_cursors"] = seen_cursors
             if (
                 state.extra.get("baseline_start_frontier_rpid") is None
                 and parsed.comments

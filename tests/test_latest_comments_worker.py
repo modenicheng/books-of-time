@@ -109,7 +109,9 @@ async def build_worker_with_task(
     *,
     max_scan_seconds: float = 55,
     page_retry_attempts: int = 3,
+    page_retry_backoff_seconds: list[float] | None = None,
     clock=None,
+    sleep=None,
 ):
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as conn:
@@ -134,9 +136,9 @@ async def build_worker_with_task(
         run_id="test-run",
         max_scan_seconds=max_scan_seconds,
         page_retry_attempts=page_retry_attempts,
-        page_retry_backoff_seconds=[0, 0, 0],
+        page_retry_backoff_seconds=page_retry_backoff_seconds or [0, 0, 0],
         monotonic=clock.monotonic if clock else None,
-        sleep=lambda seconds: None,
+        sleep=sleep or (lambda seconds: None),
     )
     worker = Worker(
         session_factory=session_factory,
@@ -293,5 +295,112 @@ async def test_failed_cursor_pauses_when_time_slice_expires_before_attempts_exha
         assert state.extra["failed_cursor"] == ""
         assert state.extra["failed_attempts"] == 1
         assert "temporary down" in state.extra["failed_reason"]
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_failed_cursor_resumes_retry_on_next_run_without_repeat_corruption(
+    tmp_path,
+) -> None:
+    client = FakeLatestClient(
+        {
+            "": latest_body(rpid=3003, next_offset="offset-2"),
+            "offset-2": latest_body(rpid=3002, next_offset="", is_end=True),
+        },
+        failures={"": [RuntimeError("temporary down")]},
+    )
+    first_run_clock = ManualClock([0, 0, 56, 56])
+    engine, session_factory, worker, now = await build_worker_with_task(
+        tmp_path,
+        client,
+        max_scan_seconds=55,
+        page_retry_attempts=3,
+        clock=first_run_clock,
+    )
+
+    await worker.run_once(now=now)
+
+    async with session_factory() as session:
+        paused_state = await session.scalar(select(FrontierState))
+
+        assert paused_state is not None
+        assert paused_state.last_scan_status == "baseline_paused"
+        assert paused_state.extra["failed_cursor"] == ""
+        assert paused_state.extra["failed_attempts"] == 1
+
+    second_run_collector = LatestCommentCollector(
+        client=client,
+        raw_store=RawPayloadFileStore(tmp_path),
+        run_id="test-run-2",
+        max_scan_seconds=55,
+        page_retry_attempts=3,
+        page_retry_backoff_seconds=[0, 0, 0],
+        sleep=lambda seconds: None,
+    )
+    second_run_worker = Worker(
+        session_factory=session_factory,
+        collectors={TaskKind.FETCH_LATEST_COMMENTS: second_run_collector},
+        lease_owner="worker-test-2",
+    )
+
+    executed = await second_run_worker.run_once(now=datetime(2099, 1, 1, tzinfo=UTC))
+    assert executed is True
+
+    async with session_factory() as session:
+        state = await session.scalar(select(FrontierState))
+        raw_pages = (
+            await session.scalars(
+                select(RawPageObservation).order_by(RawPageObservation.id.asc())
+            )
+        ).all()
+
+        assert state is not None
+        assert state.last_scan_status == "baseline_tail_complete"
+        assert state.last_scan_truncated is False
+        assert state.cursor == ""
+        assert state.extra["baseline_status"] == "tail_complete"
+        assert state.extra.get("failed_cursor") is None
+        assert [page.cursor for page in raw_pages] == ["", "offset-2"]
+
+    assert client.latest_offsets == ["", "", "offset-2"]
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_retry_backoff_pauses_when_sleep_would_exceed_remaining_budget(
+    tmp_path,
+) -> None:
+    client = FakeLatestClient(
+        {"": latest_body(rpid=3003, next_offset="offset-2")},
+        failures={"": [RuntimeError("temporary down")]},
+    )
+    sleep_calls: list[float] = []
+    clock = ManualClock([0, 0, 50, 56])
+    engine, session_factory, worker, now = await build_worker_with_task(
+        tmp_path,
+        client,
+        max_scan_seconds=55,
+        page_retry_attempts=3,
+        page_retry_backoff_seconds=[10, 10, 10],
+        clock=clock,
+        sleep=sleep_calls.append,
+    )
+
+    await worker.run_once(now=now)
+
+    async with session_factory() as session:
+        state = await session.scalar(select(FrontierState))
+
+        assert state is not None
+        assert state.last_scan_status == "baseline_paused"
+        assert state.last_scan_truncated is True
+        assert state.cursor == ""
+        assert state.extra["failed_cursor"] == ""
+        assert state.extra["failed_attempts"] == 1
+        assert "temporary down" in state.extra["failed_reason"]
+
+    assert sleep_calls == []
 
     await engine.dispose()
