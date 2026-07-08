@@ -18,6 +18,8 @@ class FetchResult:
     status_code: int
     body: bytes
     captured_at: datetime
+    response_headers: dict[str, str] | None = None
+    response_cookies: dict[str, str] | None = None
 
 
 class RawHttpClient:
@@ -37,7 +39,10 @@ class RawHttpClient:
         url: str,
         request_type: BilibiliRequestType,
         params: dict[str, Any] | None = None,
+        data: dict[str, Any] | str | bytes | None = None,
         headers: dict[str, str] | None = None,
+        cookies: dict[str, str] | None = None,
+        allow_redirects: bool = True,
     ) -> FetchResult:
         request_headers = {"User-Agent": self.user_agent}
         if headers:
@@ -48,16 +53,25 @@ class RawHttpClient:
                 method,
                 url,
                 params=params,
+                data=data,
                 headers=request_headers,
+                cookies=cookies,
+                allow_redirects=allow_redirects,
                 timeout=self.timeout_seconds,
             )
 
+        response_headers = {key: value for key, value in response.headers.items()}
+        response_cookies = {
+            cookie.name: cookie.value for cookie in getattr(response.cookies, "jar", [])
+        }
         return FetchResult(
             request_type=request_type,
             method=method.upper(),
-            url=url,
+            url=str(response.url),
             params=params,
             status_code=response.status_code,
             body=response.content,
             captured_at=datetime.now(UTC),
+            response_headers=response_headers,
+            response_cookies=response_cookies,
         )
