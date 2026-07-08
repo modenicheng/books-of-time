@@ -7,6 +7,7 @@ from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import flag_modified
 
 from books_of_time.db.models import (
     CollectionTask,
@@ -286,6 +287,7 @@ class FrontierStateRepository:
         return state
 
     async def save(self, state: FrontierState) -> FrontierState:
+        flag_modified(state, "extra")
         await self.session.flush()
         return state
 

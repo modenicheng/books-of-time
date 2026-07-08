@@ -117,10 +117,8 @@ async def test_frontier_repository_creates_once_and_persists_extra() -> None:
             frontier_type="latest_comments",
             now=now,
         )
-        state.extra = {
-            "baseline_status": "baseline_paused",
-            "seen_cursors": [""],
-        }
+        state.extra["baseline_status"] = "baseline_paused"
+        state.extra["seen_cursors"] = [""]
         state.cursor = "offset-2"
         await repo.save(state)
         await session.commit()
