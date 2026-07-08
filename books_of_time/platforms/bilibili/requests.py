@@ -16,10 +16,11 @@ def classify_bilibili_request(
     if "space" in url and "arc/search" in url:
         return BilibiliRequestType.USER_VIDEO_LIST
     if "reply" in url:
-        mode = str(request_params.get("mode") or request_params.get("sort") or "")
-        if mode in {"hot", "3"}:
+        sort = str(request_params.get("sort") or "")
+        mode = str(request_params.get("mode") or "")
+        if sort in {"hot", "2"} or mode in {"hot", "3"}:
             return BilibiliRequestType.COMMENT_HOT
-        if mode in {"time", "2"}:
+        if sort in {"time", "0"} or mode in {"time", "2"}:
             return BilibiliRequestType.COMMENT_LATEST
         return BilibiliRequestType.COMMENT_REPLY
     if "search" in url:

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from bilibili_api import user, video
+from bilibili_api import comment, user, video
 from bilibili_api.user import VideoOrder
 
 from books_of_time.domain.enums import BilibiliRequestType
@@ -38,3 +38,16 @@ class BilibiliPlatformClient:
                 order=VideoOrder.PUBDATE,
             )
             return request_context.latest_result(BilibiliRequestType.USER_VIDEO_LIST)
+
+    async def get_hot_comments(self, *, aid: int, page: int = 1) -> FetchResult:
+        with capture_bili_api_requests(
+            http_client=self.http_client,
+            rate_limiter=self.rate_limiter,
+        ) as request_context:
+            await comment.get_comments(
+                oid=aid,
+                type_=comment.CommentResourceType.VIDEO,
+                page_index=page,
+                order=comment.OrderType.LIKE,
+            )
+            return request_context.latest_result(BilibiliRequestType.COMMENT_HOT)

@@ -73,6 +73,32 @@ class FakeUser:
         return response.json()["data"]
 
 
+class FakeCommentResourceType:
+    VIDEO = type("VideoType", (), {"value": 1})()
+
+
+class FakeCommentOrderType:
+    LIKE = type("LikeOrder", (), {"value": 2})()
+
+
+async def fake_get_comments(oid, type_, page_index, order):
+    from bilibili_api.utils.network import get_client
+
+    response = await get_client().request(
+        method="GET",
+        url="https://api.bilibili.com/x/v2/reply",
+        params={
+            "oid": oid,
+            "type": type_.value,
+            "pn": page_index,
+            "sort": order.value,
+        },
+        headers={},
+        cookies={},
+    )
+    return response.json()["data"]
+
+
 @pytest.mark.asyncio
 async def test_video_stats_uses_bilibili_api_client_backend(monkeypatch) -> None:
     raw_http_client = FakeRawHttpClient()
@@ -122,4 +148,40 @@ async def test_user_video_list_uses_bilibili_api_client_backend(monkeypatch) -> 
         "global",
         "host:bilibili",
         "bilibili:user_video_list",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_hot_comments_uses_bilibili_api_client_backend(monkeypatch) -> None:
+    raw_http_client = FakeRawHttpClient()
+    rate_limiter = FakeRateLimiter()
+    monkeypatch.setattr(
+        "bilibili_api.comment.CommentResourceType",
+        FakeCommentResourceType,
+    )
+    monkeypatch.setattr(
+        "bilibili_api.comment.OrderType",
+        FakeCommentOrderType,
+    )
+    monkeypatch.setattr(
+        "bilibili_api.comment.get_comments",
+        fake_get_comments,
+    )
+
+    client = BilibiliPlatformClient(
+        http_client=raw_http_client,
+        rate_limiter=rate_limiter,
+    )
+
+    result = await client.get_hot_comments(aid=777, page=1)
+
+    assert result.request_type == BilibiliRequestType.COMMENT_HOT
+    assert raw_http_client.requests[0]["url"].endswith("/x/v2/reply")
+    assert raw_http_client.requests[0]["params"]["oid"] == 777
+    assert raw_http_client.requests[0]["params"]["pn"] == 1
+    assert raw_http_client.requests[0]["params"]["sort"] == 2
+    assert rate_limiter.keys == [
+        "global",
+        "host:bilibili",
+        "bilibili:comment_hot",
     ]
