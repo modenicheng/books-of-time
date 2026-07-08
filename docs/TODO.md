@@ -30,7 +30,7 @@
 - [x] 建立 raw payload 文件归档，使用 `.json.zst`。
 - [x] 建立 `raw_payloads` ORM 索引表。
 - [x] 保存 raw payload hash、storage URI、status code、request type 和 parser version。
-- [ ] 建立 `raw_page_observations` 表。
+- [x] 建立 `raw_page_observations` 表。
 - [ ] 为请求失败建立统一错误类型：timeout、403、429、captcha、5xx、parse_error。
 - [ ] 建立 `request_backoff_states` 表。
 - [ ] 将失败退避接入 worker 和 request layer。
@@ -81,19 +81,19 @@
 
 ## P1: Hot Comments
 
-- [ ] 调研 bilibili-api-python 评论接口，确认热门评论和最新评论方法。
-- [ ] 建立 `comment_entities` ORM 表。
-- [ ] 建立 `comment_observations` ORM 表。
-- [ ] 建立热门评论 parser。
-- [ ] 建立评论 content hash 和 user hash。
-- [ ] 实现 `HotCommentCollector`。
-- [ ] 支持热门评论第一页采集。
+- [x] 调研 bilibili-api-python 评论接口，确认热门评论和最新评论方法。
+- [x] 建立 `comment_entities` ORM 表。
+- [x] 建立 `comment_observations` ORM 表。
+- [x] 建立热门评论 parser。
+- [x] 建立评论 content hash，并保留公开用户字段用于核验。
+- [x] 实现 `HotCommentCollector`。
+- [x] 支持热门评论第一页采集。
 - [ ] 支持按视频 tier 配置热门评论页数。
-- [ ] 写入 raw page observation。
-- [ ] 写入 comment entities。
-- [ ] 写入 comment observations。
-- [ ] CLI 支持 `bot video comments BVxxxx --mode hot`。
-- [ ] 测试同一 rpid 多次观测不会重复创建 entity。
+- [x] 写入 raw page observation。
+- [x] 写入 comment entities。
+- [x] 写入 comment observations。
+- [x] CLI 支持 `bot video comments BVxxxx --mode hot`。
+- [x] 测试同一 rpid 多次观测不会重复创建 entity。
 
 ## P1: Latest Comments Frontier
 

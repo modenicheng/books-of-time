@@ -29,6 +29,13 @@ def build_parser() -> argparse.ArgumentParser:
     monitor.add_argument("bvid")
     monitor.add_argument("--priority", type=int, default=100)
 
+    video = subparsers.add_parser("video")
+    video_sub = video.add_subparsers(dest="video_command", required=True)
+    comments = video_sub.add_parser("comments")
+    comments.add_argument("bvid")
+    comments.add_argument("--mode", choices=["hot"], default="hot")
+    comments.add_argument("--priority", type=int, default=80)
+
     worker = subparsers.add_parser("worker")
     worker_sub = worker.add_subparsers(dest="worker_command", required=True)
     worker_sub.add_parser("run-once")
@@ -55,6 +62,10 @@ async def _run(args: argparse.Namespace) -> None:
 
     if args.command == "monitor-video":
         await _monitor_video(cfg, args.bvid, args.priority)
+        return
+
+    if args.command == "video" and args.video_command == "comments":
+        await _enqueue_video_comments(cfg, args.bvid, args.mode, args.priority)
         return
 
     if args.command == "worker" and args.worker_command == "run-once":
@@ -87,6 +98,29 @@ async def _monitor_video(cfg: dict, bvid: str, priority: int) -> None:
         )
         await session.commit()
     logger.info("Queued video stats task for %s", bvid)
+
+
+async def _enqueue_video_comments(
+    cfg: dict,
+    bvid: str,
+    mode: str,
+    priority: int,
+) -> None:
+    if mode != "hot":
+        raise ValueError(f"Unsupported comment mode: {mode}")
+
+    session_factory = build_session_factory(cfg)
+    async with session_factory() as session:
+        await CollectionTaskRepository(session).enqueue(
+            kind=TaskKind.FETCH_HOT_COMMENTS,
+            target_type="video",
+            target_id=bvid,
+            priority=priority,
+            payload={"bvid": bvid, "mode": mode, "page": 1},
+            not_before=datetime.now(UTC),
+        )
+        await session.commit()
+    logger.info("Queued hot comments task for %s", bvid)
 
 
 async def _discover_user(cfg: dict, mid: str, page: int) -> None:

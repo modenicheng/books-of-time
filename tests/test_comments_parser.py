@@ -79,7 +79,7 @@ def test_parse_hot_comment_page_extracts_public_comment_fields() -> None:
 
 
 def test_parse_hot_comment_page_rejects_missing_replies_list() -> None:
-    with pytest.raises(CommentParseError, match="data.replies"):
+    with pytest.raises(CommentParseError, match=r"data\.replies"):
         parse_hot_comment_page(
             {"code": 0, "data": {"replies": None}},
             bvid="BV1abc",
