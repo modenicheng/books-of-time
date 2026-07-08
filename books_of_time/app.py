@@ -5,6 +5,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from books_of_time.collectors.hot_comments import HotCommentCollector
 from books_of_time.collectors.video_stats import VideoStatsCollector
 from books_of_time.domain.enums import TaskKind
 from books_of_time.http.client import RawHttpClient
@@ -66,7 +67,12 @@ def build_worker(
                 client=client,
                 raw_store=RawPayloadFileStore(raw_dir),
                 run_id=run_id,
-            )
+            ),
+            TaskKind.FETCH_HOT_COMMENTS: HotCommentCollector(
+                client=client,
+                raw_store=RawPayloadFileStore(raw_dir),
+                run_id=run_id,
+            ),
         },
         lease_owner=lease_owner,
         lease_seconds=int(scheduler_cfg.get("lease_seconds", 120)),

@@ -1,0 +1,151 @@
+import json
+from datetime import UTC, datetime, timedelta
+
+import pytest
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+from books_of_time.collectors.hot_comments import HotCommentCollector
+from books_of_time.db.models import (
+    Base,
+    CollectionTask,
+    CommentEntity,
+    CommentObservation,
+    RawPageObservation,
+    RawPayload,
+)
+from books_of_time.db.repositories import CollectionTaskRepository
+from books_of_time.domain.enums import BilibiliRequestType, TaskKind, TaskStatus
+from books_of_time.http.client import FetchResult
+from books_of_time.storage.filesystem import RawPayloadFileStore
+from books_of_time.worker import Worker
+
+
+class FakeBilibiliClient:
+    async def get_video_stats(self, bvid: str) -> FetchResult:
+        body = json.dumps(
+            {
+                "code": 0,
+                "data": {
+                    "aid": 777,
+                    "bvid": bvid,
+                    "stat": {
+                        "view": 1,
+                        "like": 1,
+                        "coin": 0,
+                        "favorite": 0,
+                        "share": 0,
+                        "reply": 1,
+                        "danmaku": 0,
+                    },
+                },
+            }
+        ).encode()
+        return FetchResult(
+            request_type=BilibiliRequestType.VIDEO_STATS,
+            method="GET",
+            url="https://api.bilibili.com/x/web-interface/view",
+            params={"bvid": bvid},
+            status_code=200,
+            body=body,
+            captured_at=datetime(2026, 7, 8, 10, 0, tzinfo=UTC),
+        )
+
+    async def get_hot_comments(self, *, aid: int, page: int = 1) -> FetchResult:
+        body = json.dumps(
+            {
+                "code": 0,
+                "data": {
+                    "cursor": {"all_count": 1},
+                    "replies": [
+                        {
+                            "rpid": 1001,
+                            "oid": aid,
+                            "root": 0,
+                            "parent": 0,
+                            "like": 12,
+                            "rcount": 3,
+                            "member": {"mid": "42", "uname": "Alice"},
+                            "content": {"message": "first comment"},
+                        }
+                    ],
+                },
+            }
+        ).encode()
+        return FetchResult(
+            request_type=BilibiliRequestType.COMMENT_HOT,
+            method="GET",
+            url="https://api.bilibili.com/x/v2/reply",
+            params={"oid": aid, "pn": page, "sort": 2},
+            status_code=200,
+            body=body,
+            captured_at=datetime(2026, 7, 8, 10, 1, tzinfo=UTC),
+        )
+
+
+@pytest.mark.asyncio
+async def test_worker_fetch_hot_comments_archives_raw_and_writes_observations(
+    tmp_path,
+) -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    now = datetime(2026, 7, 8, 10, 0, tzinfo=UTC)
+
+    async with session_factory() as session:
+        await CollectionTaskRepository(session).enqueue(
+            kind=TaskKind.FETCH_HOT_COMMENTS,
+            target_type="video",
+            target_id="BV1abc",
+            priority=80,
+            payload={"bvid": "BV1abc", "mode": "hot", "page": 1},
+            not_before=now - timedelta(seconds=1),
+        )
+        await session.commit()
+
+    worker = Worker(
+        session_factory=session_factory,
+        collectors={
+            TaskKind.FETCH_HOT_COMMENTS: HotCommentCollector(
+                client=FakeBilibiliClient(),
+                raw_store=RawPayloadFileStore(tmp_path),
+                run_id="test-run",
+            )
+        },
+        lease_owner="worker-test",
+    )
+
+    executed = await worker.run_once(now=now)
+    assert executed is True
+
+    async with session_factory() as session:
+        task = await session.scalar(select(CollectionTask))
+        raw_payloads = (
+            await session.scalars(select(RawPayload).order_by(RawPayload.id.asc()))
+        ).all()
+        raw_page = await session.scalar(select(RawPageObservation))
+        entity = await session.scalar(select(CommentEntity))
+        observation = await session.scalar(select(CommentObservation))
+
+        assert task.status == TaskStatus.SUCCEEDED
+        assert len(raw_payloads) == 2
+        assert raw_payloads[0].request_type == BilibiliRequestType.VIDEO_STATS
+        assert raw_payloads[1].request_type == BilibiliRequestType.COMMENT_HOT
+        assert raw_page is not None
+        assert raw_page.raw_payload_id == raw_payloads[1].id
+        assert raw_page.target_id == "BV1abc"
+        assert raw_page.sort_mode == "hot"
+        assert raw_page.item_count == 1
+        assert entity is not None
+        assert entity.rpid == 1001
+        assert entity.author_mid == 42
+        assert entity.author_name == "Alice"
+        assert observation is not None
+        assert observation.rpid == 1001
+        assert observation.raw_payload_id == raw_payloads[1].id
+        assert observation.raw_page_observation_id == raw_page.id
+        assert observation.content == "first comment"
+
+    await engine.dispose()
