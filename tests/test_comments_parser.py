@@ -6,6 +6,7 @@ from books_of_time.parsers.comments import (
     CommentParseError,
     hash_comment_content,
     parse_hot_comment_page,
+    parse_latest_comment_page,
 )
 
 
@@ -99,4 +100,90 @@ def test_parse_hot_comment_page_rejects_nonzero_code() -> None:
             captured_at=datetime(2026, 7, 8, 10, 0, tzinfo=UTC),
             raw_payload_id=42,
             page_number=1,
+        )
+
+
+def latest_payload(
+    *,
+    replies: list[dict] | None,
+    next_offset: str = "offset-2",
+    is_end: bool = False,
+) -> dict:
+    return {
+        "code": 0,
+        "data": {
+            "cursor": {
+                "pagination_reply": {"next_offset": next_offset},
+                "is_end": is_end,
+            },
+            "replies": replies,
+        },
+    }
+
+
+def test_parse_latest_comment_page_extracts_cursor_and_comments() -> None:
+    captured_at = datetime(2026, 7, 8, 10, 0, tzinfo=UTC)
+    page = parse_latest_comment_page(
+        latest_payload(
+            replies=[
+                {
+                    "rpid": 2001,
+                    "oid": 777,
+                    "root": 0,
+                    "parent": 0,
+                    "like": 3,
+                    "rcount": 0,
+                    "ctime": 1783490000,
+                    "member": {"mid": "42", "uname": "Alice"},
+                    "content": {"message": "latest comment"},
+                }
+            ],
+            next_offset="offset-2",
+        ),
+        bvid="BV1abc",
+        oid=777,
+        captured_at=captured_at,
+        raw_payload_id=42,
+        page_number=1,
+        request_offset="",
+    )
+
+    assert page.sort_mode == "latest"
+    assert page.page_number == 1
+    assert page.extra["request_offset"] == ""
+    assert page.extra["next_offset"] == "offset-2"
+    assert page.extra["is_end"] is False
+    assert page.comments[0].rpid == 2001
+    assert page.comments[0].author_mid == 42
+    assert page.comments[0].author_name == "Alice"
+    assert page.comments[0].content == "latest comment"
+
+
+def test_parse_latest_comment_page_accepts_empty_end_page() -> None:
+    page = parse_latest_comment_page(
+        latest_payload(replies=None, next_offset="", is_end=True),
+        bvid="BV1abc",
+        oid=777,
+        captured_at=datetime(2026, 7, 8, 10, 0, tzinfo=UTC),
+        raw_payload_id=42,
+        page_number=2,
+        request_offset="offset-2",
+    )
+
+    assert page.comments == []
+    assert page.extra["request_offset"] == "offset-2"
+    assert page.extra["next_offset"] == ""
+    assert page.extra["is_end"] is True
+
+
+def test_parse_latest_comment_page_rejects_malformed_cursor() -> None:
+    with pytest.raises(CommentParseError, match="pagination_reply"):
+        parse_latest_comment_page(
+            {"code": 0, "data": {"cursor": {}, "replies": []}},
+            bvid="BV1abc",
+            oid=777,
+            captured_at=datetime(2026, 7, 8, 10, 0, tzinfo=UTC),
+            raw_payload_id=42,
+            page_number=1,
+            request_offset="",
         )

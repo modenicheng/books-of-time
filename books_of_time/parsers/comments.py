@@ -88,6 +88,75 @@ def parse_hot_comment_page(
     )
 
 
+def parse_latest_comment_page(
+    payload: dict[str, Any],
+    *,
+    bvid: str,
+    oid: int,
+    captured_at: datetime,
+    raw_payload_id: int,
+    page_number: int,
+    request_offset: str,
+) -> ParsedCommentPage:
+    code = payload.get("code")
+    if code not in (0, None):
+        raise CommentParseError(f"Bilibili comment response code is not 0: {code}")
+
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        raise CommentParseError("Bilibili comment response data is not an object")
+
+    cursor = data.get("cursor")
+    if not isinstance(cursor, dict):
+        raise CommentParseError("Bilibili latest comment cursor is not an object")
+
+    pagination_reply = cursor.get("pagination_reply")
+    if not isinstance(pagination_reply, dict):
+        raise CommentParseError(
+            "Bilibili latest comment cursor.pagination_reply is not an object"
+        )
+
+    next_offset = pagination_reply.get("next_offset")
+    if next_offset is None:
+        next_offset = ""
+    if not isinstance(next_offset, str):
+        raise CommentParseError(
+            "Bilibili latest comment cursor.pagination_reply.next_offset is not a string"
+        )
+
+    replies = data.get("replies")
+    if replies is None:
+        replies = []
+    if not isinstance(replies, list):
+        raise CommentParseError("Bilibili comment response data.replies is not a list")
+
+    comments = [
+        _parse_comment(
+            item,
+            bvid=bvid,
+            fallback_oid=oid,
+            position=index,
+        )
+        for index, item in enumerate(replies, start=1)
+        if isinstance(item, dict)
+    ]
+    is_end = bool(cursor.get("is_end")) or next_offset == "" or len(comments) == 0
+    return ParsedCommentPage(
+        bvid=bvid,
+        oid=oid,
+        captured_at=captured_at,
+        raw_payload_id=raw_payload_id,
+        sort_mode="latest",
+        page_number=page_number,
+        comments=comments,
+        extra={
+            "request_offset": request_offset,
+            "next_offset": next_offset,
+            "is_end": is_end,
+        },
+    )
+
+
 def _parse_comment(
     item: dict[str, Any],
     *,

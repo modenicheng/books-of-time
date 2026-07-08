@@ -51,3 +51,16 @@ class BilibiliPlatformClient:
                 order=comment.OrderType.LIKE,
             )
             return request_context.latest_result(BilibiliRequestType.COMMENT_HOT)
+
+    async def get_latest_comments(self, *, aid: int, offset: str = "") -> FetchResult:
+        with capture_bili_api_requests(
+            http_client=self.http_client,
+            rate_limiter=self.rate_limiter,
+        ) as request_context:
+            await comment.get_comments_lazy(
+                oid=aid,
+                type_=comment.CommentResourceType.VIDEO,
+                offset=offset,
+                order=comment.OrderType.TIME,
+            )
+            return request_context.latest_result(BilibiliRequestType.COMMENT_LATEST)

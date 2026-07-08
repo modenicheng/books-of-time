@@ -54,6 +54,11 @@ scheduler:
   core_stop_hour: 22
   timezone: Asia/Shanghai
 
+latest_comments:
+  max_scan_seconds: 55
+  page_retry_attempts: 3
+  page_retry_backoff_seconds: [1, 3, 5]
+
 request_budget:
   s:
     per_round: 200

@@ -79,6 +79,7 @@ class FakeCommentResourceType:
 
 class FakeCommentOrderType:
     LIKE = type("LikeOrder", (), {"value": 2})()
+    TIME = type("TimeOrder", (), {"value": 3})()
 
 
 async def fake_get_comments(oid, type_, page_index, order):
@@ -92,6 +93,27 @@ async def fake_get_comments(oid, type_, page_index, order):
             "type": type_.value,
             "pn": page_index,
             "sort": order.value,
+        },
+        headers={},
+        cookies={},
+    )
+    return response.json()["data"]
+
+
+async def fake_get_comments_lazy(oid, type_, offset, order):
+    from bilibili_api.utils.network import get_client
+
+    response = await get_client().request(
+        method="GET",
+        url="https://api.bilibili.com/x/v2/reply/wbi/main",
+        params={
+            "oid": oid,
+            "type": type_.value,
+            "mode": 2,
+            "pagination_str": offset,
+            "plat": 1,
+            "seek_rpid": "",
+            "web_location": 1315875,
         },
         headers={},
         cookies={},
@@ -184,4 +206,42 @@ async def test_hot_comments_uses_bilibili_api_client_backend(monkeypatch) -> Non
         "global",
         "host:bilibili",
         "bilibili:comment_hot",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_latest_comments_uses_lazy_bilibili_api_client_backend(
+    monkeypatch,
+) -> None:
+    raw_http_client = FakeRawHttpClient()
+    rate_limiter = FakeRateLimiter()
+    monkeypatch.setattr(
+        "bilibili_api.comment.CommentResourceType",
+        FakeCommentResourceType,
+    )
+    monkeypatch.setattr(
+        "bilibili_api.comment.OrderType",
+        FakeCommentOrderType,
+    )
+    monkeypatch.setattr(
+        "bilibili_api.comment.get_comments_lazy",
+        fake_get_comments_lazy,
+    )
+
+    client = BilibiliPlatformClient(
+        http_client=raw_http_client,
+        rate_limiter=rate_limiter,
+    )
+
+    result = await client.get_latest_comments(aid=777, offset="offset-2")
+
+    assert result.request_type == BilibiliRequestType.COMMENT_LATEST
+    assert raw_http_client.requests[0]["url"].endswith("/x/v2/reply/wbi/main")
+    assert raw_http_client.requests[0]["params"]["oid"] == 777
+    assert raw_http_client.requests[0]["params"]["mode"] == 2
+    assert raw_http_client.requests[0]["params"]["pagination_str"] == "offset-2"
+    assert rate_limiter.keys == [
+        "global",
+        "host:bilibili",
+        "bilibili:comment_latest",
     ]
