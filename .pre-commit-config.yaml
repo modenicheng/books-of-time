@@ -1,0 +1,60 @@
+# ──────────────────────────────────────────────────────────────
+#  pre-commit hooks  —  https://pre-commit.com
+#  安装: uv tool install pre-commit
+#  启用: pre-commit install && pre-commit install --hook-type commit-msg
+#  更新: pre-commit autoupdate
+# ──────────────────────────────────────────────────────────────
+default_language_version:
+  # 使用 uv 管理的 Python（项目的 .python-version = 3.12）
+  python: python3.12
+
+repos:
+  # ── Ruff: linter + formatter ───────────────────────────────
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    # 请与 pyproject.toml 中的 ruff 版本保持一致
+    rev: v0.9.10
+    hooks:
+      # 先 lint，自动修复可修复的问题
+      - id: ruff
+        args: [--fix]
+        types_or: [python, pyi]
+      # 再 format
+      - id: ruff-format
+        types_or: [python, pyi]
+
+  # ── Conventional Commits ───────────────────────────────────
+  - repo: https://github.com/compilerla/conventional-pre-commit
+    rev: v4.4.0
+    hooks:
+      - id: conventional-pre-commit
+        stages: [commit-msg]
+        # v4.4.0 中类型作为位置参数传入
+        args:
+          - feat
+          - fix
+          - docs
+          - style
+          - refactor
+          - perf
+          - test
+          - build
+          - ci
+          - chore
+          - revert
+
+  # ── 通用文件检查 ────────────────────────────────────────────
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      # 强制 LF 行尾（核心约束）
+      - id: mixed-line-ending
+        args: [--fix=lf]
+      # 删除行尾多余空白
+      - id: trailing-whitespace
+      # 确保文件末尾有且仅有一个换行
+      - id: end-of-file-fixer
+      # 检查 YAML / TOML 合法性
+      - id: check-yaml
+      - id: check-toml
+      # 检查是否存在调试语句
+      - id: debug-statements
