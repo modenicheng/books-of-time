@@ -61,6 +61,7 @@ class LatestCommentCollector:
         self.sleep = sleep or time.sleep
 
     async def collect(self, task: CollectionTask, session: AsyncSession) -> None:
+        started_at = self.monotonic()
         bvid = str(task.payload.get("bvid") or task.target_id)
         aid = await self._resolve_aid(task, session, bvid)
         now = datetime.now(UTC)
@@ -75,11 +76,18 @@ class LatestCommentCollector:
             await self._run_incremental(task, session, state, bvid=bvid, aid=aid)
             await frontier_repo.save(state)
             return
-        if state.extra.get("baseline_status") == "tail_complete":
+        if state.extra.get("baseline_status") == "baseline_tail_complete":
             await self._run_head_sweep(task, session, state, bvid=bvid, aid=aid)
             await frontier_repo.save(state)
             return
-        await self._run_baseline_tail(task, session, state, bvid=bvid, aid=aid)
+        await self._run_baseline_tail(
+            task,
+            session,
+            state,
+            bvid=bvid,
+            aid=aid,
+            started_at=started_at,
+        )
         await frontier_repo.save(state)
 
     async def _resolve_aid(
@@ -205,8 +213,8 @@ class LatestCommentCollector:
         *,
         bvid: str,
         aid: int,
+        started_at: float,
     ) -> None:
-        started_at = self.monotonic()
         extra = dict(state.extra or {})
         extra.setdefault("baseline_started_at", datetime.now(UTC).isoformat())
         extra.setdefault("baseline_status", "baseline_paused")
@@ -266,7 +274,7 @@ class LatestCommentCollector:
                 state.last_scan_at = result.captured_at
                 state.last_scan_status = "baseline_tail_complete"
                 state.last_scan_truncated = False
-                state.extra["baseline_status"] = "tail_complete"
+                state.extra["baseline_status"] = "baseline_tail_complete"
                 state.extra["tail_completed_at"] = result.captured_at.isoformat()
                 return
 

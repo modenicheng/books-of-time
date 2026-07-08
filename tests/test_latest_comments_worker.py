@@ -60,12 +60,18 @@ class FakeLatestClient:
         self,
         pages: dict[str, bytes],
         failures: dict[str, list[Exception]] | None = None,
+        video_stats_effect=None,
     ) -> None:
         self.pages = pages
         self.failures = failures or {}
+        self.video_stats_effect = video_stats_effect
         self.latest_offsets: list[str] = []
+        self.video_stats_calls = 0
 
     async def get_video_stats(self, bvid: str) -> FetchResult:
+        self.video_stats_calls += 1
+        if self.video_stats_effect is not None:
+            self.video_stats_effect()
         return FetchResult(
             request_type=BilibiliRequestType.VIDEO_STATS,
             method="GET",
@@ -193,6 +199,50 @@ async def test_baseline_pauses_at_time_budget_and_enqueues_followup(tmp_path) ->
 
 
 @pytest.mark.asyncio
+async def test_collect_pauses_before_latest_request_when_video_stats_uses_budget(
+    tmp_path,
+) -> None:
+    clock = ManualClock([0, 60, 60])
+    client = FakeLatestClient(
+        {"": latest_body(rpid=3003, next_offset="offset-2")},
+        video_stats_effect=clock.monotonic,
+    )
+    engine, session_factory, worker, now = await build_worker_with_task(
+        tmp_path,
+        client,
+        max_scan_seconds=55,
+        clock=clock,
+    )
+
+    executed = await worker.run_once(now=now)
+    assert executed is True
+
+    async with session_factory() as session:
+        state = await session.scalar(select(FrontierState))
+        tasks = (
+            await session.scalars(
+                select(CollectionTask).order_by(CollectionTask.id.asc())
+            )
+        ).all()
+
+        assert state is not None
+        assert state.last_scan_status == "baseline_paused"
+        assert state.last_scan_truncated is True
+        assert state.cursor == ""
+        assert state.extra["baseline_status"] == "baseline_paused"
+        assert [task.kind for task in tasks] == [
+            TaskKind.FETCH_LATEST_COMMENTS,
+            TaskKind.FETCH_LATEST_COMMENTS,
+        ]
+        assert tasks[1].status == TaskStatus.PENDING
+
+    assert client.video_stats_calls == 1
+    assert client.latest_offsets == []
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_baseline_resumes_from_saved_cursor_and_marks_tail_complete(
     tmp_path,
 ) -> None:
@@ -224,7 +274,7 @@ async def test_baseline_resumes_from_saved_cursor_and_marks_tail_complete(
         assert state.last_scan_status == "baseline_tail_complete"
         assert state.last_scan_truncated is False
         assert state.cursor == ""
-        assert state.extra["baseline_status"] == "tail_complete"
+        assert state.extra["baseline_status"] == "baseline_tail_complete"
         assert state.extra["baseline_start_frontier_rpid"] == 3003
         assert [page.cursor for page in raw_pages] == ["", "offset-2"]
         assert entity_count == 2
@@ -359,7 +409,7 @@ async def test_failed_cursor_resumes_retry_on_next_run_without_repeat_corruption
         assert state.last_scan_status == "baseline_tail_complete"
         assert state.last_scan_truncated is False
         assert state.cursor == ""
-        assert state.extra["baseline_status"] == "tail_complete"
+        assert state.extra["baseline_status"] == "baseline_tail_complete"
         assert state.extra.get("failed_cursor") is None
         assert [page.cursor for page in raw_pages] == ["", "offset-2"]
 
