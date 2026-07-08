@@ -160,13 +160,16 @@ class LatestCommentCollector:
         attempts = int(state.extra.get("failed_attempts") or 0)
         while attempts < self.page_retry_attempts:
             if self._time_expired(started_at):
-                self._mark_paused_after_failed_attempts(
-                    state,
-                    cursor=offset,
-                    reason=str(state.extra.get("failed_reason") or ""),
-                    attempts=attempts,
-                    baseline=baseline,
-                )
+                if attempts > 0 or state.extra.get("failed_cursor") == offset:
+                    self._mark_paused_after_failed_attempts(
+                        state,
+                        cursor=offset,
+                        reason=str(state.extra.get("failed_reason") or ""),
+                        attempts=attempts,
+                        baseline=baseline,
+                    )
+                else:
+                    self._mark_paused(state, cursor=offset, baseline=baseline)
                 return None
             try:
                 result = await self.client.get_latest_comments(aid=aid, offset=offset)
@@ -275,7 +278,6 @@ class LatestCommentCollector:
                 state.last_scan_status = "baseline_tail_complete"
                 state.last_scan_truncated = False
                 state.extra["baseline_status"] = "baseline_tail_complete"
-                state.extra["tail_completed_at"] = result.captured_at.isoformat()
                 return
 
             offset = next_offset

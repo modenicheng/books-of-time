@@ -230,6 +230,9 @@ async def test_collect_pauses_before_latest_request_when_video_stats_uses_budget
         assert state.last_scan_truncated is True
         assert state.cursor == ""
         assert state.extra["baseline_status"] == "baseline_paused"
+        assert "failed_cursor" not in state.extra
+        assert "failed_reason" not in state.extra
+        assert "failed_attempts" not in state.extra
         assert [task.kind for task in tasks] == [
             TaskKind.FETCH_LATEST_COMMENTS,
             TaskKind.FETCH_LATEST_COMMENTS,
