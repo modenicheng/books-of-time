@@ -403,6 +403,20 @@ class VideoMetricSnapshotRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
+    async def list_for_bvid(
+        self,
+        *,
+        bvid: str,
+        limit: int = 20,
+    ) -> list[VideoMetricSnapshot]:
+        rows = await self.session.scalars(
+            select(VideoMetricSnapshot)
+            .where(VideoMetricSnapshot.bvid == bvid)
+            .order_by(VideoMetricSnapshot.captured_at.desc())
+            .limit(limit)
+        )
+        return list(rows)
+
     async def insert_from_parsed(
         self,
         parsed: ParsedVideoStats,
