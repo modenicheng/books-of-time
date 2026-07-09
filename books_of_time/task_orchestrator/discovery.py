@@ -41,9 +41,6 @@ class DiscoveryScheduler:
         repo = CollectionTaskRepository(session)
 
         for video in videos:
-            if now - video.pubdate > self.fresh_video_window:
-                continue
-
             existing = await session.scalar(
                 select(KnownVideo).where(KnownVideo.bvid == video.bvid)
             )
@@ -58,6 +55,10 @@ class DiscoveryScheduler:
                     first_seen_at=now,
                 )
             )
+
+            if now - video.pubdate > self.fresh_video_window:
+                continue
+
             await repo.enqueue(
                 kind=TaskKind.FETCH_VIDEO_STATS,
                 target_type="video",

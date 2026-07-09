@@ -47,7 +47,7 @@ async def test_discovery_scheduler_records_new_video_and_enqueues_stats_task() -
         known_videos = (await session.scalars(select(KnownVideo))).all()
         tasks = (await session.scalars(select(CollectionTask))).all()
 
-        assert [video.bvid for video in known_videos] == ["BVNEW"]
+        assert [video.bvid for video in known_videos] == ["BVNEW", "BVOLD"]
         assert len(tasks) == 1
         assert tasks[0].kind == TaskKind.FETCH_VIDEO_STATS
         assert tasks[0].target_id == "BVNEW"
