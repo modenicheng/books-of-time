@@ -419,6 +419,42 @@ class LatestCommentCollector:
             return None, None
         return newest_comment.rpid, head_page.captured_at
 
+    async def _load_incremental_provisional_frontier(
+        self,
+        session: AsyncSession,
+        *,
+        bvid: str,
+        previous_frontier_time: datetime | None,
+    ) -> tuple[int | None, datetime | None]:
+        if previous_frontier_time is None:
+            return None, None
+
+        first_page_stmt = (
+            select(RawPageObservation)
+            .where(
+                RawPageObservation.request_type == BilibiliRequestType.COMMENT_LATEST,
+                RawPageObservation.target_type == "video",
+                RawPageObservation.target_id == bvid,
+                RawPageObservation.captured_at > previous_frontier_time,
+            )
+            .order_by(RawPageObservation.captured_at.asc(), RawPageObservation.id.asc())
+            .limit(1)
+        )
+        first_page = await session.scalar(first_page_stmt)
+        if first_page is None:
+            return None, None
+
+        comment_stmt = (
+            select(CommentObservation)
+            .where(CommentObservation.raw_page_observation_id == first_page.id)
+            .order_by(CommentObservation.position.asc(), CommentObservation.id.asc())
+            .limit(1)
+        )
+        newest_comment = await session.scalar(comment_stmt)
+        if newest_comment is None:
+            return None, None
+        return newest_comment.rpid, first_page.captured_at
+
     async def _run_head_sweep(
         self,
         task: CollectionTask,
@@ -532,6 +568,15 @@ class LatestCommentCollector:
         seen_cursors: set[str] = set()
         newest_rpid: int | None = None
         newest_captured_at: datetime | None = None
+        if offset:
+            (
+                newest_rpid,
+                newest_captured_at,
+            ) = await self._load_incremental_provisional_frontier(
+                session,
+                bvid=bvid,
+                previous_frontier_time=state.frontier_time,
+            )
 
         while True:
             if self._time_expired(started_at):

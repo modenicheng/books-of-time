@@ -650,6 +650,85 @@ async def test_incremental_stops_at_old_frontier_and_updates_new_frontier(
 
 
 @pytest.mark.asyncio
+async def test_incremental_pause_resumes_without_losing_newest_frontier(
+    tmp_path,
+) -> None:
+    client = FakeLatestClient(
+        {
+            "": latest_body(rpid=5001, next_offset="offset-2"),
+            "offset-2": latest_body(rpid=4001, next_offset="offset-3"),
+        }
+    )
+    pause_clock = ManualClock([0, 0, 0, 60, 60])
+    engine, session_factory, worker, now = await build_worker_with_task(
+        tmp_path,
+        client,
+        clock=pause_clock,
+    )
+    async with session_factory() as session:
+        state = FrontierState(
+            target_type="video",
+            target_id="BV1abc",
+            frontier_type="latest_comments",
+            frontier_rpid=4001,
+            frontier_time=datetime(2026, 7, 8, 10, 0, tzinfo=UTC),
+            cursor=None,
+            last_scan_at=None,
+            last_scan_status="baseline_complete",
+            last_scan_pages=0,
+            last_scan_truncated=False,
+            extra={"baseline_status": "baseline_complete"},
+            created_at=datetime(2026, 7, 8, 10, 0, tzinfo=UTC),
+            updated_at=datetime(2026, 7, 8, 10, 0, tzinfo=UTC),
+        )
+        session.add(state)
+        await session.commit()
+
+    await worker.run_once(now=now)
+
+    async with session_factory() as session:
+        paused_state = await session.scalar(select(FrontierState))
+
+        assert paused_state is not None
+        assert paused_state.last_scan_status == "paused"
+        assert paused_state.last_scan_truncated is True
+        assert paused_state.cursor == "offset-2"
+        assert paused_state.frontier_rpid == 4001
+
+    client.latest_offsets = []
+    resume_collector = LatestCommentCollector(
+        client=client,
+        raw_store=RawPayloadFileStore(tmp_path),
+        run_id="test-run-incremental-resume",
+        max_scan_seconds=55,
+        page_retry_attempts=3,
+        page_retry_backoff_seconds=[0, 0, 0],
+        sleep=lambda seconds: None,
+    )
+    resume_worker = Worker(
+        session_factory=session_factory,
+        collectors={TaskKind.FETCH_LATEST_COMMENTS: resume_collector},
+        lease_owner="worker-test-incremental-resume",
+    )
+
+    await resume_worker.run_once(now=datetime(2099, 1, 1, tzinfo=UTC))
+
+    async with session_factory() as session:
+        state = await session.scalar(select(FrontierState))
+
+        assert state is not None
+        assert state.last_scan_status == "incremental_complete"
+        assert state.last_scan_truncated is False
+        assert state.cursor is None
+        assert state.frontier_rpid == 5001
+        assert state.extra.get("missing_frontier_rpid") is None
+
+    assert client.latest_offsets == ["offset-2"]
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_incremental_frontier_missing_when_service_end_reached(
     tmp_path,
 ) -> None:
