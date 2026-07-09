@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from books_of_time.db.models import (
     Base,
+    CollectionTask,
     CommentEntity,
     CommentObservation,
     CommentObservationMedia,
@@ -21,7 +22,7 @@ from books_of_time.db.repositories import (
     FrontierStateRepository,
     RawPageObservationRepository,
 )
-from books_of_time.domain.enums import BilibiliRequestType
+from books_of_time.domain.enums import BilibiliRequestType, TaskKind
 from books_of_time.parsers.comments import (
     ParsedComment,
     ParsedCommentPage,
@@ -255,13 +256,19 @@ async def test_comment_repository_adds_reply_growth_to_watchlist() -> None:
 
     async with session_factory() as session:
         watch = await session.scalar(select(ImportantCommentWatchlist))
+        reply_task = await session.scalar(select(CollectionTask))
 
         assert watch is not None
         assert watch.rpid == 1001
         assert watch.reason == "reply_growth"
         assert watch.reply_count == 8
         assert watch.hot_position == 5
+        assert watch.expires_at is not None
         assert watch.extra["reply_delta"] == 7
+        assert reply_task is not None
+        assert reply_task.kind == TaskKind.FETCH_COMMENT_REPLIES
+        assert reply_task.payload["reason"] == "reply_growth"
+        assert reply_task.payload["root_rpid"] == 1001
 
     await engine.dispose()
 

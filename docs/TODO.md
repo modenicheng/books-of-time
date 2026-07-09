@@ -171,7 +171,7 @@
 - [x] 实现 `FetchCommentRepliesTask`。
 - [x] 实现 `ReplyCollector`。
 - [x] 楼中楼写入 comment entities 和 observations。
-- [ ] Watchlist 支持 expires_at。
+- [x] Watchlist 支持 expires_at。
 
 ## P2: Event Archive
 

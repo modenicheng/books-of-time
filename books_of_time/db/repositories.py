@@ -852,16 +852,14 @@ class CommentRepository:
                 last_comment_observation_id=current.id,
                 first_seen_at=created_at,
                 last_seen_at=created_at,
-                expires_at=None,
+                expires_at=created_at + timedelta(days=1),
                 active=True,
                 extra=extra,
                 created_at=created_at,
                 updated_at=created_at,
             )
             self.session.add(item)
-            return
-
-        if priority >= item.priority:
+        elif priority >= item.priority:
             item.reason = reason
             item.priority = priority
             item.score = score
@@ -872,8 +870,29 @@ class CommentRepository:
             item.hot_position = current.position
         item.last_comment_observation_id = current.id
         item.last_seen_at = created_at
+        item.expires_at = created_at + timedelta(days=1)
         item.active = True
         item.updated_at = created_at
+        await CollectionTaskRepository(self.session).enqueue(
+            kind=TaskKind.FETCH_COMMENT_REPLIES,
+            target_type="comment",
+            target_id=str(current.rpid),
+            priority=priority,
+            payload={
+                "bvid": current.bvid,
+                "aid": current.oid,
+                "root_rpid": current.rpid,
+                "page": 1,
+                "page_limit": 1,
+                "page_size": 20,
+                "reason": reason,
+            },
+            not_before=created_at,
+            idempotency_key=(
+                f"{TaskKind.FETCH_COMMENT_REPLIES.value}:"
+                f"comment:{current.bvid}:{current.rpid}:watchlist"
+            ),
+        )
 
     def _add_changed_state_events(
         self,

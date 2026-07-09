@@ -100,10 +100,20 @@ async def test_media_service_registers_comment_media_and_enqueues_fetch_tasks() 
         assert (
             await session.scalar(select(func.count(CommentObservationMedia.id)))
         ) == 3
-        assert await session.scalar(select(func.count(CollectionTask.id))) == 2
+        assert (
+            await session.scalar(
+                select(func.count(CollectionTask.id)).where(
+                    CollectionTask.kind == TaskKind.FETCH_MEDIA_ASSET
+                )
+            )
+        ) == 2
 
         tasks = (
-            await session.scalars(select(CollectionTask).order_by(CollectionTask.id))
+            await session.scalars(
+                select(CollectionTask)
+                .where(CollectionTask.kind == TaskKind.FETCH_MEDIA_ASSET)
+                .order_by(CollectionTask.id)
+            )
         ).all()
         assert [task.kind for task in tasks] == [
             TaskKind.FETCH_MEDIA_ASSET,

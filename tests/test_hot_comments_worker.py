@@ -190,10 +190,18 @@ async def test_worker_fetch_hot_comments_archives_raw_and_writes_observations(
         media_link = await session.scalar(select(CommentObservationMedia))
 
         assert task.status == TaskStatus.SUCCEEDED
-        assert len(tasks) == 2
-        assert tasks[1].kind == TaskKind.FETCH_MEDIA_ASSET
-        assert tasks[1].target_type == "media_source"
-        assert tasks[1].payload["url"] == "https://i0.hdslb.com/bfs/new_dyn/a.jpg"
+        assert len(tasks) == 3
+        media_task = next(
+            task for task in tasks if task.kind == TaskKind.FETCH_MEDIA_ASSET
+        )
+        reply_task = next(
+            task for task in tasks if task.kind == TaskKind.FETCH_COMMENT_REPLIES
+        )
+        assert media_task.target_type == "media_source"
+        assert media_task.payload["url"] == "https://i0.hdslb.com/bfs/new_dyn/a.jpg"
+        assert reply_task.target_type == "comment"
+        assert reply_task.target_id == "1001"
+        assert reply_task.payload["root_rpid"] == 1001
         assert coverage is not None
         assert coverage.task_kind == TaskKind.FETCH_HOT_COMMENTS
         assert coverage.status == "succeeded"
@@ -225,6 +233,7 @@ async def test_worker_fetch_hot_comments_archives_raw_and_writes_observations(
         assert watch.reason == "hot_top"
         assert watch.hot_position == 1
         assert watch.priority >= 90
+        assert watch.expires_at is not None
         assert media_source is not None
         assert media_source.fetch_status == "pending"
         assert media_link is not None
