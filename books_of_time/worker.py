@@ -6,13 +6,22 @@ from typing import Protocol
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from books_of_time.coverage import CoverageDraft
 from books_of_time.db.models import CollectionTask
-from books_of_time.db.repositories import CollectionTaskRepository
+from books_of_time.db.repositories import (
+    CollectionCoverageRepository,
+    CollectionRunRepository,
+    CollectionTaskRepository,
+)
 from books_of_time.domain.enums import TaskKind, TaskStatus
 
 
 class Collector(Protocol):
-    async def collect(self, task: CollectionTask, session: AsyncSession) -> None: ...
+    async def collect(
+        self,
+        task: CollectionTask,
+        session: AsyncSession,
+    ) -> CoverageDraft: ...
 
 
 class Worker:
@@ -21,12 +30,14 @@ class Worker:
         *,
         session_factory: async_sessionmaker[AsyncSession],
         collectors: Mapping[TaskKind, Collector],
+        run_id: str,
         lease_owner: str,
         lease_seconds: int = 120,
         retry_delay_seconds: int = 300,
     ) -> None:
         self.session_factory = session_factory
         self.collectors = collectors
+        self.run_id = run_id
         self.lease_owner = lease_owner
         self.lease_seconds = lease_seconds
         self.retry_delay_seconds = retry_delay_seconds
@@ -44,10 +55,29 @@ class Worker:
                 await session.rollback()
                 return False
 
+            run_repo = CollectionRunRepository(session)
+            coverage_repo = CollectionCoverageRepository(session)
+            run = await run_repo.get_or_create_running(
+                run_id=self.run_id,
+                worker_id=self.lease_owner,
+                now=effective_now,
+            )
+            await run_repo.record_task_started(run, now=effective_now)
+
             collector = self.collectors[task.kind]
             try:
-                await collector.collect(task, session)
-            except Exception:
+                draft = await collector.collect(task, session)
+            except Exception as exc:
+                finished_at = datetime.now(UTC)
+                await coverage_repo.insert_failed(
+                    task=task,
+                    run_id=self.run_id,
+                    started_at=effective_now,
+                    finished_at=finished_at,
+                    reason="collector_exception",
+                    extra={"exception_type": type(exc).__name__, "message": str(exc)},
+                )
+                await run_repo.record_task_failed(run, now=finished_at)
                 task.retry_count += 1
                 if task.retry_count <= task.max_retries:
                     task.status = TaskStatus.PENDING
@@ -61,6 +91,15 @@ class Worker:
                 await session.commit()
                 raise
 
+            finished_at = datetime.now(UTC)
+            await coverage_repo.insert_from_draft(
+                task=task,
+                run_id=self.run_id,
+                draft=draft,
+                started_at=effective_now,
+                finished_at=finished_at,
+            )
+            await run_repo.record_task_succeeded(run, now=finished_at)
             task.status = TaskStatus.SUCCEEDED
             task.lease_owner = None
             task.lease_until = None

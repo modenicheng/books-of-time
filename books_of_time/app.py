@@ -92,6 +92,7 @@ def build_worker(
                 ],
             ),
         },
+        run_id=run_id,
         lease_owner=lease_owner,
         lease_seconds=int(scheduler_cfg.get("lease_seconds", 120)),
         retry_delay_seconds=int(scheduler_cfg.get("default_retry_delay_seconds", 300)),
