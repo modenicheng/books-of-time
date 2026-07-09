@@ -423,6 +423,52 @@ class VideoMetricSnapshotRepository:
         )
         return list(rows)
 
+    async def get_view_growth_since(
+        self,
+        *,
+        bvid: str,
+        since: datetime,
+        now: datetime,
+    ) -> int | None:
+        latest = await self.session.scalar(
+            select(VideoMetricSnapshot)
+            .where(
+                VideoMetricSnapshot.bvid == bvid,
+                VideoMetricSnapshot.captured_at <= now,
+                VideoMetricSnapshot.view_count.is_not(None),
+            )
+            .order_by(VideoMetricSnapshot.captured_at.desc())
+            .limit(1)
+        )
+        if latest is None:
+            return None
+
+        baseline = await self.session.scalar(
+            select(VideoMetricSnapshot)
+            .where(
+                VideoMetricSnapshot.bvid == bvid,
+                VideoMetricSnapshot.captured_at <= since,
+                VideoMetricSnapshot.view_count.is_not(None),
+            )
+            .order_by(VideoMetricSnapshot.captured_at.desc())
+            .limit(1)
+        )
+        if baseline is None:
+            baseline = await self.session.scalar(
+                select(VideoMetricSnapshot)
+                .where(
+                    VideoMetricSnapshot.bvid == bvid,
+                    VideoMetricSnapshot.captured_at > since,
+                    VideoMetricSnapshot.captured_at <= now,
+                    VideoMetricSnapshot.view_count.is_not(None),
+                )
+                .order_by(VideoMetricSnapshot.captured_at.asc())
+                .limit(1)
+            )
+        if baseline is None or baseline.captured_at == latest.captured_at:
+            return None
+        return max(int(latest.view_count) - int(baseline.view_count), 0)
+
     async def insert_from_parsed(
         self,
         parsed: ParsedVideoStats,
