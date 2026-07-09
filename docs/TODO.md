@@ -44,12 +44,12 @@
 - [x] 支持 worker run-once。
 - [x] 支持任务成功状态。
 - [x] 支持失败后 retry/backoff 到 `not_before`。
-- [ ] 增加 `worker loop`。
-- [ ] 增加 `task list` CLI。
-- [ ] 增加 `task retry-failed` CLI。
-- [ ] 增加 running task lease 过期回收。
+- [x] 增加 `worker loop`。
+- [x] 增加 `task list` CLI。
+- [x] 增加 `task retry-failed` CLI。
+- [x] 增加 running task lease 过期回收。
 - [ ] 增加任务唯一性约束或幂等键，避免重复入队。
-- [ ] 增加 collection run id 与 run 生命周期表。
+- [x] 增加 collection run id 与 run 生命周期表。
 
 ## P0: Video Discovery And Snapshot
 
