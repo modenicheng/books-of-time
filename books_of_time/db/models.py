@@ -172,6 +172,30 @@ class VideoMetricSnapshot(Base):
     raw_payload_id: Mapped[int | None] = mapped_column(BigInteger)
 
 
+class VideoInfoSnapshot(Base):
+    __tablename__ = "video_info_snapshots"
+
+    bvid: Mapped[str] = mapped_column(Text, primary_key=True)
+    captured_at: Mapped[datetime] = mapped_column(UTCDateTime(), primary_key=True)
+    title: Mapped[str | None] = mapped_column(Text)
+    description: Mapped[str | None] = mapped_column(Text)
+    owner_mid: Mapped[int | None] = mapped_column(BigInteger)
+    owner_name: Mapped[str | None] = mapped_column(Text)
+    tags: Mapped[dict[str, Any]] = mapped_column(
+        json_dict_type,
+        nullable=False,
+        default=dict,
+    )
+    raw_payload_id: Mapped[int | None] = mapped_column(BigInteger)
+
+
+Index(
+    "idx_video_info_snapshots_bvid_time",
+    VideoInfoSnapshot.bvid,
+    VideoInfoSnapshot.captured_at.desc(),
+)
+
+
 class CollectionTask(TimestampMixin, Base):
     __tablename__ = "collection_tasks"
 

@@ -12,6 +12,7 @@ from books_of_time.db.models import (
     CollectionTask,
     RawPayload,
     RequestBackoffState,
+    VideoInfoSnapshot,
     VideoMetricSnapshot,
 )
 
@@ -23,6 +24,7 @@ __all__ = [
     "RawPayload",
     "RequestBackoffState",
     "TimestampMixin",
+    "VideoInfoSnapshot",
     "VideoMetricSnapshot",
     "get_async_session",
     "init_db",

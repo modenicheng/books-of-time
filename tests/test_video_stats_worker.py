@@ -12,12 +12,17 @@ from books_of_time.db.models import (
     CollectionTask,
     RawPayload,
     RequestBackoffState,
+    VideoInfoSnapshot,
     VideoMetricSnapshot,
 )
-from books_of_time.db.repositories import CollectionTaskRepository
+from books_of_time.db.repositories import (
+    CollectionTaskRepository,
+    VideoInfoSnapshotRepository,
+)
 from books_of_time.domain.enums import BilibiliRequestType, TaskKind, TaskStatus
 from books_of_time.http.client import FetchResult
 from books_of_time.http.errors import ParseFailure
+from books_of_time.parsers.video import parse_video_info_snapshot
 from books_of_time.storage.filesystem import RawPayloadFileStore
 from books_of_time.worker import Worker
 
@@ -61,6 +66,43 @@ class FakeMalformedBilibiliClient:
             body=b'{"code":0,"data":{}}',
             captured_at=datetime(2026, 7, 8, 10, 0, tzinfo=UTC),
         )
+
+
+@pytest.mark.asyncio
+async def test_video_info_snapshot_repository_inserts_parsed_snapshot() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    captured_at = datetime(2026, 7, 8, 10, 0, tzinfo=UTC)
+    parsed = parse_video_info_snapshot(
+        {
+            "code": 0,
+            "data": {
+                "bvid": "BV1abc",
+                "title": "Demo Video",
+                "owner": {"mid": 12345, "name": "Example UP"},
+                "tag": ["攻略"],
+            },
+        },
+        captured_at=captured_at,
+        raw_payload_id=42,
+    )
+
+    async with session_factory() as session:
+        row = await VideoInfoSnapshotRepository(session).insert_from_parsed(parsed)
+        await session.commit()
+
+        stored = await session.get(VideoInfoSnapshot, ("BV1abc", captured_at))
+
+    assert row.bvid == "BV1abc"
+    assert stored is not None
+    assert stored.title == "Demo Video"
+    assert stored.owner_mid == 12345
+    assert stored.tags == {"names": ["攻略"], "source_fields": ["tag"]}
+    assert stored.raw_payload_id == 42
+    await engine.dispose()
 
 
 @pytest.mark.asyncio
