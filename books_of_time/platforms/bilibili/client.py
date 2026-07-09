@@ -64,3 +64,22 @@ class BilibiliPlatformClient:
                 order=comment.OrderType.TIME,
             )
             return request_context.latest_result(BilibiliRequestType.COMMENT_LATEST)
+
+    async def get_comment_replies(
+        self,
+        *,
+        aid: int,
+        root_rpid: int,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> FetchResult:
+        with capture_bili_api_requests(
+            http_client=self.http_client,
+            rate_limiter=self.rate_limiter,
+        ) as request_context:
+            await comment.Comment(
+                oid=aid,
+                type_=comment.CommentResourceType.VIDEO,
+                rpid=root_rpid,
+            ).get_sub_comments(page_index=page, page_size=page_size)
+            return request_context.latest_result(BilibiliRequestType.COMMENT_REPLY)

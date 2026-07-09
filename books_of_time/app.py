@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from books_of_time.collectors.hot_comments import HotCommentCollector
 from books_of_time.collectors.latest_comments import LatestCommentCollector
+from books_of_time.collectors.reply_comments import ReplyCommentCollector
 from books_of_time.collectors.video_stats import VideoStatsCollector
 from books_of_time.domain.enums import TaskKind
 from books_of_time.http.client import RawHttpClient
@@ -100,6 +101,11 @@ def build_worker(
                         [1, 3, 5],
                     )
                 ],
+            ),
+            TaskKind.FETCH_COMMENT_REPLIES: ReplyCommentCollector(
+                client=client,
+                raw_store=raw_store,
+                run_id=run_id,
             ),
             TaskKind.FETCH_MEDIA_ASSET: MediaAssetCollector(
                 MediaDownloader(

@@ -165,6 +165,52 @@ def parse_latest_comment_page(
     )
 
 
+def parse_comment_replies_page(
+    payload: dict[str, Any],
+    *,
+    bvid: str,
+    oid: int,
+    root_rpid: int,
+    captured_at: datetime,
+    raw_payload_id: int,
+    page_number: int,
+) -> ParsedCommentPage:
+    code = payload.get("code")
+    if code not in (0, None):
+        raise CommentParseError(f"Bilibili comment response code is not 0: {code}")
+
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        raise CommentParseError("Bilibili reply response data is not an object")
+
+    replies = data.get("replies")
+    if replies is None:
+        replies = []
+    if not isinstance(replies, list):
+        raise CommentParseError("Bilibili reply response data.replies is not a list")
+
+    comments = [
+        _parse_comment(
+            item,
+            bvid=bvid,
+            fallback_oid=oid,
+            position=index,
+        )
+        for index, item in enumerate(replies, start=1)
+        if isinstance(item, dict)
+    ]
+    return ParsedCommentPage(
+        bvid=bvid,
+        oid=oid,
+        captured_at=captured_at,
+        raw_payload_id=raw_payload_id,
+        sort_mode="reply",
+        page_number=page_number,
+        comments=comments,
+        extra=_reply_page_extra(data, root_rpid=root_rpid),
+    )
+
+
 def _parse_comment(
     item: dict[str, Any],
     *,
@@ -253,6 +299,17 @@ def _page_extra(data: dict[str, Any]) -> dict[str, Any]:
     for key in ("all_count", "is_begin", "is_end", "next", "prev"):
         if key in cursor:
             extra[key] = cursor[key]
+    return extra
+
+
+def _reply_page_extra(data: dict[str, Any], *, root_rpid: int) -> dict[str, Any]:
+    extra: dict[str, Any] = {"root_rpid": root_rpid}
+    page = data.get("page")
+    if not isinstance(page, dict):
+        return extra
+    for key in ("num", "size", "count"):
+        if key in page:
+            extra[key] = page[key]
     return extra
 
 

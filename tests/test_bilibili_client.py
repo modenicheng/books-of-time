@@ -106,6 +106,31 @@ class FakeCommentOrderType:
     TIME = type("TimeOrder", (), {"value": 3})()
 
 
+class FakeComment:
+    def __init__(self, oid, type_, rpid) -> None:
+        self.oid = oid
+        self.type_ = type_
+        self.rpid = rpid
+
+    async def get_sub_comments(self, page_index: int = 1, page_size: int = 10):
+        from bilibili_api.utils.network import get_client
+
+        response = await get_client().request(
+            method="GET",
+            url="https://api.bilibili.com/x/v2/reply/reply",
+            params={
+                "oid": self.oid,
+                "type": self.type_.value,
+                "root": self.rpid,
+                "pn": page_index,
+                "ps": page_size,
+            },
+            headers={},
+            cookies={},
+        )
+        return response.json()["data"]
+
+
 async def fake_get_comments(oid, type_, page_index, order):
     from bilibili_api.utils.network import get_client
 
@@ -269,6 +294,44 @@ async def test_latest_comments_uses_lazy_bilibili_api_client_backend(
         "global",
         "host:bilibili",
         "bilibili:comment_latest",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_comment_replies_uses_bilibili_api_client_backend(monkeypatch) -> None:
+    raw_http_client = FakeRawHttpClient()
+    rate_limiter = FakeRateLimiter()
+    monkeypatch.setattr(
+        "bilibili_api.comment.CommentResourceType",
+        FakeCommentResourceType,
+    )
+    monkeypatch.setattr(
+        "bilibili_api.comment.Comment",
+        FakeComment,
+    )
+
+    client = BilibiliPlatformClient(
+        http_client=raw_http_client,
+        rate_limiter=rate_limiter,
+    )
+
+    result = await client.get_comment_replies(
+        aid=777,
+        root_rpid=1001,
+        page=2,
+        page_size=20,
+    )
+
+    assert result.request_type == BilibiliRequestType.COMMENT_REPLY
+    assert raw_http_client.requests[0]["url"].endswith("/x/v2/reply/reply")
+    assert raw_http_client.requests[0]["params"]["oid"] == 777
+    assert raw_http_client.requests[0]["params"]["root"] == 1001
+    assert raw_http_client.requests[0]["params"]["pn"] == 2
+    assert raw_http_client.requests[0]["params"]["ps"] == 20
+    assert rate_limiter.keys == [
+        "global",
+        "host:bilibili",
+        "bilibili:comment_reply",
     ]
 
 

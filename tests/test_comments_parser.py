@@ -5,6 +5,7 @@ import pytest
 from books_of_time.parsers.comments import (
     CommentParseError,
     hash_comment_content,
+    parse_comment_replies_page,
     parse_hot_comment_page,
     parse_latest_comment_page,
 )
@@ -223,3 +224,42 @@ def test_parse_latest_comment_page_rejects_malformed_cursor() -> None:
             page_number=1,
             request_offset="",
         )
+
+
+def test_parse_comment_replies_page_extracts_root_replies() -> None:
+    captured_at = datetime(2026, 7, 8, 10, 0, tzinfo=UTC)
+    page = parse_comment_replies_page(
+        {
+            "code": 0,
+            "data": {
+                "page": {"num": 1, "size": 20, "count": 2},
+                "replies": [
+                    {
+                        "rpid": 3001,
+                        "oid": 777,
+                        "root": 1001,
+                        "parent": 1001,
+                        "like": 4,
+                        "rcount": 0,
+                        "member": {"mid": "43", "uname": "Carol"},
+                        "content": {"message": "sub reply"},
+                    }
+                ],
+            },
+        },
+        bvid="BV1abc",
+        oid=777,
+        root_rpid=1001,
+        captured_at=captured_at,
+        raw_payload_id=42,
+        page_number=1,
+    )
+
+    assert page.sort_mode == "reply"
+    assert page.page_number == 1
+    assert page.extra["root_rpid"] == 1001
+    assert page.extra["count"] == 2
+    assert page.comments[0].rpid == 3001
+    assert page.comments[0].root_rpid == 1001
+    assert page.comments[0].parent_rpid == 1001
+    assert page.comments[0].author_name == "Carol"
