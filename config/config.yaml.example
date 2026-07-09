@@ -83,3 +83,9 @@ request_budget:
 
 discovery:
   matrix_uids: []
+  game_uid_pools:
+    example_game:
+      uids: []
+  event_uid_pools:
+    example_event:
+      uids: []

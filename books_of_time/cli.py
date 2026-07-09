@@ -21,7 +21,10 @@ from books_of_time.domain.enums import TaskKind, TaskStatus
 from books_of_time.parsers.discovery import parse_user_video_list
 from books_of_time.storage.filesystem import RawPayloadFileStore
 from books_of_time.task_orchestrator.discovery import DiscoveryScheduler
-from books_of_time.task_orchestrator.discovery_loop import DiscoveryLoop
+from books_of_time.task_orchestrator.discovery_loop import (
+    DiscoveryLoop,
+    DiscoveryUidSource,
+)
 
 logger = get_logger(__name__)
 
@@ -416,7 +419,7 @@ async def _run_discovery_loop(
 ) -> None:
     scheduler_cfg = cfg.get("scheduler", {})
     discovery_cfg = cfg.get("discovery", {})
-    matrix_uids = [str(uid) for uid in discovery_cfg.get("matrix_uids", [])]
+    uid_sources = _resolve_discovery_uid_sources(discovery_cfg)
     effective_interval = (
         float(interval_seconds)
         if interval_seconds is not None
@@ -425,7 +428,7 @@ async def _run_discovery_loop(
     loop = DiscoveryLoop(
         session_factory=build_session_factory(cfg),
         client=build_bilibili_client(cfg),
-        matrix_uids=matrix_uids,
+        uid_sources=uid_sources,
     )
     result = await loop.run_loop(
         interval_seconds=effective_interval,
@@ -439,6 +442,38 @@ async def _run_discovery_loop(
         result.videos_created,
         result.errors,
     )
+
+
+def _resolve_discovery_uid_sources(discovery_cfg: dict) -> list[DiscoveryUidSource]:
+    sources: list[DiscoveryUidSource] = [
+        DiscoveryUidSource(mid=str(uid)) for uid in discovery_cfg.get("matrix_uids", [])
+    ]
+
+    for pool_id, pool_value in discovery_cfg.get("game_uid_pools", {}).items():
+        sources.extend(
+            DiscoveryUidSource(mid=str(uid), pool_type="game", pool_id=str(pool_id))
+            for uid in _uids_from_pool_value(pool_value)
+        )
+
+    for pool_id, pool_value in discovery_cfg.get("event_uid_pools", {}).items():
+        sources.extend(
+            DiscoveryUidSource(mid=str(uid), pool_type="event", pool_id=str(pool_id))
+            for uid in _uids_from_pool_value(pool_value)
+        )
+
+    return sources
+
+
+def _uids_from_pool_value(pool_value: object) -> list[object]:
+    if isinstance(pool_value, dict):
+        uids = pool_value.get("uids", [])
+    else:
+        uids = pool_value
+    if uids is None:
+        return []
+    if isinstance(uids, str | int):
+        return [uids]
+    return list(uids)
 
 
 async def _discover_user(cfg: dict, mid: str, page: int) -> None:

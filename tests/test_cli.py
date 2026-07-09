@@ -132,6 +132,29 @@ def test_discovery_loop_parser_accepts_options() -> None:
     assert args.stop_when_idle is True
 
 
+def test_resolve_discovery_uid_sources_includes_game_and_event_pools() -> None:
+    sources = cli._resolve_discovery_uid_sources(
+        {
+            "matrix_uids": [100, "200"],
+            "game_uid_pools": {
+                "genshin": [300],
+                "hsr": {"uids": ["400"]},
+            },
+            "event_uid_pools": {
+                "version_42": {"uids": [500]},
+            },
+        }
+    )
+
+    assert [(source.mid, source.pool_type, source.pool_id) for source in sources] == [
+        ("100", "matrix", None),
+        ("200", "matrix", None),
+        ("300", "game", "genshin"),
+        ("400", "game", "hsr"),
+        ("500", "event", "version_42"),
+    ]
+
+
 @pytest.mark.asyncio
 async def test_show_coverage_lists_latest_rows(tmp_path, caplog) -> None:
     db_path = tmp_path / "coverage.sqlite3"
