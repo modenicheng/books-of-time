@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from typing import Protocol
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -30,6 +31,16 @@ class VideoStatsClient(Protocol):
     async def get_video_stats(self, bvid: str) -> FetchResult: ...
 
 
+class SnapshotScheduler(Protocol):
+    async def schedule_next_for_video(
+        self,
+        *,
+        session: AsyncSession,
+        bvid: str,
+        now: datetime,
+    ) -> object | None: ...
+
+
 class VideoStatsCollector:
     def __init__(
         self,
@@ -37,10 +48,12 @@ class VideoStatsCollector:
         client: VideoStatsClient,
         raw_store: RawPayloadFileStore,
         run_id: str,
+        snapshot_scheduler: SnapshotScheduler | None = None,
     ) -> None:
         self.client = client
         self.raw_store = raw_store
         self.run_id = run_id
+        self.snapshot_scheduler = snapshot_scheduler
 
     async def collect(
         self,
@@ -104,6 +117,12 @@ class VideoStatsCollector:
             ) from exc
         await VideoMetricSnapshotRepository(session).insert_from_parsed(parsed)
         await VideoInfoSnapshotRepository(session).insert_from_parsed(info_snapshot)
+        if self.snapshot_scheduler is not None:
+            await self.snapshot_scheduler.schedule_next_for_video(
+                session=session,
+                bvid=parsed.bvid,
+                now=result.captured_at,
+            )
         return CoverageDraft(
             task_kind=TaskKind.FETCH_VIDEO_STATS,
             target_type=task.target_type,

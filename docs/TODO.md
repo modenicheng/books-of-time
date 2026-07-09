@@ -77,7 +77,7 @@
 - [x] 记录视频删除、不可见、权限异常状态。
 - [x] 增加 `bot video stats BVxxxx` 查询 CLI。
 - [x] 基于最近 1 小时播放增量计算动态下次快照时间。
-- [ ] 将快照策略接入 scheduler，而不只是纯函数测试。
+- [x] 将快照策略接入 scheduler，而不只是纯函数测试。
 
 ## P1: Hot Comments
 

@@ -13,6 +13,9 @@ from books_of_time.http.client import RawHttpClient
 from books_of_time.http.rate_limiter import RateLimitRule, TokenBucketRateLimiter
 from books_of_time.platforms.bilibili.client import BilibiliPlatformClient
 from books_of_time.storage.filesystem import RawPayloadFileStore
+from books_of_time.task_orchestrator.video_snapshot_scheduler import (
+    VideoSnapshotScheduler,
+)
 from books_of_time.worker import Worker
 
 
@@ -69,6 +72,7 @@ def build_worker(
                 client=client,
                 raw_store=RawPayloadFileStore(raw_dir),
                 run_id=run_id,
+                snapshot_scheduler=VideoSnapshotScheduler(),
             ),
             TaskKind.FETCH_HOT_COMMENTS: HotCommentCollector(
                 client=client,

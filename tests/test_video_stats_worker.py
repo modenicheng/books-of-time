@@ -10,6 +10,7 @@ from books_of_time.db.models import (
     Base,
     CollectionCoverageStat,
     CollectionTask,
+    KnownVideo,
     RawPayload,
     RequestBackoffState,
     VideoAvailabilitySnapshot,
@@ -29,6 +30,9 @@ from books_of_time.parsers.video import (
     parse_video_info_snapshot,
 )
 from books_of_time.storage.filesystem import RawPayloadFileStore
+from books_of_time.task_orchestrator.video_snapshot_scheduler import (
+    VideoSnapshotScheduler,
+)
 from books_of_time.worker import Worker
 
 
@@ -241,6 +245,68 @@ async def test_worker_fetch_video_stats_archives_raw_then_writes_snapshot(
 
 
 @pytest.mark.asyncio
+async def test_worker_schedules_next_video_stats_task_for_known_visible_video(
+    tmp_path,
+) -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    now = datetime(2026, 7, 8, 10, 0, tzinfo=UTC)
+
+    async with session_factory() as session:
+        session.add(
+            KnownVideo(
+                bvid="BV1abc",
+                source_mid="123",
+                pubdate=now - timedelta(hours=7),
+                first_seen_at=now - timedelta(hours=7),
+            )
+        )
+        await CollectionTaskRepository(session).enqueue(
+            kind=TaskKind.FETCH_VIDEO_STATS,
+            target_type="video",
+            target_id="BV1abc",
+            priority=100,
+            payload={"bvid": "BV1abc"},
+            not_before=now - timedelta(seconds=1),
+        )
+        await session.commit()
+
+    worker = Worker(
+        session_factory=session_factory,
+        collectors={
+            TaskKind.FETCH_VIDEO_STATS: VideoStatsCollector(
+                client=FakeBilibiliClient(),
+                raw_store=RawPayloadFileStore(tmp_path),
+                run_id="test-run",
+                snapshot_scheduler=VideoSnapshotScheduler(),
+            )
+        },
+        run_id="test-run",
+        lease_owner="worker-test",
+    )
+
+    executed = await worker.run_once(now=now)
+    assert executed is True
+
+    async with session_factory() as session:
+        tasks = (
+            await session.scalars(select(CollectionTask).order_by(CollectionTask.id))
+        ).all()
+
+    assert [task.status for task in tasks] == [TaskStatus.SUCCEEDED, TaskStatus.PENDING]
+    assert tasks[1].kind == TaskKind.FETCH_VIDEO_STATS
+    assert tasks[1].target_id == "BV1abc"
+    assert tasks[1].priority == 80
+    assert tasks[1].not_before == datetime(2026, 7, 8, 11, 0, tzinfo=UTC)
+    assert tasks[1].payload["reason"] == "snapshot_policy"
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_worker_records_deleted_video_availability_without_metric_snapshots(
     tmp_path,
 ) -> None:
@@ -302,6 +368,62 @@ async def test_worker_records_deleted_video_availability_without_metric_snapshot
         assert availability.raw_payload_id == raw.id
         assert metric_snapshot is None
         assert info_snapshot is None
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_worker_does_not_schedule_next_video_stats_for_deleted_video(
+    tmp_path,
+) -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    now = datetime(2026, 7, 8, 10, 0, tzinfo=UTC)
+
+    async with session_factory() as session:
+        session.add(
+            KnownVideo(
+                bvid="BVdeleted",
+                source_mid="123",
+                pubdate=now - timedelta(hours=7),
+                first_seen_at=now - timedelta(hours=7),
+            )
+        )
+        await CollectionTaskRepository(session).enqueue(
+            kind=TaskKind.FETCH_VIDEO_STATS,
+            target_type="video",
+            target_id="BVdeleted",
+            priority=100,
+            payload={"bvid": "BVdeleted"},
+            not_before=now - timedelta(seconds=1),
+        )
+        await session.commit()
+
+    worker = Worker(
+        session_factory=session_factory,
+        collectors={
+            TaskKind.FETCH_VIDEO_STATS: VideoStatsCollector(
+                client=FakeDeletedVideoBilibiliClient(),
+                raw_store=RawPayloadFileStore(tmp_path),
+                run_id="test-run",
+                snapshot_scheduler=VideoSnapshotScheduler(),
+            )
+        },
+        run_id="test-run",
+        lease_owner="worker-test",
+    )
+
+    executed = await worker.run_once(now=now)
+    assert executed is True
+
+    async with session_factory() as session:
+        tasks = (await session.scalars(select(CollectionTask))).all()
+
+    assert len(tasks) == 1
+    assert tasks[0].status == TaskStatus.SUCCEEDED
 
     await engine.dispose()
 
