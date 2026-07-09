@@ -151,9 +151,9 @@
 
 ## P2: Comment State Events
 
-- [ ] 建立 `comment_state_events` 表。
+- [x] 建立 `comment_state_events` 表。
 - [ ] 建立 `comment_visibility_events` 表。
-- [ ] 实现 `FIRST_SEEN` 事件。
+- [x] 实现 `FIRST_SEEN` 事件。
 - [ ] 实现 like bucket 变化事件。
 - [ ] 实现 reply count 变化事件。
 - [ ] 实现 hot position 变化事件。

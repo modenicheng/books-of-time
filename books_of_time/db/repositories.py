@@ -17,6 +17,7 @@ from books_of_time.db.models import (
     CollectionTask,
     CommentEntity,
     CommentObservation,
+    CommentStateEvent,
     FrontierState,
     RawPageObservation,
     RawPayload,
@@ -609,7 +610,7 @@ class CommentRepository:
     ) -> list[CommentObservation]:
         observations: list[CommentObservation] = []
         for comment in parsed.comments:
-            await self._ensure_entity(
+            _entity, is_new_entity = await self._ensure_entity(
                 comment,
                 captured_at=parsed.captured_at,
                 raw_payload_id=parsed.raw_payload_id,
@@ -635,6 +636,20 @@ class CommentRepository:
                 extra={},
             )
             self.session.add(observation)
+            await self.session.flush()
+            if is_new_entity:
+                self.session.add(
+                    CommentStateEvent(
+                        rpid=comment.rpid,
+                        bvid=comment.bvid,
+                        previous_comment_observation_id=None,
+                        current_comment_observation_id=observation.id,
+                        event_type="first_seen",
+                        old_value={},
+                        new_value={"rpid": comment.rpid, "bvid": comment.bvid},
+                        created_at=parsed.captured_at,
+                    )
+                )
             observations.append(observation)
         await self.session.flush()
         return observations
@@ -645,11 +660,11 @@ class CommentRepository:
         *,
         captured_at: datetime,
         raw_payload_id: int,
-    ) -> CommentEntity:
+    ) -> tuple[CommentEntity, bool]:
         entity = await self.session.get(CommentEntity, comment.rpid)
         if entity is not None:
             entity.updated_at = captured_at
-            return entity
+            return entity, False
 
         entity = CommentEntity(
             rpid=comment.rpid,
@@ -668,7 +683,7 @@ class CommentRepository:
         )
         self.session.add(entity)
         await self.session.flush()
-        return entity
+        return entity, True
 
 
 class FrontierStateRepository:

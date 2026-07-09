@@ -9,6 +9,7 @@ from books_of_time.db.models import (
     CommentEntity,
     CommentObservation,
     CommentObservationMedia,
+    CommentStateEvent,
     MediaAsset,
     MediaSource,
     RawPageObservation,
@@ -77,6 +78,11 @@ async def test_comment_repository_upserts_entity_and_appends_observations() -> N
         observation_count = await session.scalar(
             select(func.count(CommentObservation.id))
         )
+        state_events = (
+            await session.scalars(
+                select(CommentStateEvent).order_by(CommentStateEvent.id.asc())
+            )
+        ).all()
         raw_page = await session.scalar(select(RawPageObservation))
         entity = await session.scalar(select(CommentEntity))
         observations = (
@@ -87,6 +93,12 @@ async def test_comment_repository_upserts_entity_and_appends_observations() -> N
 
         assert entity_count == 1
         assert observation_count == 2
+        assert len(state_events) == 1
+        assert state_events[0].event_type == "first_seen"
+        assert state_events[0].previous_comment_observation_id is None
+        assert state_events[0].current_comment_observation_id == observations[0].id
+        assert state_events[0].old_value == {}
+        assert state_events[0].new_value == {"rpid": 1001, "bvid": "BV1abc"}
         assert raw_page is not None
         assert raw_page.item_count == 1
         assert raw_page.extra == {"all_count": 1}

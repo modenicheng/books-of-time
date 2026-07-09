@@ -109,17 +109,20 @@ async def test_media_service_hashes_media_state_and_records_removed_event() -> N
                 select(CommentStateEvent).order_by(CommentStateEvent.id.asc())
             )
         ).all()
+        media_events = [
+            event for event in events if event.event_type.startswith("media_")
+        ]
 
         assert observations[0].media_ordered_hash is not None
         assert observations[0].media_set_hash is not None
         assert observations[1].media_ordered_hash != observations[0].media_ordered_hash
         assert observations[1].media_set_hash != observations[0].media_set_hash
-        assert [event.event_type for event in events] == [
+        assert [event.event_type for event in media_events] == [
             MEDIA_CHANGED,
             MEDIA_REMOVED,
         ]
-        assert events[0].old_value["media_source_ids"] == [1, 2]
-        assert events[0].new_value["media_source_ids"] == [1]
+        assert media_events[0].old_value["media_source_ids"] == [1, 2]
+        assert media_events[0].new_value["media_source_ids"] == [1]
 
     await engine.dispose()
 
@@ -172,9 +175,12 @@ async def test_media_service_records_order_changed_event() -> None:
             )
         ).all()
         events = (await session.scalars(select(CommentStateEvent))).all()
+        media_events = [
+            event for event in events if event.event_type.startswith("media_")
+        ]
 
         assert observations[1].media_ordered_hash != observations[0].media_ordered_hash
         assert observations[1].media_set_hash == observations[0].media_set_hash
-        assert [event.event_type for event in events] == [MEDIA_ORDER_CHANGED]
+        assert [event.event_type for event in media_events] == [MEDIA_ORDER_CHANGED]
 
     await engine.dispose()
