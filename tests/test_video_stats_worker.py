@@ -77,6 +77,20 @@ class FakeMalformedBilibiliClient:
         )
 
 
+class FakeDeletedVideoBilibiliClient:
+    async def get_video_stats(self, bvid: str) -> FetchResult:
+        body = json.dumps({"code": -404, "message": "稿件不存在"}).encode()
+        return FetchResult(
+            request_type=BilibiliRequestType.VIDEO_STATS,
+            method="GET",
+            url="https://api.bilibili.com/x/web-interface/view",
+            params={"bvid": bvid},
+            status_code=200,
+            body=body,
+            captured_at=datetime(2026, 7, 8, 10, 0, tzinfo=UTC),
+        )
+
+
 @pytest.mark.asyncio
 async def test_video_availability_snapshot_repository_inserts_parsed_snapshot() -> None:
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
@@ -193,6 +207,7 @@ async def test_worker_fetch_video_stats_archives_raw_then_writes_snapshot(
         raw = await session.scalar(select(RawPayload))
         snapshot = await session.scalar(select(VideoMetricSnapshot))
         info_snapshot = await session.scalar(select(VideoInfoSnapshot))
+        availability = await session.scalar(select(VideoAvailabilitySnapshot))
 
         assert task.status == TaskStatus.SUCCEEDED
         assert coverage is not None
@@ -217,6 +232,76 @@ async def test_worker_fetch_video_stats_archives_raw_then_writes_snapshot(
         assert info_snapshot.owner_name == "Example UP"
         assert info_snapshot.tags["names"] == ["攻略", "游戏"]
         assert info_snapshot.raw_payload_id == raw.id
+        assert availability is not None
+        assert availability.bvid == "BV1abc"
+        assert availability.status == "visible"
+        assert availability.raw_payload_id == raw.id
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_worker_records_deleted_video_availability_without_metric_snapshots(
+    tmp_path,
+) -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    now = datetime(2026, 7, 8, 10, 0, tzinfo=UTC)
+
+    async with session_factory() as session:
+        await CollectionTaskRepository(session).enqueue(
+            kind=TaskKind.FETCH_VIDEO_STATS,
+            target_type="video",
+            target_id="BVdeleted",
+            priority=100,
+            payload={"bvid": "BVdeleted"},
+            not_before=now - timedelta(seconds=1),
+        )
+        await session.commit()
+
+    worker = Worker(
+        session_factory=session_factory,
+        collectors={
+            TaskKind.FETCH_VIDEO_STATS: VideoStatsCollector(
+                client=FakeDeletedVideoBilibiliClient(),
+                raw_store=RawPayloadFileStore(tmp_path),
+                run_id="test-run",
+            )
+        },
+        run_id="test-run",
+        lease_owner="worker-test",
+    )
+
+    executed = await worker.run_once(now=now)
+    assert executed is True
+
+    async with session_factory() as session:
+        task = await session.scalar(select(CollectionTask))
+        coverage = await session.scalar(select(CollectionCoverageStat))
+        raw = await session.scalar(select(RawPayload))
+        availability = await session.scalar(select(VideoAvailabilitySnapshot))
+        metric_snapshot = await session.scalar(select(VideoMetricSnapshot))
+        info_snapshot = await session.scalar(select(VideoInfoSnapshot))
+
+        assert task.status == TaskStatus.SUCCEEDED
+        assert coverage is not None
+        assert coverage.status == "succeeded"
+        assert coverage.reason == "deleted"
+        assert coverage.items_observed == 0
+        assert coverage.raw_payloads_saved == 1
+        assert raw is not None
+        assert availability is not None
+        assert availability.bvid == "BVdeleted"
+        assert availability.status == "deleted"
+        assert availability.bili_code == -404
+        assert availability.bili_message == "稿件不存在"
+        assert availability.http_status_code == 200
+        assert availability.raw_payload_id == raw.id
+        assert metric_snapshot is None
+        assert info_snapshot is None
 
     await engine.dispose()
 

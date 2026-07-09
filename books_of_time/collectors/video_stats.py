@@ -9,6 +9,7 @@ from books_of_time.coverage import CoverageDraft
 from books_of_time.db.models import CollectionTask
 from books_of_time.db.repositories import (
     RawPayloadRepository,
+    VideoAvailabilitySnapshotRepository,
     VideoInfoSnapshotRepository,
     VideoMetricSnapshotRepository,
 )
@@ -17,6 +18,8 @@ from books_of_time.http.client import FetchResult
 from books_of_time.http.errors import ParseFailure
 from books_of_time.parsers.video import (
     VIDEO_PARSER_VERSION,
+    ParsedVideoAvailabilitySnapshot,
+    parse_video_availability_snapshot,
     parse_video_info_snapshot,
     parse_video_stats,
 )
@@ -61,6 +64,27 @@ class VideoStatsCollector:
 
         try:
             payload = json.loads(result.body)
+            availability = parse_video_availability_snapshot(
+                payload,
+                captured_at=result.captured_at,
+                raw_payload_id=raw.id,
+                requested_bvid=bvid,
+                http_status_code=result.status_code,
+            )
+            await VideoAvailabilitySnapshotRepository(session).insert_from_parsed(
+                availability
+            )
+            if _is_target_unavailable(availability):
+                return CoverageDraft(
+                    task_kind=TaskKind.FETCH_VIDEO_STATS,
+                    target_type=task.target_type,
+                    target_id=task.target_id,
+                    pages_requested=1,
+                    pages_succeeded=1,
+                    items_observed=0,
+                    raw_payloads_saved=1,
+                    reason=availability.status,
+                )
             parsed = parse_video_stats(
                 payload,
                 captured_at=result.captured_at,
@@ -90,3 +114,9 @@ class VideoStatsCollector:
             raw_payloads_saved=1,
             reason="complete",
         )
+
+
+def _is_target_unavailable(availability: ParsedVideoAvailabilitySnapshot) -> bool:
+    if availability.status == "visible":
+        return False
+    return availability.bili_code not in (0, None)
