@@ -93,9 +93,9 @@
 - [x] 实现 media 图片下载 worker，走统一 http 请求层和限流。
 - [x] 下载后计算 `blob_sha256` 并复用已有 `media_asset`。
 - [x] 图片保存到本地文件系统，不引入外部 S3/OSS。
-- [ ] 记录 MIME、文件扩展名、width、height、size_bytes。
-- [ ] 计算 `pixel_sha256`，作为像素完全一致候选依据。
-- [ ] 预留并写入 `phash` / `dhash` / `ahash` 字段。
+- [x] 记录 MIME、文件扩展名、width、height、size_bytes。
+- [x] 计算 `pixel_sha256`，作为像素完全一致候选依据。
+- [x] 预留并写入 `phash` / `dhash` / `ahash` 字段。
 - [x] 回填 `media_sources.media_asset_id` 和 `comment_observation_media.media_asset_id`。
 - [ ] 建立 `media_similarity_edges` ORM 表。
 - [ ] 建立 `media_clusters` 和 `media_cluster_members` ORM 表。

@@ -89,8 +89,13 @@ class MediaDownloader:
             await session.flush()
             raise
 
-        mime_type = _content_type(result.response_headers)
-        file_ext = _file_ext(mime_type=mime_type, url=result.url)
+        header_mime_type = _content_type(result.response_headers)
+        image_metadata = self.hasher.inspect_image(result.body)
+        mime_type = image_metadata.mime_type or header_mime_type
+        file_ext = image_metadata.file_ext or _file_ext(
+            mime_type=mime_type,
+            url=result.url,
+        )
         stored_raw = self.raw_store.save(
             body=result.body,
             captured_at=result.captured_at,
@@ -110,19 +115,19 @@ class MediaDownloader:
             storage_uri = await self.media_store.put(blob_sha256, result.body, file_ext)
             asset = MediaAsset(
                 blob_sha256=blob_sha256,
-                pixel_sha256=None,
+                pixel_sha256=image_metadata.pixel_sha256,
                 mime_type=mime_type,
                 file_ext=file_ext,
-                width=None,
-                height=None,
+                width=image_metadata.width,
+                height=image_metadata.height,
                 size_bytes=len(result.body),
                 storage_uri=storage_uri,
                 first_seen_at=source.first_seen_at,
                 first_raw_page_id=source.first_raw_page_id,
                 download_raw_payload_id=raw_payload.id,
-                phash=None,
-                dhash=None,
-                ahash=None,
+                phash=image_metadata.phash,
+                dhash=image_metadata.dhash,
+                ahash=image_metadata.ahash,
             )
             session.add(asset)
             await session.flush()

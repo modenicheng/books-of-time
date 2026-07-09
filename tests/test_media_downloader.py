@@ -1,6 +1,8 @@
 from datetime import UTC, datetime
+from io import BytesIO
 
 import pytest
+from PIL import Image
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -22,8 +24,9 @@ from books_of_time.worker import Worker
 
 
 class FakeHttpClient:
-    def __init__(self, body: bytes) -> None:
+    def __init__(self, body: bytes, mime_type: str = "image/jpeg") -> None:
         self.body = body
+        self.mime_type = mime_type
         self.requests: list[dict] = []
 
     async def request(self, **kwargs) -> FetchResult:
@@ -36,7 +39,7 @@ class FakeHttpClient:
             status_code=200,
             body=self.body,
             captured_at=datetime(2026, 7, 8, 10, 1, tzinfo=UTC),
-            response_headers={"content-type": "image/jpeg"},
+            response_headers={"content-type": self.mime_type},
         )
 
 
@@ -46,6 +49,17 @@ class FakeRateLimiter:
 
     async def acquire(self, key: str) -> None:
         self.keys.append(key)
+
+
+def make_image_bytes(
+    *,
+    fmt: str = "JPEG",
+    size: tuple[int, int] = (2, 3),
+    color: tuple[int, int, int] = (255, 0, 0),
+) -> bytes:
+    buffer = BytesIO()
+    Image.new("RGB", size, color).save(buffer, format=fmt)
+    return buffer.getvalue()
 
 
 @pytest.mark.asyncio
@@ -88,7 +102,8 @@ async def test_media_downloader_creates_asset_file_and_backfills_links(
         )
         await session.commit()
 
-    http_client = FakeHttpClient(b"same-image")
+    image_body = make_image_bytes(fmt="JPEG", size=(2, 3))
+    http_client = FakeHttpClient(image_body)
     rate_limiter = FakeRateLimiter()
     downloader = MediaDownloader(
         http_client=http_client,
@@ -109,9 +124,15 @@ async def test_media_downloader_creates_asset_file_and_backfills_links(
         asset_count = await session.scalar(select(func.count(MediaAsset.id)))
 
         assert asset_count == 1
-        assert asset.size_bytes == len(b"same-image")
+        assert asset.size_bytes == len(image_body)
         assert asset.mime_type == "image/jpeg"
         assert asset.file_ext == ".jpg"
+        assert asset.width == 2
+        assert asset.height == 3
+        assert asset.pixel_sha256 is not None
+        assert asset.phash is not None
+        assert asset.dhash is not None
+        assert asset.ahash is not None
         assert asset.storage_uri.startswith(f"file://{tmp_path / 'media'}")
         assert saved_source is not None
         assert saved_source.fetch_status == "succeeded"

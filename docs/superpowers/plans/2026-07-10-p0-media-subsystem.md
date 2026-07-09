@@ -49,5 +49,5 @@
 ### Follow-Up Tasks
 
 - Media-2: downloader, local file store, blob hash dedupe. Completed for binary download and `blob_sha256`; dimensions and pixel/perceptual hashes remain Media-3.
-- Media-3: MIME/dimensions/pixel hash/perceptual hashes.
+- Media-3: MIME/dimensions/pixel hash/perceptual hashes. Completed for decodable Pillow-supported images, with invalid images kept as stored blobs.
 - Media-4: similarity edges and clusters.
