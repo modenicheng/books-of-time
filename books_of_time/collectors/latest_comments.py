@@ -779,6 +779,12 @@ class LatestCommentCollector:
                 state.last_scan_status = "frontier_missing"
                 state.last_scan_truncated = False
                 state.extra["missing_frontier_rpid"] = old_frontier_rpid
+                await CommentRepository(session).mark_disappeared(
+                    rpid=int(old_frontier_rpid),
+                    bvid=bvid,
+                    missing_reason="missing_after_seen",
+                    created_at=result.captured_at,
+                )
                 return
 
             offset = str(parsed.extra["next_offset"])

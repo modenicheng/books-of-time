@@ -158,8 +158,8 @@
 - [x] 实现 reply count 变化事件。
 - [x] 实现 hot position 变化事件。
 - [x] 实现 content hash 变化事件。
-- [ ] 实现 disappeared/reappeared/folded/unfolded 事件。
-- [ ] 区分 `missing_after_seen`、`not_reached`、`unknown_due_to_fetch_error`。
+- [~] 实现 disappeared/reappeared/folded/unfolded 事件（已实现 disappeared/reappeared；folded/unfolded 等待 parser 字段）。
+- [~] 区分 `missing_after_seen`、`not_reached`、`unknown_due_to_fetch_error`（已实现 `missing_after_seen`）。
 - [x] 确保无变化时不写 state event。
 
 ## P2: Important Replies

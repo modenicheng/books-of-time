@@ -327,6 +327,65 @@ async def test_comment_visibility_event_table_records_missing_reason() -> None:
 
 
 @pytest.mark.asyncio
+async def test_comment_repository_records_reappeared_after_disappeared() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    first = _parsed_comment_page(captured_at=datetime(2026, 7, 8, 10, 0, tzinfo=UTC))
+    second = _parsed_comment_page(captured_at=datetime(2026, 7, 8, 10, 1, tzinfo=UTC))
+
+    async with session_factory() as session:
+        raw_page = await RawPageObservationRepository(session).insert_from_parsed_page(
+            first,
+            request_type=BilibiliRequestType.COMMENT_HOT,
+        )
+        observations = await CommentRepository(session).upsert_page(
+            first,
+            raw_page_observation_id=raw_page.id,
+        )
+        await CommentRepository(session).mark_disappeared(
+            rpid=1001,
+            bvid="BV1abc",
+            missing_reason="missing_after_seen",
+            created_at=datetime(2026, 7, 8, 10, 0, 30, tzinfo=UTC),
+        )
+        second_raw_page = await RawPageObservationRepository(
+            session
+        ).insert_from_parsed_page(
+            second,
+            request_type=BilibiliRequestType.COMMENT_HOT,
+        )
+        await CommentRepository(session).upsert_page(
+            second,
+            raw_page_observation_id=second_raw_page.id,
+        )
+        await session.commit()
+
+    async with session_factory() as session:
+        visibility_events = (
+            await session.scalars(
+                select(CommentVisibilityEvent).order_by(CommentVisibilityEvent.id.asc())
+            )
+        ).all()
+
+        assert [event.event_type for event in visibility_events] == [
+            "disappeared",
+            "reappeared",
+        ]
+        assert (
+            visibility_events[0].previous_comment_observation_id == observations[0].id
+        )
+        assert visibility_events[0].missing_reason == "missing_after_seen"
+        assert visibility_events[1].current_comment_observation_id is not None
+        assert visibility_events[1].old_visibility == "missing"
+        assert visibility_events[1].new_visibility == "visible"
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_frontier_repository_creates_once_and_persists_extra() -> None:
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as conn:

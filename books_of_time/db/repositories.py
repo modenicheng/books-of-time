@@ -18,6 +18,7 @@ from books_of_time.db.models import (
     CommentEntity,
     CommentObservation,
     CommentStateEvent,
+    CommentVisibilityEvent,
     FrontierState,
     RawPageObservation,
     RawPayload,
@@ -658,9 +659,41 @@ class CommentRepository:
                     current=observation,
                     created_at=parsed.captured_at,
                 )
+            await self._add_reappeared_event_if_needed(
+                current=observation,
+                created_at=parsed.captured_at,
+            )
             observations.append(observation)
         await self.session.flush()
         return observations
+
+    async def mark_disappeared(
+        self,
+        *,
+        rpid: int,
+        bvid: str,
+        missing_reason: str,
+        created_at: datetime,
+    ) -> CommentVisibilityEvent | None:
+        latest_event = await self._latest_visibility_event(rpid)
+        if latest_event is not None and latest_event.event_type == "disappeared":
+            return None
+
+        previous = await self._latest_observation(rpid)
+        event = CommentVisibilityEvent(
+            rpid=rpid,
+            bvid=bvid,
+            previous_comment_observation_id=previous.id if previous else None,
+            current_comment_observation_id=None,
+            event_type="disappeared",
+            old_visibility=previous.visibility if previous else "visible",
+            new_visibility="missing",
+            missing_reason=missing_reason,
+            created_at=created_at,
+        )
+        self.session.add(event)
+        await self.session.flush()
+        return event
 
     async def _ensure_entity(
         self,
@@ -701,6 +734,46 @@ class CommentRepository:
                 CommentObservation.captured_at.desc(), CommentObservation.id.desc()
             )
             .limit(1)
+        )
+
+    async def _latest_visibility_event(
+        self,
+        rpid: int,
+    ) -> CommentVisibilityEvent | None:
+        return await self.session.scalar(
+            select(CommentVisibilityEvent)
+            .where(CommentVisibilityEvent.rpid == rpid)
+            .order_by(
+                CommentVisibilityEvent.created_at.desc(),
+                CommentVisibilityEvent.id.desc(),
+            )
+            .limit(1)
+        )
+
+    async def _add_reappeared_event_if_needed(
+        self,
+        *,
+        current: CommentObservation,
+        created_at: datetime,
+    ) -> None:
+        latest_event = await self._latest_visibility_event(current.rpid)
+        if latest_event is None or latest_event.event_type != "disappeared":
+            return
+
+        self.session.add(
+            CommentVisibilityEvent(
+                rpid=current.rpid,
+                bvid=current.bvid,
+                previous_comment_observation_id=(
+                    latest_event.previous_comment_observation_id
+                ),
+                current_comment_observation_id=current.id,
+                event_type="reappeared",
+                old_visibility="missing",
+                new_visibility=current.visibility,
+                missing_reason=latest_event.missing_reason,
+                created_at=created_at,
+            )
         )
 
     def _add_changed_state_events(

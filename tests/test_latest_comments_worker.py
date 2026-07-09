@@ -13,6 +13,7 @@ from books_of_time.db.models import (
     CommentEntity,
     CommentObservation,
     CommentObservationMedia,
+    CommentVisibilityEvent,
     FrontierState,
     MediaSource,
     RawPageObservation,
@@ -817,6 +818,26 @@ async def test_incremental_frontier_missing_when_service_end_reached(
         tmp_path, client
     )
     async with session_factory() as session:
+        previous_observation = CommentObservation(
+            rpid=4001,
+            bvid="BV1abc",
+            oid=777,
+            captured_at=datetime(2026, 7, 8, 10, 0, tzinfo=UTC),
+            raw_payload_id=1,
+            raw_page_observation_id=1,
+            sort_mode="latest",
+            page_number=1,
+            position=1,
+            content="comment 4001",
+            content_hash=b"4" * 32,
+            like_count=1,
+            reply_count=0,
+            author_mid=4001,
+            author_name="User 4001",
+            is_deleted=False,
+            visibility="visible",
+            extra={},
+        )
         state = FrontierState(
             target_type="video",
             target_id="BV1abc",
@@ -832,6 +853,7 @@ async def test_incremental_frontier_missing_when_service_end_reached(
             created_at=datetime(2026, 7, 8, 10, 0, tzinfo=UTC),
             updated_at=datetime(2026, 7, 8, 10, 0, tzinfo=UTC),
         )
+        session.add(previous_observation)
         session.add(state)
         await session.commit()
 
@@ -840,6 +862,7 @@ async def test_incremental_frontier_missing_when_service_end_reached(
     async with session_factory() as session:
         state = await session.scalar(select(FrontierState))
         coverage = await session.scalar(select(CollectionCoverageStat))
+        visibility_event = await session.scalar(select(CommentVisibilityEvent))
 
         assert state is not None
         assert state.last_scan_status == "frontier_missing"
@@ -851,6 +874,12 @@ async def test_incremental_frontier_missing_when_service_end_reached(
         assert coverage.reason == "frontier_missing"
         assert coverage.frontier_missing is True
         assert coverage.frontier_reached is False
+        assert visibility_event is not None
+        assert visibility_event.event_type == "disappeared"
+        assert visibility_event.rpid == 4001
+        assert visibility_event.previous_comment_observation_id is not None
+        assert visibility_event.current_comment_observation_id is None
+        assert visibility_event.missing_reason == "missing_after_seen"
 
     await engine.dispose()
 
