@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+import asyncio
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
@@ -62,6 +63,7 @@ class Worker:
         effective_now = now or datetime.now(UTC)
         async with self.session_factory() as session:
             repo = CollectionTaskRepository(session)
+            await repo.recover_expired_leases(now=effective_now)
             task = await repo.lease_next(
                 lease_owner=self.lease_owner,
                 now=effective_now,
@@ -145,3 +147,30 @@ class Worker:
             task.lease_until = None
             await session.commit()
             return True
+
+    async def run_loop(
+        self,
+        *,
+        idle_sleep_seconds: float = 5,
+        max_iterations: int | None = None,
+        stop_when_idle: bool = False,
+        sleep: Callable[[float], Awaitable[None] | None] | None = None,
+    ) -> int:
+        sleep_func = sleep or asyncio.sleep
+        iterations = 0
+        executed_count = 0
+
+        while max_iterations is None or iterations < max_iterations:
+            iterations += 1
+            executed = await self.run_once()
+            if executed:
+                executed_count += 1
+                continue
+
+            if stop_when_idle:
+                break
+            maybe_awaitable = sleep_func(idle_sleep_seconds)
+            if maybe_awaitable is not None:
+                await maybe_awaitable
+
+        return executed_count
