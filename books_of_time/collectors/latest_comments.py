@@ -73,11 +73,25 @@ class LatestCommentCollector:
             now=now,
         )
         if state.extra.get("baseline_status") == "baseline_complete":
-            await self._run_incremental(task, session, state, bvid=bvid, aid=aid)
+            await self._run_incremental(
+                task,
+                session,
+                state,
+                bvid=bvid,
+                aid=aid,
+                started_at=started_at,
+            )
             await frontier_repo.save(state)
             return
         if state.extra.get("baseline_status") == "baseline_tail_complete":
-            await self._run_head_sweep(task, session, state, bvid=bvid, aid=aid)
+            await self._run_head_sweep(
+                task,
+                session,
+                state,
+                bvid=bvid,
+                aid=aid,
+                started_at=started_at,
+            )
             await frontier_repo.save(state)
             return
         await self._run_baseline_tail(
@@ -367,26 +381,166 @@ class LatestCommentCollector:
 
     async def _run_head_sweep(
         self,
-        task,
-        session,
-        state,
+        task: CollectionTask,
+        session: AsyncSession,
+        state: FrontierState,
         *,
         bvid: str,
         aid: int,
+        started_at: float,
     ) -> None:
-        raise RuntimeError(
-            "unexpected latest comment head sweep state before tail completion"
-        )
+        baseline_start_frontier_rpid = state.extra.get("baseline_start_frontier_rpid")
+        if baseline_start_frontier_rpid is None:
+            state.extra["failed_reason"] = "missing baseline start frontier"
+            self._mark_corrupted(state, baseline=True)
+            return
+
+        offset = ""
+        page_number = 1
+        seen_cursors: set[str] = set()
+        newest_rpid: int | None = None
+        newest_captured_at: datetime | None = None
+
+        while True:
+            if self._time_expired(started_at):
+                self._mark_paused(state, cursor=offset, baseline=True)
+                await self._enqueue_followup(session, task)
+                return
+            if offset in seen_cursors:
+                state.extra["failed_cursor"] = offset
+                state.extra["failed_reason"] = "cursor repeated"
+                self._mark_corrupted(state, baseline=True)
+                return
+            seen_cursors.add(offset)
+
+            result = await self._fetch_page_with_retry(
+                state=state,
+                aid=aid,
+                offset=offset,
+                started_at=started_at,
+                baseline=True,
+            )
+            if result is None:
+                if state.last_scan_status == "baseline_paused":
+                    await self._enqueue_followup(session, task)
+                return
+
+            parsed = await self._persist_page(
+                session,
+                result,
+                bvid=bvid,
+                aid=aid,
+                page_number=page_number,
+                request_offset=offset,
+            )
+            if newest_rpid is None and parsed.comments:
+                newest_rpid = parsed.comments[0].rpid
+                newest_captured_at = result.captured_at
+
+            if any(
+                comment.rpid == int(baseline_start_frontier_rpid)
+                for comment in parsed.comments
+            ):
+                state.frontier_rpid = newest_rpid or int(baseline_start_frontier_rpid)
+                state.frontier_time = newest_captured_at or result.captured_at
+                state.cursor = None
+                state.last_scan_at = result.captured_at
+                state.last_scan_status = "baseline_complete"
+                state.last_scan_truncated = False
+                state.extra["baseline_status"] = "baseline_complete"
+                state.extra["baseline_completed_at"] = result.captured_at.isoformat()
+                state.extra.pop("missing_frontier_rpid", None)
+                return
+
+            if parsed.extra["is_end"]:
+                state.extra["failed_reason"] = (
+                    "baseline start frontier not reached during head sweep"
+                )
+                self._mark_corrupted(state, baseline=True)
+                return
+
+            offset = str(parsed.extra["next_offset"])
+            page_number += 1
 
     async def _run_incremental(
         self,
-        task,
-        session,
-        state,
+        task: CollectionTask,
+        session: AsyncSession,
+        state: FrontierState,
         *,
         bvid: str,
         aid: int,
+        started_at: float,
     ) -> None:
-        raise RuntimeError(
-            "unexpected latest comment incremental state before baseline completion"
-        )
+        old_frontier_rpid = state.frontier_rpid
+        if old_frontier_rpid is None:
+            state.extra["failed_reason"] = "missing existing frontier"
+            self._mark_corrupted(state, baseline=False)
+            return
+
+        offset = str(state.cursor or "")
+        page_number = 1
+        seen_cursors: set[str] = set()
+        newest_rpid: int | None = None
+        newest_captured_at: datetime | None = None
+
+        while True:
+            if self._time_expired(started_at):
+                self._mark_paused(state, cursor=offset, baseline=False)
+                await self._enqueue_followup(session, task)
+                return
+            if offset in seen_cursors:
+                state.extra["failed_cursor"] = offset
+                state.extra["failed_reason"] = "cursor repeated"
+                self._mark_corrupted(state, baseline=False)
+                return
+            seen_cursors.add(offset)
+
+            result = await self._fetch_page_with_retry(
+                state=state,
+                aid=aid,
+                offset=offset,
+                started_at=started_at,
+                baseline=False,
+            )
+            if result is None:
+                if state.last_scan_status == "paused":
+                    await self._enqueue_followup(session, task)
+                return
+
+            parsed = await self._persist_page(
+                session,
+                result,
+                bvid=bvid,
+                aid=aid,
+                page_number=page_number,
+                request_offset=offset,
+            )
+            if newest_rpid is None and parsed.comments:
+                newest_rpid = parsed.comments[0].rpid
+                newest_captured_at = result.captured_at
+
+            if any(comment.rpid == old_frontier_rpid for comment in parsed.comments):
+                state.frontier_rpid = newest_rpid or old_frontier_rpid
+                state.frontier_time = newest_captured_at or result.captured_at
+                state.cursor = None
+                state.last_scan_at = result.captured_at
+                state.last_scan_status = "incremental_complete"
+                state.last_scan_truncated = False
+                state.extra.pop("missing_frontier_rpid", None)
+                return
+
+            if parsed.extra["is_end"]:
+                if newest_rpid is not None:
+                    state.frontier_rpid = newest_rpid
+                    state.frontier_time = newest_captured_at or result.captured_at
+                state.cursor = None
+                state.last_scan_at = result.captured_at
+                state.last_scan_status = "frontier_missing"
+                state.last_scan_truncated = False
+                state.extra["missing_frontier_rpid"] = old_frontier_rpid
+                return
+
+            offset = str(parsed.extra["next_offset"])
+            state.cursor = offset
+            page_number += 1
