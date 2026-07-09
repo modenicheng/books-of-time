@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from books_of_time.collectors.latest_comments import LatestCommentCollector
 from books_of_time.db.models import (
     Base,
+    CollectionCoverageStat,
     CollectionTask,
     CommentEntity,
     CommentObservation,
@@ -149,6 +150,7 @@ async def build_worker_with_task(
     worker = Worker(
         session_factory=session_factory,
         collectors={TaskKind.FETCH_LATEST_COMMENTS: collector},
+        run_id="test-run",
         lease_owner="worker-test",
     )
     return engine, session_factory, worker, now
@@ -175,6 +177,7 @@ async def test_baseline_pauses_at_time_budget_and_enqueues_followup(tmp_path) ->
 
     async with session_factory() as session:
         state = await session.scalar(select(FrontierState))
+        coverage = await session.scalar(select(CollectionCoverageStat))
         tasks = (
             await session.scalars(
                 select(CollectionTask).order_by(CollectionTask.id.asc())
@@ -187,6 +190,11 @@ async def test_baseline_pauses_at_time_budget_and_enqueues_followup(tmp_path) ->
         assert state.cursor == "offset-2"
         assert state.extra["baseline_start_frontier_rpid"] == 3003
         assert state.extra["baseline_status"] == "baseline_paused"
+        assert coverage is not None
+        assert coverage.status == "partial"
+        assert coverage.reason == "time_budget"
+        assert coverage.truncated is True
+        assert coverage.frontier_reached is False
         assert [task.kind for task in tasks] == [
             TaskKind.FETCH_LATEST_COMMENTS,
             TaskKind.FETCH_LATEST_COMMENTS,
@@ -432,6 +440,7 @@ async def test_failed_cursor_resumes_retry_on_next_run_without_repeat_corruption
     second_run_worker = Worker(
         session_factory=session_factory,
         collectors={TaskKind.FETCH_LATEST_COMMENTS: second_run_collector},
+        run_id="test-run-2",
         lease_owner="worker-test-2",
     )
 
@@ -585,6 +594,7 @@ async def test_head_sweep_pause_keeps_tail_complete_and_resumes_from_saved_curso
     paused_worker = Worker(
         session_factory=session_factory,
         collectors={TaskKind.FETCH_LATEST_COMMENTS: paused_collector},
+        run_id="test-run-head-pause",
         lease_owner="worker-test-head-pause",
     )
 
@@ -619,6 +629,7 @@ async def test_head_sweep_pause_keeps_tail_complete_and_resumes_from_saved_curso
     resume_worker = Worker(
         session_factory=session_factory,
         collectors={TaskKind.FETCH_LATEST_COMMENTS: resume_collector},
+        run_id="test-run-head-resume",
         lease_owner="worker-test-head-resume",
     )
 
@@ -746,6 +757,7 @@ async def test_incremental_pause_resumes_without_losing_newest_frontier(
     resume_worker = Worker(
         session_factory=session_factory,
         collectors={TaskKind.FETCH_LATEST_COMMENTS: resume_collector},
+        run_id="test-run-incremental-resume",
         lease_owner="worker-test-incremental-resume",
     )
 
@@ -802,12 +814,18 @@ async def test_incremental_frontier_missing_when_service_end_reached(
 
     async with session_factory() as session:
         state = await session.scalar(select(FrontierState))
+        coverage = await session.scalar(select(CollectionCoverageStat))
 
         assert state is not None
         assert state.last_scan_status == "frontier_missing"
         assert state.last_scan_truncated is False
         assert state.frontier_rpid == 5001
         assert state.extra["missing_frontier_rpid"] == 4001
+        assert coverage is not None
+        assert coverage.status == "partial"
+        assert coverage.reason == "frontier_missing"
+        assert coverage.frontier_missing is True
+        assert coverage.frontier_reached is False
 
     await engine.dispose()
 
@@ -871,11 +889,22 @@ async def test_repeated_next_offset_marks_scan_corrupted(tmp_path) -> None:
 
     async with session_factory() as session:
         state = await session.scalar(select(FrontierState))
+        coverage = (
+            await session.scalars(
+                select(CollectionCoverageStat).order_by(
+                    CollectionCoverageStat.id.desc()
+                )
+            )
+        ).first()
 
         assert state is not None
         assert state.last_scan_status == "baseline_corrupted"
         assert state.last_scan_truncated is True
         assert state.extra["failed_cursor"] == "offset-loop"
         assert state.extra["failed_reason"] == "cursor repeated"
+        assert coverage is not None
+        assert coverage.status == "corrupted"
+        assert coverage.reason == "cursor_loop"
+        assert coverage.corrupted is True
 
     await engine.dispose()

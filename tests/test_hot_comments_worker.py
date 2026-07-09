@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from books_of_time.collectors.hot_comments import HotCommentCollector
 from books_of_time.db.models import (
     Base,
+    CollectionCoverageStat,
     CollectionTask,
     CommentEntity,
     CommentObservation,
@@ -114,6 +115,7 @@ async def test_worker_fetch_hot_comments_archives_raw_and_writes_observations(
                 run_id="test-run",
             )
         },
+        run_id="test-run",
         lease_owner="worker-test",
     )
 
@@ -122,6 +124,7 @@ async def test_worker_fetch_hot_comments_archives_raw_and_writes_observations(
 
     async with session_factory() as session:
         task = await session.scalar(select(CollectionTask))
+        coverage = await session.scalar(select(CollectionCoverageStat))
         raw_payloads = (
             await session.scalars(select(RawPayload).order_by(RawPayload.id.asc()))
         ).all()
@@ -130,6 +133,15 @@ async def test_worker_fetch_hot_comments_archives_raw_and_writes_observations(
         observation = await session.scalar(select(CommentObservation))
 
         assert task.status == TaskStatus.SUCCEEDED
+        assert coverage is not None
+        assert coverage.task_kind == TaskKind.FETCH_HOT_COMMENTS
+        assert coverage.status == "succeeded"
+        assert coverage.reason == "complete"
+        assert coverage.pages_requested == 1
+        assert coverage.pages_succeeded == 1
+        assert coverage.items_observed == 1
+        assert coverage.raw_payloads_saved == 2
+        assert coverage.truncated is False
         assert len(raw_payloads) == 2
         assert raw_payloads[0].request_type == BilibiliRequestType.VIDEO_STATS
         assert raw_payloads[1].request_type == BilibiliRequestType.COMMENT_HOT

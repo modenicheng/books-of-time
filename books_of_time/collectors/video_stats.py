@@ -5,11 +5,13 @@ from typing import Protocol
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from books_of_time.coverage import CoverageDraft
 from books_of_time.db.models import CollectionTask
 from books_of_time.db.repositories import (
     RawPayloadRepository,
     VideoMetricSnapshotRepository,
 )
+from books_of_time.domain.enums import TaskKind
 from books_of_time.http.client import FetchResult
 from books_of_time.parsers.video import VIDEO_PARSER_VERSION, parse_video_stats
 from books_of_time.storage.filesystem import RawPayloadFileStore
@@ -31,7 +33,11 @@ class VideoStatsCollector:
         self.raw_store = raw_store
         self.run_id = run_id
 
-    async def collect(self, task: CollectionTask, session: AsyncSession) -> None:
+    async def collect(
+        self,
+        task: CollectionTask,
+        session: AsyncSession,
+    ) -> CoverageDraft:
         bvid = str(task.payload.get("bvid") or task.target_id)
         result = await self.client.get_video_stats(bvid)
         raw_repo = RawPayloadRepository(session)
@@ -53,3 +59,13 @@ class VideoStatsCollector:
             raw_payload_id=raw.id,
         )
         await VideoMetricSnapshotRepository(session).insert_from_parsed(parsed)
+        return CoverageDraft(
+            task_kind=TaskKind.FETCH_VIDEO_STATS,
+            target_type=task.target_type,
+            target_id=task.target_id,
+            pages_requested=1,
+            pages_succeeded=1,
+            items_observed=1,
+            raw_payloads_saved=1,
+            reason="complete",
+        )

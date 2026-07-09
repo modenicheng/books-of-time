@@ -5,13 +5,14 @@ from typing import Protocol
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from books_of_time.coverage import CoverageDraft
 from books_of_time.db.models import CollectionTask, RawPayload
 from books_of_time.db.repositories import (
     CommentRepository,
     RawPageObservationRepository,
     RawPayloadRepository,
 )
-from books_of_time.domain.enums import BilibiliRequestType
+from books_of_time.domain.enums import BilibiliRequestType, TaskKind
 from books_of_time.http.client import FetchResult
 from books_of_time.parsers.comments import (
     COMMENT_PARSER_VERSION,
@@ -38,14 +39,20 @@ class HotCommentCollector:
         self.raw_store = raw_store
         self.run_id = run_id
 
-    async def collect(self, task: CollectionTask, session: AsyncSession) -> None:
+    async def collect(
+        self,
+        task: CollectionTask,
+        session: AsyncSession,
+    ) -> CoverageDraft:
         bvid = str(task.payload.get("bvid") or task.target_id)
         page = int(task.payload.get("page") or 1)
         aid = task.payload.get("aid")
+        raw_payloads_saved = 0
 
         if aid is None:
             video_result = await self.client.get_video_stats(bvid)
             video_raw = await self._archive_raw(video_result, session)
+            raw_payloads_saved += 1
             video_payload = json.loads(video_result.body)
             aid = _extract_aid(video_payload)
             task.payload = {
@@ -56,6 +63,7 @@ class HotCommentCollector:
 
         comments_result = await self.client.get_hot_comments(aid=int(aid), page=page)
         comments_raw = await self._archive_raw(comments_result, session)
+        raw_payloads_saved += 1
         parsed = parse_hot_comment_page(
             json.loads(comments_result.body),
             bvid=bvid,
@@ -68,9 +76,20 @@ class HotCommentCollector:
             parsed,
             request_type=BilibiliRequestType.COMMENT_HOT,
         )
-        await CommentRepository(session).upsert_page(
+        observations = await CommentRepository(session).upsert_page(
             parsed,
             raw_page_observation_id=raw_page.id,
+        )
+        return CoverageDraft(
+            task_kind=TaskKind.FETCH_HOT_COMMENTS,
+            target_type=task.target_type,
+            target_id=task.target_id,
+            pages_requested=1,
+            pages_succeeded=1,
+            items_observed=len(observations),
+            raw_payloads_saved=raw_payloads_saved,
+            truncated=False,
+            reason="complete",
         )
 
     async def _archive_raw(

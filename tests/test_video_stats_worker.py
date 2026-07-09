@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from books_of_time.collectors.video_stats import VideoStatsCollector
 from books_of_time.db.models import (
     Base,
+    CollectionCoverageStat,
     CollectionTask,
     RawPayload,
     VideoMetricSnapshot,
@@ -79,6 +80,7 @@ async def test_worker_fetch_video_stats_archives_raw_then_writes_snapshot(
                 run_id="test-run",
             )
         },
+        run_id="test-run",
         lease_owner="worker-test",
     )
 
@@ -87,10 +89,19 @@ async def test_worker_fetch_video_stats_archives_raw_then_writes_snapshot(
 
     async with session_factory() as session:
         task = await session.scalar(select(CollectionTask))
+        coverage = await session.scalar(select(CollectionCoverageStat))
         raw = await session.scalar(select(RawPayload))
         snapshot = await session.scalar(select(VideoMetricSnapshot))
 
         assert task.status == TaskStatus.SUCCEEDED
+        assert coverage is not None
+        assert coverage.task_kind == TaskKind.FETCH_VIDEO_STATS
+        assert coverage.status == "succeeded"
+        assert coverage.reason == "complete"
+        assert coverage.pages_requested == 1
+        assert coverage.pages_succeeded == 1
+        assert coverage.items_observed == 1
+        assert coverage.raw_payloads_saved == 1
         assert raw is not None
         assert raw.request_type == BilibiliRequestType.VIDEO_STATS
         assert snapshot is not None

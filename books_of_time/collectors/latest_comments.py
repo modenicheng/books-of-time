@@ -7,9 +7,10 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Protocol
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from books_of_time.coverage import CoverageDraft
 from books_of_time.db.models import (
     CollectionTask,
     CommentObservation,
@@ -67,7 +68,11 @@ class LatestCommentCollector:
         self.monotonic = monotonic or time.monotonic
         self.sleep = sleep or time.sleep
 
-    async def collect(self, task: CollectionTask, session: AsyncSession) -> None:
+    async def collect(
+        self,
+        task: CollectionTask,
+        session: AsyncSession,
+    ) -> CoverageDraft:
         started_at = self.monotonic()
         configured_max_scan_seconds = task.payload.get("max_scan_seconds")
         max_scan_seconds = (
@@ -85,6 +90,12 @@ class LatestCommentCollector:
             frontier_type="latest_comments",
             now=now,
         )
+        raw_pages_before = await self._count_latest_raw_pages(session, bvid=bvid)
+        comments_before = await self._count_latest_comment_observations(
+            session,
+            bvid=bvid,
+        )
+        raw_payloads_before = await self._count_raw_payloads(session)
         if state.extra.get("baseline_status") == "baseline_complete":
             await self._run_incremental(
                 task,
@@ -95,9 +106,7 @@ class LatestCommentCollector:
                 started_at=started_at,
                 max_scan_seconds=max_scan_seconds,
             )
-            await frontier_repo.save(state)
-            return
-        if state.extra.get("baseline_status") == "baseline_tail_complete":
+        elif state.extra.get("baseline_status") == "baseline_tail_complete":
             await self._run_head_sweep(
                 task,
                 session,
@@ -107,18 +116,110 @@ class LatestCommentCollector:
                 started_at=started_at,
                 max_scan_seconds=max_scan_seconds,
             )
-            await frontier_repo.save(state)
-            return
-        await self._run_baseline_tail(
-            task,
-            session,
-            state,
-            bvid=bvid,
-            aid=aid,
-            started_at=started_at,
-            max_scan_seconds=max_scan_seconds,
-        )
+        else:
+            await self._run_baseline_tail(
+                task,
+                session,
+                state,
+                bvid=bvid,
+                aid=aid,
+                started_at=started_at,
+                max_scan_seconds=max_scan_seconds,
+            )
         await frontier_repo.save(state)
+        raw_pages_after = await self._count_latest_raw_pages(session, bvid=bvid)
+        comments_after = await self._count_latest_comment_observations(
+            session,
+            bvid=bvid,
+        )
+        raw_payloads_after = await self._count_raw_payloads(session)
+        return self._build_coverage_draft(
+            task,
+            state,
+            raw_pages_saved=raw_pages_after - raw_pages_before,
+            comments_observed=comments_after - comments_before,
+            raw_payloads_saved=raw_payloads_after - raw_payloads_before,
+        )
+
+    async def _count_latest_raw_pages(
+        self,
+        session: AsyncSession,
+        *,
+        bvid: str,
+    ) -> int:
+        count = await session.scalar(
+            select(func.count(RawPageObservation.id)).where(
+                RawPageObservation.request_type == BilibiliRequestType.COMMENT_LATEST,
+                RawPageObservation.target_type == "video",
+                RawPageObservation.target_id == bvid,
+            )
+        )
+        return int(count or 0)
+
+    async def _count_latest_comment_observations(
+        self,
+        session: AsyncSession,
+        *,
+        bvid: str,
+    ) -> int:
+        count = await session.scalar(
+            select(func.count(CommentObservation.id)).where(
+                CommentObservation.bvid == bvid,
+                CommentObservation.sort_mode == "latest",
+            )
+        )
+        return int(count or 0)
+
+    async def _count_raw_payloads(self, session: AsyncSession) -> int:
+        count = await session.scalar(select(func.count(RawPayload.id)))
+        return int(count or 0)
+
+    def _build_coverage_draft(
+        self,
+        task: CollectionTask,
+        state: FrontierState,
+        *,
+        raw_pages_saved: int,
+        comments_observed: int,
+        raw_payloads_saved: int,
+    ) -> CoverageDraft:
+        status = state.last_scan_status or ""
+        reason = self._coverage_reason(state)
+        return CoverageDraft(
+            task_kind=TaskKind.FETCH_LATEST_COMMENTS,
+            target_type=task.target_type,
+            target_id=task.target_id,
+            pages_requested=raw_pages_saved,
+            pages_succeeded=raw_pages_saved,
+            items_observed=comments_observed,
+            raw_payloads_saved=raw_payloads_saved,
+            request_errors=int(state.extra.get("failed_attempts") or 0),
+            frontier_reached=status in {"baseline_complete", "incremental_complete"},
+            frontier_missing=status == "frontier_missing",
+            truncated=state.last_scan_truncated,
+            corrupted=status in {"baseline_corrupted", "corrupted"},
+            reason=reason,
+            extra={
+                "baseline_status": state.extra.get("baseline_status"),
+                "last_scan_status": state.last_scan_status,
+            },
+        )
+
+    def _coverage_reason(self, state: FrontierState) -> str:
+        status = state.last_scan_status
+        if status == "baseline_complete":
+            return "baseline_complete"
+        if status == "incremental_complete":
+            return "frontier_reached"
+        if status == "frontier_missing":
+            return "frontier_missing"
+        if status in {"baseline_paused", "paused"}:
+            return "time_budget"
+        if status in {"baseline_corrupted", "corrupted"}:
+            if state.extra.get("failed_reason") == "cursor repeated":
+                return "cursor_loop"
+            return "page_retry_exhausted"
+        return status or "complete"
 
     async def _resolve_aid(
         self,
