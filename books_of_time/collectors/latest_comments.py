@@ -355,7 +355,7 @@ class LatestCommentCollector:
         state.last_scan_at = datetime.now(UTC)
         state.last_scan_status = "baseline_paused" if baseline else "paused"
         state.last_scan_truncated = True
-        if baseline:
+        if baseline and state.extra.get("baseline_status") != "baseline_tail_complete":
             state.extra["baseline_status"] = "baseline_paused"
 
     def _mark_paused_after_failed_attempts(
@@ -395,11 +395,11 @@ class LatestCommentCollector:
             self._mark_corrupted(state, baseline=True)
             return
 
-        offset = ""
+        offset = str(state.cursor or "")
         page_number = 1
         seen_cursors: set[str] = set()
-        newest_rpid: int | None = None
-        newest_captured_at: datetime | None = None
+        newest_rpid = state.frontier_rpid
+        newest_captured_at = state.frontier_time
 
         while True:
             if self._time_expired(started_at):
@@ -436,6 +436,8 @@ class LatestCommentCollector:
             if newest_rpid is None and parsed.comments:
                 newest_rpid = parsed.comments[0].rpid
                 newest_captured_at = result.captured_at
+                state.frontier_rpid = newest_rpid
+                state.frontier_time = newest_captured_at
 
             if any(
                 comment.rpid == int(baseline_start_frontier_rpid)

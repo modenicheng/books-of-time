@@ -504,6 +504,104 @@ async def test_head_sweep_completes_baseline_and_sets_frontier(tmp_path) -> None
 
 
 @pytest.mark.asyncio
+async def test_head_sweep_pause_keeps_tail_complete_and_resumes_from_saved_cursor(
+    tmp_path,
+) -> None:
+    client = FakeLatestClient(
+        {
+            "": latest_body(rpid=3003, next_offset="offset-2"),
+            "offset-2": latest_body(rpid=3002, next_offset="", is_end=True),
+        }
+    )
+    engine, session_factory, worker, now = await build_worker_with_task(
+        tmp_path, client
+    )
+
+    await worker.run_once(now=now)
+    async with session_factory() as session:
+        await CollectionTaskRepository(session).enqueue(
+            kind=TaskKind.FETCH_LATEST_COMMENTS,
+            target_type="video",
+            target_id="BV1abc",
+            priority=70,
+            payload={"bvid": "BV1abc", "mode": "latest", "aid": 777},
+            not_before=now - timedelta(seconds=1),
+        )
+        await session.commit()
+
+    client.pages = {
+        "": latest_body(rpid=4001, next_offset="offset-head-2"),
+        "offset-head-2": latest_body(rpid=3003, next_offset="offset-head-3"),
+    }
+    pause_clock = ManualClock([0, 0, 0, 60, 60])
+    paused_collector = LatestCommentCollector(
+        client=client,
+        raw_store=RawPayloadFileStore(tmp_path),
+        run_id="test-run-head-pause",
+        max_scan_seconds=55,
+        page_retry_attempts=3,
+        page_retry_backoff_seconds=[0, 0, 0],
+        monotonic=pause_clock.monotonic,
+        sleep=lambda seconds: None,
+    )
+    paused_worker = Worker(
+        session_factory=session_factory,
+        collectors={TaskKind.FETCH_LATEST_COMMENTS: paused_collector},
+        lease_owner="worker-test-head-pause",
+    )
+
+    executed = await paused_worker.run_once(now=datetime(2099, 1, 1, tzinfo=UTC))
+    assert executed is True
+
+    async with session_factory() as session:
+        state = await session.scalar(select(FrontierState))
+
+        assert state is not None
+        assert state.last_scan_status == "baseline_paused"
+        assert state.last_scan_truncated is True
+        assert state.cursor == "offset-head-2"
+        assert state.extra["baseline_status"] == "baseline_tail_complete"
+        assert state.extra["baseline_start_frontier_rpid"] == 3003
+
+    client.pages = {
+        "offset-head-2": latest_body(rpid=3003, next_offset="offset-head-3"),
+    }
+    client.latest_offsets = []
+    resume_collector = LatestCommentCollector(
+        client=client,
+        raw_store=RawPayloadFileStore(tmp_path),
+        run_id="test-run-head-resume",
+        max_scan_seconds=55,
+        page_retry_attempts=3,
+        page_retry_backoff_seconds=[0, 0, 0],
+        sleep=lambda seconds: None,
+    )
+    resume_worker = Worker(
+        session_factory=session_factory,
+        collectors={TaskKind.FETCH_LATEST_COMMENTS: resume_collector},
+        lease_owner="worker-test-head-resume",
+    )
+
+    executed = await resume_worker.run_once(now=datetime(2099, 1, 2, tzinfo=UTC))
+    assert executed is True
+
+    async with session_factory() as session:
+        state = await session.scalar(select(FrontierState))
+
+        assert state is not None
+        assert state.last_scan_status == "baseline_complete"
+        assert state.last_scan_truncated is False
+        assert state.cursor is None
+        assert state.frontier_rpid == 4001
+        assert state.extra["baseline_status"] == "baseline_complete"
+        assert "baseline_completed_at" in state.extra
+
+    assert client.latest_offsets == ["offset-head-2"]
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_incremental_stops_at_old_frontier_and_updates_new_frontier(
     tmp_path,
 ) -> None:
@@ -591,6 +689,49 @@ async def test_incremental_frontier_missing_when_service_end_reached(
         assert state.last_scan_truncated is False
         assert state.frontier_rpid == 5001
         assert state.extra["missing_frontier_rpid"] == 4001
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_head_sweep_repeated_next_offset_marks_scan_corrupted(tmp_path) -> None:
+    client = FakeLatestClient(
+        {
+            "": latest_body(rpid=3003, next_offset="offset-2"),
+            "offset-2": latest_body(rpid=3002, next_offset="", is_end=True),
+        }
+    )
+    engine, session_factory, worker, now = await build_worker_with_task(
+        tmp_path, client
+    )
+
+    await worker.run_once(now=now)
+    async with session_factory() as session:
+        await CollectionTaskRepository(session).enqueue(
+            kind=TaskKind.FETCH_LATEST_COMMENTS,
+            target_type="video",
+            target_id="BV1abc",
+            priority=70,
+            payload={"bvid": "BV1abc", "mode": "latest", "aid": 777},
+            not_before=now - timedelta(seconds=1),
+        )
+        await session.commit()
+
+    client.pages = {
+        "": latest_body(rpid=4001, next_offset="offset-loop"),
+        "offset-loop": latest_body(rpid=4000, next_offset="offset-loop"),
+    }
+    await worker.run_once(now=datetime(2099, 1, 1, tzinfo=UTC))
+
+    async with session_factory() as session:
+        state = await session.scalar(select(FrontierState))
+
+        assert state is not None
+        assert state.last_scan_status == "baseline_corrupted"
+        assert state.last_scan_truncated is True
+        assert state.extra["baseline_status"] == "baseline_corrupted"
+        assert state.extra["failed_cursor"] == "offset-loop"
+        assert state.extra["failed_reason"] == "cursor repeated"
 
     await engine.dispose()
 
