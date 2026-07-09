@@ -56,18 +56,19 @@ class DiscoveryScheduler:
                 )
             )
 
-            if now - video.pubdate > self.fresh_video_window:
-                continue
+            is_delayed_discovery = now - video.pubdate > self.fresh_video_window
 
             await repo.enqueue(
                 kind=TaskKind.FETCH_VIDEO_STATS,
                 target_type="video",
                 target_id=video.bvid,
-                priority=100,
+                priority=90 if is_delayed_discovery else 100,
                 payload={
                     "bvid": video.bvid,
                     "source_mid": video.source_mid,
-                    "reason": "fresh_discovery",
+                    "reason": "delayed_discovery"
+                    if is_delayed_discovery
+                    else "fresh_discovery",
                     "source_pool_type": video.source_pool_type,
                     "source_pool_id": video.source_pool_id,
                 },

@@ -62,7 +62,7 @@
 - [x] 实现常驻 discovery loop，每分钟扫描配置的矩阵 UID。
 - [x] 支持事件级 UID 池和游戏级 UID 池。
 - [x] 增加 Redis Set 或数据库幂等机制记录已处理 BV。
-- [ ] 对 `pubdate <= now - 2min` 的视频按策略处理，避免发现延迟造成黄金窗口缺口。
+- [x] 对 `pubdate <= now - 2min` 的视频按策略处理，避免发现延迟造成黄金窗口缺口。
 - [ ] 在 22:00 强制生成当日终结快照任务。
 
 ## P0: Video Metrics

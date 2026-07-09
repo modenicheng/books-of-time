@@ -41,16 +41,23 @@ async def test_discovery_scheduler_records_new_video_and_enqueues_stats_task() -
         )
         await session.commit()
 
-    assert created == ["BVNEW"]
+    assert created == ["BVNEW", "BVOLD"]
 
     async with session_factory() as session:
         known_videos = (await session.scalars(select(KnownVideo))).all()
         tasks = (await session.scalars(select(CollectionTask))).all()
 
         assert [video.bvid for video in known_videos] == ["BVNEW", "BVOLD"]
-        assert len(tasks) == 1
-        assert tasks[0].kind == TaskKind.FETCH_VIDEO_STATS
-        assert tasks[0].target_id == "BVNEW"
-        assert tasks[0].not_before == now
+        assert len(tasks) == 2
+        assert [task.kind for task in tasks] == [
+            TaskKind.FETCH_VIDEO_STATS,
+            TaskKind.FETCH_VIDEO_STATS,
+        ]
+        assert [task.target_id for task in tasks] == ["BVNEW", "BVOLD"]
+        assert [task.not_before for task in tasks] == [now, now]
+        assert tasks[0].payload["reason"] == "fresh_discovery"
+        assert tasks[0].priority == 100
+        assert tasks[1].payload["reason"] == "delayed_discovery"
+        assert tasks[1].priority == 90
 
     await engine.dispose()
