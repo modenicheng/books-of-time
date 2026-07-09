@@ -11,6 +11,8 @@ from books_of_time.collectors.video_stats import VideoStatsCollector
 from books_of_time.domain.enums import TaskKind
 from books_of_time.http.client import RawHttpClient
 from books_of_time.http.rate_limiter import RateLimitRule, TokenBucketRateLimiter
+from books_of_time.media.downloader import MediaAssetCollector, MediaDownloader
+from books_of_time.media.storage import MediaStore
 from books_of_time.platforms.bilibili.client import BilibiliPlatformClient
 from books_of_time.storage.filesystem import RawPayloadFileStore
 from books_of_time.task_orchestrator.video_snapshot_scheduler import (
@@ -62,7 +64,10 @@ def build_worker(
 ) -> Worker:
     session_factory = build_session_factory(cfg)
     client = build_bilibili_client(cfg)
-    raw_dir = Path(cfg.get("storage", {}).get("raw_dir", "./data/raw"))
+    storage_cfg = cfg.get("storage", {})
+    raw_dir = Path(storage_cfg.get("raw_dir", "./data/raw"))
+    media_dir = Path(storage_cfg.get("media_dir", "./data/media"))
+    raw_store = RawPayloadFileStore(raw_dir)
     scheduler_cfg = cfg.get("scheduler", {})
     latest_comments_cfg = cfg.get("latest_comments", {})
     return Worker(
@@ -70,18 +75,18 @@ def build_worker(
         collectors={
             TaskKind.FETCH_VIDEO_STATS: VideoStatsCollector(
                 client=client,
-                raw_store=RawPayloadFileStore(raw_dir),
+                raw_store=raw_store,
                 run_id=run_id,
                 snapshot_scheduler=VideoSnapshotScheduler(),
             ),
             TaskKind.FETCH_HOT_COMMENTS: HotCommentCollector(
                 client=client,
-                raw_store=RawPayloadFileStore(raw_dir),
+                raw_store=raw_store,
                 run_id=run_id,
             ),
             TaskKind.FETCH_LATEST_COMMENTS: LatestCommentCollector(
                 client=client,
-                raw_store=RawPayloadFileStore(raw_dir),
+                raw_store=raw_store,
                 run_id=run_id,
                 max_scan_seconds=float(latest_comments_cfg.get("max_scan_seconds", 55)),
                 page_retry_attempts=int(
@@ -94,6 +99,15 @@ def build_worker(
                         [1, 3, 5],
                     )
                 ],
+            ),
+            TaskKind.FETCH_MEDIA_ASSET: MediaAssetCollector(
+                MediaDownloader(
+                    http_client=client.http_client,
+                    rate_limiter=client.rate_limiter,
+                    media_store=MediaStore(media_dir),
+                    raw_store=raw_store,
+                    run_id=run_id,
+                )
             ),
         },
         run_id=run_id,

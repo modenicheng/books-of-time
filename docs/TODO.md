@@ -89,14 +89,14 @@
 - [x] 评论写入阶段登记 media source 和 observation-media 关系。
 - [x] 为 pending media source 生成 `FETCH_MEDIA_ASSET` 任务。
 - [x] 新增 `bilibili:media_image` 请求类型和限流配置。
-- [ ] 实现本地文件系统 media storage：`data/media/sha256/ab/cd/<hash>.<ext>`。
-- [ ] 实现 media 图片下载 worker，走统一 http 请求层和限流。
-- [ ] 下载后计算 `blob_sha256` 并复用已有 `media_asset`。
-- [ ] 图片保存到本地文件系统，不引入外部 S3/OSS。
+- [x] 实现本地文件系统 media storage：`data/media/sha256/ab/cd/<hash>.<ext>`。
+- [x] 实现 media 图片下载 worker，走统一 http 请求层和限流。
+- [x] 下载后计算 `blob_sha256` 并复用已有 `media_asset`。
+- [x] 图片保存到本地文件系统，不引入外部 S3/OSS。
 - [ ] 记录 MIME、文件扩展名、width、height、size_bytes。
 - [ ] 计算 `pixel_sha256`，作为像素完全一致候选依据。
 - [ ] 预留并写入 `phash` / `dhash` / `ahash` 字段。
-- [ ] 回填 `media_sources.media_asset_id` 和 `comment_observation_media.media_asset_id`。
+- [x] 回填 `media_sources.media_asset_id` 和 `comment_observation_media.media_asset_id`。
 - [ ] 建立 `media_similarity_edges` ORM 表。
 - [ ] 建立 `media_clusters` 和 `media_cluster_members` ORM 表。
 - [ ] 实现离线相似图片分析任务，不阻塞采集链路。

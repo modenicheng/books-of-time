@@ -176,6 +176,7 @@ class MediaAsset(TimestampMixin, Base):
     storage_uri: Mapped[str] = mapped_column(Text, nullable=False)
     first_seen_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
     first_raw_page_id: Mapped[int | None] = mapped_column(BigInteger)
+    download_raw_payload_id: Mapped[int | None] = mapped_column(BigInteger)
     phash: Mapped[int | None] = mapped_column(BigInteger)
     dhash: Mapped[int | None] = mapped_column(BigInteger)
     ahash: Mapped[int | None] = mapped_column(BigInteger)
