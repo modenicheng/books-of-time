@@ -112,16 +112,18 @@
 
 ## P1: Coverage And Data Quality
 
-- [ ] 建立 `collection_runs` 表。
-- [ ] 建立 `collection_coverage_stats` 表。
-- [ ] 记录 hot pages requested/succeeded。
-- [ ] 记录 latest pages requested/succeeded。
-- [ ] 记录 latest frontier reached。
+- [x] 建立 `collection_runs` 表。
+- [x] 建立 `collection_coverage_stats` 表。
+- [x] 记录 hot pages requested/succeeded。
+- [x] 记录 latest pages requested/succeeded。
+- [x] 记录 latest frontier reached。
 - [ ] 记录 reply roots requested/succeeded。
-- [ ] 记录 request success rate。
-- [ ] 记录 parse error count。
-- [ ] CLI 支持 `bot coverage BVxxxx`。
-- [ ] 所有 collector 在成功或失败后都写覆盖率摘要。
+- [x] 记录 request success rate。
+- [x] 记录 parse error count。
+- [x] CLI 支持 `bot coverage BVxxxx`。
+- [x] 所有 collector 在成功或失败后都写覆盖率摘要。
+
+说明：Phase 1C 以 requested/succeeded/error 计数保存请求成功情况，查询层可由此计算 success rate。
 
 ## P2: Comment State Events
 
