@@ -18,6 +18,7 @@ from books_of_time.http.errors import ParseFailure
 from books_of_time.media.normalizer import MediaService
 from books_of_time.parsers.comments import (
     COMMENT_PARSER_VERSION,
+    ParsedCommentPage,
     parse_hot_comment_page,
 )
 from books_of_time.storage.filesystem import RawPayloadFileStore
@@ -47,9 +48,12 @@ class HotCommentCollector:
         session: AsyncSession,
     ) -> CoverageDraft:
         bvid = str(task.payload.get("bvid") or task.target_id)
-        page = int(task.payload.get("page") or 1)
+        start_page = int(task.payload.get("page") or 1)
+        page_limit = max(int(task.payload.get("page_limit") or 1), 1)
         aid = task.payload.get("aid")
         raw_payloads_saved = 0
+        pages_succeeded = 0
+        items_observed = 0
 
         if aid is None:
             video_result = await self.client.get_video_stats(bvid)
@@ -71,17 +75,46 @@ class HotCommentCollector:
                 "video_raw_payload_id": video_raw.id,
             }
 
-        comments_result = await self.client.get_hot_comments(aid=int(aid), page=page)
-        comments_raw = await self._archive_raw(comments_result, session)
-        raw_payloads_saved += 1
-        try:
-            parsed = parse_hot_comment_page(
-                json.loads(comments_result.body),
+        for page in range(start_page, start_page + page_limit):
+            observations_count = await self._collect_page(
+                session=session,
                 bvid=bvid,
-                oid=int(aid),
-                captured_at=comments_result.captured_at,
+                aid=int(aid),
+                page=page,
+            )
+            raw_payloads_saved += 1
+            pages_succeeded += 1
+            items_observed += observations_count
+
+        return CoverageDraft(
+            task_kind=TaskKind.FETCH_HOT_COMMENTS,
+            target_type=task.target_type,
+            target_id=task.target_id,
+            pages_requested=page_limit,
+            pages_succeeded=pages_succeeded,
+            items_observed=items_observed,
+            raw_payloads_saved=raw_payloads_saved,
+            truncated=False,
+            reason="complete",
+        )
+
+    async def _collect_page(
+        self,
+        *,
+        session: AsyncSession,
+        bvid: str,
+        aid: int,
+        page: int,
+    ) -> int:
+        comments_result = await self.client.get_hot_comments(aid=aid, page=page)
+        comments_raw = await self._archive_raw(comments_result, session)
+        try:
+            parsed = self._parse_page(
+                comments_result,
+                bvid=bvid,
+                aid=aid,
+                page=page,
                 raw_payload_id=comments_raw.id,
-                page_number=page,
             )
         except Exception as exc:
             raise ParseFailure(
@@ -103,16 +136,24 @@ class HotCommentCollector:
             observations=observations,
             raw_page_id=raw_page.id,
         )
-        return CoverageDraft(
-            task_kind=TaskKind.FETCH_HOT_COMMENTS,
-            target_type=task.target_type,
-            target_id=task.target_id,
-            pages_requested=1,
-            pages_succeeded=1,
-            items_observed=len(observations),
-            raw_payloads_saved=raw_payloads_saved,
-            truncated=False,
-            reason="complete",
+        return len(observations)
+
+    def _parse_page(
+        self,
+        result: FetchResult,
+        *,
+        bvid: str,
+        aid: int,
+        page: int,
+        raw_payload_id: int,
+    ) -> ParsedCommentPage:
+        return parse_hot_comment_page(
+            json.loads(result.body),
+            bvid=bvid,
+            oid=aid,
+            captured_at=result.captured_at,
+            raw_payload_id=raw_payload_id,
+            page_number=page,
         )
 
     async def _archive_raw(

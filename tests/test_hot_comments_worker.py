@@ -93,6 +93,47 @@ class FakeBilibiliClient:
         )
 
 
+class FakePagedHotCommentsClient:
+    def __init__(self) -> None:
+        self.pages: list[int] = []
+
+    async def get_video_stats(self, bvid: str) -> FetchResult:
+        raise AssertionError("aid is supplied in task payload")
+
+    async def get_hot_comments(self, *, aid: int, page: int = 1) -> FetchResult:
+        self.pages.append(page)
+        rpid = 1000 + page
+        body = json.dumps(
+            {
+                "code": 0,
+                "data": {
+                    "cursor": {"all_count": 2},
+                    "replies": [
+                        {
+                            "rpid": rpid,
+                            "oid": aid,
+                            "root": 0,
+                            "parent": 0,
+                            "like": page,
+                            "rcount": 0,
+                            "member": {"mid": str(page), "uname": f"User {page}"},
+                            "content": {"message": f"page {page} comment"},
+                        }
+                    ],
+                },
+            }
+        ).encode()
+        return FetchResult(
+            request_type=BilibiliRequestType.COMMENT_HOT,
+            method="GET",
+            url="https://api.bilibili.com/x/v2/reply",
+            params={"oid": aid, "pn": page, "sort": 2},
+            status_code=200,
+            body=body,
+            captured_at=datetime(2026, 7, 8, 10, page, tzinfo=UTC),
+        )
+
+
 @pytest.mark.asyncio
 async def test_worker_fetch_hot_comments_archives_raw_and_writes_observations(
     tmp_path,
@@ -183,5 +224,77 @@ async def test_worker_fetch_hot_comments_archives_raw_and_writes_observations(
         assert media_link.comment_observation_id == observation.id
         assert media_link.media_source_id == media_source.id
         assert media_link.position == 0
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_worker_fetch_hot_comments_collects_configured_page_limit(
+    tmp_path,
+) -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    now = datetime(2026, 7, 8, 10, 0, tzinfo=UTC)
+
+    async with session_factory() as session:
+        await CollectionTaskRepository(session).enqueue(
+            kind=TaskKind.FETCH_HOT_COMMENTS,
+            target_type="video",
+            target_id="BV1abc",
+            priority=80,
+            payload={
+                "bvid": "BV1abc",
+                "aid": 777,
+                "mode": "hot",
+                "page": 1,
+                "page_limit": 2,
+            },
+            not_before=now - timedelta(seconds=1),
+        )
+        await session.commit()
+
+    client = FakePagedHotCommentsClient()
+    worker = Worker(
+        session_factory=session_factory,
+        collectors={
+            TaskKind.FETCH_HOT_COMMENTS: HotCommentCollector(
+                client=client,
+                raw_store=RawPayloadFileStore(tmp_path),
+                run_id="test-run",
+            )
+        },
+        run_id="test-run",
+        lease_owner="worker-test",
+    )
+
+    executed = await worker.run_once(now=now)
+    assert executed is True
+
+    async with session_factory() as session:
+        coverage = await session.scalar(select(CollectionCoverageStat))
+        raw_pages = (
+            await session.scalars(
+                select(RawPageObservation).order_by(RawPageObservation.page_number)
+            )
+        ).all()
+        observations = (
+            await session.scalars(
+                select(CommentObservation).order_by(CommentObservation.rpid)
+            )
+        ).all()
+        raw_payloads = (await session.scalars(select(RawPayload))).all()
+
+        assert client.pages == [1, 2]
+        assert coverage is not None
+        assert coverage.pages_requested == 2
+        assert coverage.pages_succeeded == 2
+        assert coverage.items_observed == 2
+        assert coverage.raw_payloads_saved == 2
+        assert [page.page_number for page in raw_pages] == [1, 2]
+        assert [observation.rpid for observation in observations] == [1001, 1002]
+        assert len(raw_payloads) == 2
 
     await engine.dispose()

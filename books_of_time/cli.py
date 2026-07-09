@@ -46,6 +46,8 @@ def build_parser() -> argparse.ArgumentParser:
     comments.add_argument("bvid")
     comments.add_argument("--mode", choices=["hot"], default="hot")
     comments.add_argument("--priority", type=int, default=80)
+    comments.add_argument("--tier", choices=["s", "a", "b", "c"], default="c")
+    comments.add_argument("--page-limit", type=int, default=None)
     stats = video_sub.add_parser("stats")
     stats.add_argument("bvid")
     stats.add_argument("--limit", type=int, default=20)
@@ -123,7 +125,14 @@ async def _run(args: argparse.Namespace) -> None:
         return
 
     if args.command == "video" and args.video_command == "comments":
-        await _enqueue_video_comments(cfg, args.bvid, args.mode, args.priority)
+        await _enqueue_video_comments(
+            cfg,
+            args.bvid,
+            args.mode,
+            args.priority,
+            args.tier,
+            args.page_limit,
+        )
         return
 
     if args.command == "video" and args.video_command == "stats":
@@ -216,23 +225,39 @@ async def _enqueue_video_comments(
     bvid: str,
     mode: str,
     priority: int,
+    tier: str = "c",
+    page_limit: int | None = None,
 ) -> None:
     if mode != "hot":
         raise ValueError(f"Unsupported comment mode: {mode}")
 
     session_factory = build_session_factory(cfg)
+    effective_page_limit = page_limit or _hot_comment_page_limit(cfg, tier)
     async with session_factory() as session:
         await CollectionTaskRepository(session).enqueue(
             kind=TaskKind.FETCH_HOT_COMMENTS,
             target_type="video",
             target_id=bvid,
             priority=priority,
-            payload={"bvid": bvid, "mode": mode, "page": 1},
+            payload={
+                "bvid": bvid,
+                "mode": mode,
+                "page": 1,
+                "tier": tier,
+                "page_limit": effective_page_limit,
+            },
             not_before=datetime.now(UTC),
-            idempotency_key=f"{TaskKind.FETCH_HOT_COMMENTS.value}:video:{bvid}:hot",
+            idempotency_key=(
+                f"{TaskKind.FETCH_HOT_COMMENTS.value}:video:{bvid}:hot:{tier}"
+            ),
         )
         await session.commit()
     logger.info("Queued hot comments task for %s", bvid)
+
+
+def _hot_comment_page_limit(cfg: dict, tier: str) -> int:
+    tier_cfg = cfg.get("request_budget", {}).get(tier, {})
+    return max(int(tier_cfg.get("hot_pages", 1)), 1)
 
 
 async def _enqueue_latest_comments(

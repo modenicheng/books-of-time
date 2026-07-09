@@ -112,7 +112,7 @@
 - [x] 建立评论 content hash，并保留公开用户字段用于核验。
 - [x] 实现 `HotCommentCollector`。
 - [x] 支持热门评论第一页采集。
-- [ ] 支持按视频 tier 配置热门评论页数。
+- [x] 支持按视频 tier 配置热门评论页数。
 - [x] 写入 raw page observation。
 - [x] 写入 comment entities。
 - [x] 写入 comment observations。

@@ -17,6 +17,7 @@ database:
 storage:
   backend: filesystem
   raw_dir: ./data/raw
+  media_dir: ./data/media
 
 http:
   timeout_seconds: 10
@@ -43,6 +44,9 @@ rate_limit:
     burst: 1
   bilibili:comment_reply:
     rps: 0.1
+    burst: 1
+  bilibili:media_image:
+    rps: 0.2
     burst: 1
 
 scheduler:

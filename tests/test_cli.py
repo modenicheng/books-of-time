@@ -112,6 +112,28 @@ def test_video_stats_parser_accepts_bvid_and_limit() -> None:
     assert args.limit == 5
 
 
+def test_video_comments_parser_accepts_tier_and_page_limit() -> None:
+    args = build_parser().parse_args(
+        [
+            "video",
+            "comments",
+            "BV1abc",
+            "--mode",
+            "hot",
+            "--tier",
+            "a",
+            "--page-limit",
+            "7",
+        ]
+    )
+
+    assert args.command == "video"
+    assert args.video_command == "comments"
+    assert args.bvid == "BV1abc"
+    assert args.tier == "a"
+    assert args.page_limit == 7
+
+
 def test_discovery_loop_parser_accepts_options() -> None:
     args = build_parser().parse_args(
         [
@@ -408,6 +430,41 @@ async def test_monitor_video_reuses_active_task(tmp_path) -> None:
 
     assert [task.target_id for task in tasks] == ["BVDEDUP"]
     assert tasks[0].priority == 100
+
+
+@pytest.mark.asyncio
+async def test_enqueue_video_comments_uses_tier_hot_page_budget(tmp_path) -> None:
+    db_path = tmp_path / "comments.sqlite3"
+    cfg = {
+        "database": {"url": f"sqlite+aiosqlite:///{db_path}"},
+        "request_budget": {
+            "a": {"hot_pages": 10},
+            "c": {"hot_pages": 1},
+        },
+    }
+    engine = create_async_engine(cfg["database"]["url"])
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    await engine.dispose()
+
+    await cli._enqueue_video_comments(
+        cfg,
+        "BVHOT",
+        mode="hot",
+        priority=80,
+        tier="a",
+        page_limit=None,
+    )
+
+    engine = create_async_engine(cfg["database"]["url"])
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        tasks = await CollectionTaskRepository(session).list_tasks(limit=10)
+    await engine.dispose()
+
+    assert [task.target_id for task in tasks] == ["BVHOT"]
+    assert tasks[0].payload["tier"] == "a"
+    assert tasks[0].payload["page_limit"] == 10
 
 
 @pytest.mark.asyncio
