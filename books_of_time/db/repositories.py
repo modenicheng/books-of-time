@@ -21,6 +21,7 @@ from books_of_time.db.models import (
     RawPageObservation,
     RawPayload,
     RequestBackoffState,
+    VideoAvailabilitySnapshot,
     VideoInfoSnapshot,
     VideoMetricSnapshot,
 )
@@ -32,7 +33,11 @@ from books_of_time.parsers.comments import (
     ParsedComment,
     ParsedCommentPage,
 )
-from books_of_time.parsers.video import ParsedVideoInfoSnapshot, ParsedVideoStats
+from books_of_time.parsers.video import (
+    ParsedVideoAvailabilitySnapshot,
+    ParsedVideoInfoSnapshot,
+    ParsedVideoStats,
+)
 from books_of_time.storage.filesystem import StoredRawPayload
 
 
@@ -455,6 +460,28 @@ class VideoInfoSnapshotRepository:
             owner_mid=parsed.owner_mid,
             owner_name=parsed.owner_name,
             tags=parsed.tags,
+            raw_payload_id=parsed.raw_payload_id,
+        )
+        self.session.add(snapshot)
+        await self.session.flush()
+        return snapshot
+
+
+class VideoAvailabilitySnapshotRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def insert_from_parsed(
+        self,
+        parsed: ParsedVideoAvailabilitySnapshot,
+    ) -> VideoAvailabilitySnapshot:
+        snapshot = VideoAvailabilitySnapshot(
+            bvid=parsed.bvid,
+            captured_at=parsed.captured_at,
+            status=parsed.status,
+            bili_code=parsed.bili_code,
+            bili_message=parsed.bili_message,
+            http_status_code=parsed.http_status_code,
             raw_payload_id=parsed.raw_payload_id,
         )
         self.session.add(snapshot)

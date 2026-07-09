@@ -196,6 +196,30 @@ Index(
 )
 
 
+class VideoAvailabilitySnapshot(Base):
+    __tablename__ = "video_availability_snapshots"
+
+    bvid: Mapped[str] = mapped_column(Text, primary_key=True)
+    captured_at: Mapped[datetime] = mapped_column(UTCDateTime(), primary_key=True)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    bili_code: Mapped[int | None] = mapped_column(BigInteger)
+    bili_message: Mapped[str | None] = mapped_column(Text)
+    http_status_code: Mapped[int | None] = mapped_column(Integer)
+    raw_payload_id: Mapped[int | None] = mapped_column(BigInteger)
+
+
+Index(
+    "idx_video_availability_snapshots_bvid_time",
+    VideoAvailabilitySnapshot.bvid,
+    VideoAvailabilitySnapshot.captured_at.desc(),
+)
+Index(
+    "idx_video_availability_snapshots_status_time",
+    VideoAvailabilitySnapshot.status,
+    VideoAvailabilitySnapshot.captured_at.desc(),
+)
+
+
 class CollectionTask(TimestampMixin, Base):
     __tablename__ = "collection_tasks"
 
