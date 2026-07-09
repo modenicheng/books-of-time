@@ -4,7 +4,9 @@ import pytest
 
 from books_of_time.domain.enums import BilibiliRequestType
 from books_of_time.http.client import FetchResult
+from books_of_time.http.errors import RequestErrorKind, RequestFailure
 from books_of_time.platforms.bilibili.client import BilibiliPlatformClient
+from books_of_time.platforms.bilibili.request_client import capture_bili_api_requests
 
 
 class FakeRawHttpClient:
@@ -37,6 +39,28 @@ class FakeRateLimiter:
 
     async def acquire(self, key: str) -> None:
         self.keys.append(key)
+
+
+class FakeFailingRawHttpClient:
+    async def request(self, **kwargs) -> FetchResult:
+        result = FetchResult(
+            request_type=kwargs["request_type"],
+            method=kwargs["method"],
+            url=kwargs["url"],
+            params=kwargs["params"],
+            status_code=429,
+            body=b'{"code":-429}',
+            captured_at=datetime(2026, 7, 8, 10, 0, tzinfo=UTC),
+            response_headers={"Retry-After": "45"},
+        )
+        raise RequestFailure(
+            kind=RequestErrorKind.RATE_LIMITED,
+            request_type=kwargs["request_type"],
+            message="rate limited",
+            status_code=429,
+            retry_after_seconds=45,
+            fetch_result=result,
+        )
 
 
 class FakeVideo:
@@ -246,3 +270,28 @@ async def test_latest_comments_uses_lazy_bilibili_api_client_backend(
         "host:bilibili",
         "bilibili:comment_latest",
     ]
+
+
+@pytest.mark.asyncio
+async def test_bilibili_api_client_captures_failed_fetch_result() -> None:
+    from bilibili_api.utils.network import get_client
+
+    with capture_bili_api_requests(
+        http_client=FakeFailingRawHttpClient(),
+        rate_limiter=None,
+    ) as request_context:
+        with pytest.raises(RequestFailure):
+            await get_client().request(
+                method="GET",
+                url="https://api.bilibili.com/x/v2/reply",
+                params={"oid": 777},
+                headers={},
+                cookies={},
+            )
+
+    assert len(request_context.captured_results) == 1
+    assert request_context.captured_results[0].status_code == 429
+    assert (
+        request_context.captured_results[0].request_type
+        == BilibiliRequestType.COMMENT_REPLY
+    )

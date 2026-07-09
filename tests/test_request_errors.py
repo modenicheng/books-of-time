@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import pytest
+
 from books_of_time.domain.enums import BilibiliRequestType
-from books_of_time.http.client import FetchResult
+from books_of_time.http.client import FetchResult, RawHttpClient
 from books_of_time.http.errors import (
     ParseFailure,
     RequestErrorKind,
@@ -70,3 +72,79 @@ def test_parse_failure_uses_parse_error_kind() -> None:
     assert isinstance(failure, RequestFailure)
     assert failure.kind == RequestErrorKind.PARSE_ERROR
     assert failure.status_code == 200
+
+
+class FakeTimeoutSession:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return None
+
+    async def request(self, *args, **kwargs):
+        raise TimeoutError("timed out")
+
+
+class FakeResponseCookies:
+    def __init__(self) -> None:
+        self.jar = []
+
+
+class FakeResponse:
+    def __init__(self) -> None:
+        self.status_code = 429
+        self.content = b'{"code": -429}'
+        self.url = "https://api.bilibili.com/x/test"
+        self.headers = {"Retry-After": "45"}
+        self.cookies = FakeResponseCookies()
+
+
+class FakeRateLimitedSession:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return None
+
+    async def request(self, *args, **kwargs):
+        return FakeResponse()
+
+
+@pytest.mark.asyncio
+async def test_raw_http_client_maps_timeout(monkeypatch) -> None:
+    monkeypatch.setattr("books_of_time.http.client.AsyncSession", FakeTimeoutSession)
+    client = RawHttpClient(timeout_seconds=1)
+
+    with pytest.raises(RequestFailure) as exc_info:
+        await client.request(
+            method="GET",
+            url="https://api.bilibili.com/x/test",
+            request_type=BilibiliRequestType.DEFAULT,
+        )
+
+    assert exc_info.value.kind == RequestErrorKind.TIMEOUT
+    assert exc_info.value.request_type == BilibiliRequestType.DEFAULT
+    assert exc_info.value.fetch_result is None
+
+
+@pytest.mark.asyncio
+async def test_raw_http_client_raises_typed_failure_with_fetch_result(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "books_of_time.http.client.AsyncSession",
+        FakeRateLimitedSession,
+    )
+    client = RawHttpClient(timeout_seconds=1)
+
+    with pytest.raises(RequestFailure) as exc_info:
+        await client.request(
+            method="GET",
+            url="https://api.bilibili.com/x/test",
+            request_type=BilibiliRequestType.DEFAULT,
+        )
+
+    assert exc_info.value.kind == RequestErrorKind.RATE_LIMITED
+    assert exc_info.value.retry_after_seconds == 45
+    assert exc_info.value.fetch_result is not None
+    assert exc_info.value.fetch_result.status_code == 429

@@ -7,6 +7,11 @@ from typing import Any
 from curl_cffi.requests import AsyncSession
 
 from books_of_time.domain.enums import BilibiliRequestType
+from books_of_time.http.errors import (
+    RequestErrorKind,
+    RequestFailure,
+    classify_failed_fetch,
+)
 
 
 @dataclass(frozen=True)
@@ -48,23 +53,30 @@ class RawHttpClient:
         if headers:
             request_headers.update(headers)
 
-        async with AsyncSession() as session:
-            response = await session.request(
-                method,
-                url,
-                params=params,
-                data=data,
-                headers=request_headers,
-                cookies=cookies,
-                allow_redirects=allow_redirects,
-                timeout=self.timeout_seconds,
-            )
+        try:
+            async with AsyncSession() as session:
+                response = await session.request(
+                    method,
+                    url,
+                    params=params,
+                    data=data,
+                    headers=request_headers,
+                    cookies=cookies,
+                    allow_redirects=allow_redirects,
+                    timeout=self.timeout_seconds,
+                )
+        except TimeoutError as exc:
+            raise RequestFailure(
+                kind=RequestErrorKind.TIMEOUT,
+                request_type=request_type,
+                message=str(exc),
+            ) from exc
 
         response_headers = {key: value for key, value in response.headers.items()}
         response_cookies = {
             cookie.name: cookie.value for cookie in getattr(response.cookies, "jar", [])
         }
-        return FetchResult(
+        result = FetchResult(
             request_type=request_type,
             method=method.upper(),
             url=str(response.url),
@@ -75,3 +87,7 @@ class RawHttpClient:
             response_headers=response_headers,
             response_cookies=response_cookies,
         )
+        failure = classify_failed_fetch(result)
+        if failure is not None:
+            raise failure
+        return result

@@ -17,6 +17,7 @@ from bilibili_api.utils.network import (
 
 from books_of_time.domain.enums import BilibiliRequestType
 from books_of_time.http.client import FetchResult, RawHttpClient
+from books_of_time.http.errors import RequestFailure
 from books_of_time.http.rate_limiter import TokenBucketRateLimiter
 from books_of_time.platforms.bilibili.requests import classify_bilibili_request
 
@@ -125,16 +126,21 @@ class BooksOfTimeBiliAPIClient(BiliAPIClient):
 
         request_type = classify_bilibili_request(url, params)
         await _acquire(context.rate_limiter, request_type)
-        result = await context.http_client.request(
-            method=method,
-            url=url,
-            request_type=request_type,
-            params=params,
-            data=None if data == {} else data,
-            headers=headers,
-            cookies=cookies,
-            allow_redirects=allow_redirects,
-        )
+        try:
+            result = await context.http_client.request(
+                method=method,
+                url=url,
+                request_type=request_type,
+                params=params,
+                data=None if data == {} else data,
+                headers=headers,
+                cookies=cookies,
+                allow_redirects=allow_redirects,
+            )
+        except RequestFailure as exc:
+            if exc.fetch_result is not None:
+                context.captured_results.append(exc.fetch_result)
+            raise
         context.captured_results.append(result)
         return BiliAPIResponse(
             code=result.status_code,
