@@ -10,6 +10,7 @@ from books_of_time.db.models import (
     CommentObservation,
     CommentObservationMedia,
     CommentStateEvent,
+    CommentVisibilityEvent,
     MediaAsset,
     MediaSource,
     RawPageObservation,
@@ -20,7 +21,46 @@ from books_of_time.db.repositories import (
     RawPageObservationRepository,
 )
 from books_of_time.domain.enums import BilibiliRequestType
-from books_of_time.parsers.comments import ParsedComment, ParsedCommentPage
+from books_of_time.parsers.comments import (
+    ParsedComment,
+    ParsedCommentPage,
+    hash_comment_content,
+)
+
+
+def _parsed_comment_page(
+    *,
+    captured_at: datetime,
+    content: str = "first comment",
+    like_count: int = 12,
+    reply_count: int = 3,
+    position: int = 1,
+) -> ParsedCommentPage:
+    return ParsedCommentPage(
+        bvid="BV1abc",
+        oid=777,
+        captured_at=captured_at,
+        raw_payload_id=int(captured_at.minute),
+        sort_mode="hot",
+        page_number=1,
+        comments=[
+            ParsedComment(
+                rpid=1001,
+                oid=777,
+                bvid="BV1abc",
+                root_rpid=None,
+                parent_rpid=None,
+                author_mid=42,
+                author_name="Alice",
+                content=content,
+                content_hash=hash_comment_content(content),
+                like_count=like_count,
+                reply_count=reply_count,
+                position=position,
+            )
+        ],
+        extra={"all_count": 1},
+    )
 
 
 @pytest.mark.asyncio
@@ -116,6 +156,71 @@ async def test_comment_repository_upserts_entity_and_appends_observations() -> N
 
 
 @pytest.mark.asyncio
+async def test_comment_repository_records_state_changes_and_skips_noop() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    first = _parsed_comment_page(captured_at=datetime(2026, 7, 8, 10, 0, tzinfo=UTC))
+    same = _parsed_comment_page(captured_at=datetime(2026, 7, 8, 10, 1, tzinfo=UTC))
+    changed = _parsed_comment_page(
+        captured_at=datetime(2026, 7, 8, 10, 2, tzinfo=UTC),
+        content="edited comment",
+        like_count=120,
+        reply_count=5,
+        position=3,
+    )
+
+    async with session_factory() as session:
+        for page in (first, same, changed):
+            raw_page = await RawPageObservationRepository(
+                session
+            ).insert_from_parsed_page(
+                page,
+                request_type=BilibiliRequestType.COMMENT_HOT,
+            )
+            await CommentRepository(session).upsert_page(
+                page,
+                raw_page_observation_id=raw_page.id,
+            )
+        await session.commit()
+
+    async with session_factory() as session:
+        observations = (
+            await session.scalars(
+                select(CommentObservation).order_by(CommentObservation.id.asc())
+            )
+        ).all()
+        events = (
+            await session.scalars(
+                select(CommentStateEvent).order_by(CommentStateEvent.id.asc())
+            )
+        ).all()
+
+        assert [event.event_type for event in events] == [
+            "first_seen",
+            "content_hash_changed",
+            "like_bucket_changed",
+            "reply_count_changed",
+            "hot_position_changed",
+        ]
+        assert not any(
+            event.current_comment_observation_id == observations[1].id
+            for event in events
+        )
+        for event in events[1:]:
+            assert event.previous_comment_observation_id == observations[1].id
+            assert event.current_comment_observation_id == observations[2].id
+
+        like_event = events[2]
+        assert like_event.old_value == {"bucket": "10-99", "count": 12}
+        assert like_event.new_value == {"bucket": "100-999", "count": 120}
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_media_tables_represent_sources_assets_and_comment_links() -> None:
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as conn:
@@ -182,6 +287,41 @@ async def test_media_tables_represent_sources_assets_and_comment_links() -> None
         assert link.bvid == "BV1abc"
         assert link.rpid == 1001
         assert link.position == 0
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_comment_visibility_event_table_records_missing_reason() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    now = datetime(2026, 7, 8, 10, 0, tzinfo=UTC)
+
+    async with session_factory() as session:
+        session.add(
+            CommentVisibilityEvent(
+                rpid=1001,
+                bvid="BV1abc",
+                previous_comment_observation_id=1,
+                current_comment_observation_id=None,
+                event_type="disappeared",
+                old_visibility="visible",
+                new_visibility="missing",
+                missing_reason="missing_after_seen",
+                created_at=now,
+            )
+        )
+        await session.commit()
+
+    async with session_factory() as session:
+        event = await session.scalar(select(CommentVisibilityEvent))
+
+        assert event is not None
+        assert event.event_type == "disappeared"
+        assert event.missing_reason == "missing_after_seen"
 
     await engine.dispose()
 

@@ -615,6 +615,10 @@ class CommentRepository:
                 captured_at=parsed.captured_at,
                 raw_payload_id=parsed.raw_payload_id,
             )
+            previous_observation = None
+            if not is_new_entity:
+                previous_observation = await self._latest_observation(comment.rpid)
+
             observation = CommentObservation(
                 rpid=comment.rpid,
                 bvid=comment.bvid,
@@ -637,18 +641,22 @@ class CommentRepository:
             )
             self.session.add(observation)
             await self.session.flush()
-            if is_new_entity:
-                self.session.add(
-                    CommentStateEvent(
-                        rpid=comment.rpid,
-                        bvid=comment.bvid,
-                        previous_comment_observation_id=None,
-                        current_comment_observation_id=observation.id,
-                        event_type="first_seen",
-                        old_value={},
-                        new_value={"rpid": comment.rpid, "bvid": comment.bvid},
-                        created_at=parsed.captured_at,
-                    )
+            if is_new_entity or previous_observation is None:
+                self._add_state_event(
+                    rpid=comment.rpid,
+                    bvid=comment.bvid,
+                    previous_observation_id=None,
+                    current_observation_id=observation.id,
+                    event_type="first_seen",
+                    old_value={},
+                    new_value={"rpid": comment.rpid, "bvid": comment.bvid},
+                    created_at=parsed.captured_at,
+                )
+            else:
+                self._add_changed_state_events(
+                    previous=previous_observation,
+                    current=observation,
+                    created_at=parsed.captured_at,
                 )
             observations.append(observation)
         await self.session.flush()
@@ -684,6 +692,114 @@ class CommentRepository:
         self.session.add(entity)
         await self.session.flush()
         return entity, True
+
+    async def _latest_observation(self, rpid: int) -> CommentObservation | None:
+        return await self.session.scalar(
+            select(CommentObservation)
+            .where(CommentObservation.rpid == rpid)
+            .order_by(
+                CommentObservation.captured_at.desc(), CommentObservation.id.desc()
+            )
+            .limit(1)
+        )
+
+    def _add_changed_state_events(
+        self,
+        *,
+        previous: CommentObservation,
+        current: CommentObservation,
+        created_at: datetime,
+    ) -> None:
+        if previous.content_hash != current.content_hash:
+            self._add_state_event(
+                rpid=current.rpid,
+                bvid=current.bvid,
+                previous_observation_id=previous.id,
+                current_observation_id=current.id,
+                event_type="content_hash_changed",
+                old_value={"content_hash": previous.content_hash.hex()},
+                new_value={"content_hash": current.content_hash.hex()},
+                created_at=created_at,
+            )
+
+        previous_like_bucket = _like_bucket(previous.like_count)
+        current_like_bucket = _like_bucket(current.like_count)
+        if previous_like_bucket != current_like_bucket:
+            self._add_state_event(
+                rpid=current.rpid,
+                bvid=current.bvid,
+                previous_observation_id=previous.id,
+                current_observation_id=current.id,
+                event_type="like_bucket_changed",
+                old_value={
+                    "bucket": previous_like_bucket,
+                    "count": previous.like_count,
+                },
+                new_value={
+                    "bucket": current_like_bucket,
+                    "count": current.like_count,
+                },
+                created_at=created_at,
+            )
+
+        if previous.reply_count != current.reply_count:
+            self._add_state_event(
+                rpid=current.rpid,
+                bvid=current.bvid,
+                previous_observation_id=previous.id,
+                current_observation_id=current.id,
+                event_type="reply_count_changed",
+                old_value={"reply_count": previous.reply_count},
+                new_value={"reply_count": current.reply_count},
+                created_at=created_at,
+            )
+
+        if (
+            previous.sort_mode == "hot"
+            and current.sort_mode == "hot"
+            and previous.position != current.position
+        ):
+            self._add_state_event(
+                rpid=current.rpid,
+                bvid=current.bvid,
+                previous_observation_id=previous.id,
+                current_observation_id=current.id,
+                event_type="hot_position_changed",
+                old_value={
+                    "page_number": previous.page_number,
+                    "position": previous.position,
+                },
+                new_value={
+                    "page_number": current.page_number,
+                    "position": current.position,
+                },
+                created_at=created_at,
+            )
+
+    def _add_state_event(
+        self,
+        *,
+        rpid: int,
+        bvid: str,
+        previous_observation_id: int | None,
+        current_observation_id: int,
+        event_type: str,
+        old_value: dict[str, Any],
+        new_value: dict[str, Any],
+        created_at: datetime,
+    ) -> None:
+        self.session.add(
+            CommentStateEvent(
+                rpid=rpid,
+                bvid=bvid,
+                previous_comment_observation_id=previous_observation_id,
+                current_comment_observation_id=current_observation_id,
+                event_type=event_type,
+                old_value=old_value,
+                new_value=new_value,
+                created_at=created_at,
+            )
+        )
 
 
 class FrontierStateRepository:
@@ -737,6 +853,22 @@ def _hash_params(params: dict[str, Any] | None) -> bytes | None:
         return None
     canonical = json.dumps(params, ensure_ascii=False, sort_keys=True).encode()
     return hashlib.sha256(canonical).digest()
+
+
+def _like_bucket(count: int | None) -> str:
+    if count is None:
+        return "unknown"
+    if count < 10:
+        return "0-9"
+    if count < 100:
+        return "10-99"
+    if count < 1000:
+        return "100-999"
+    if count < 10000:
+        return "1k-9999"
+    if count < 100000:
+        return "10k-99999"
+    return "100k+"
 
 
 def _backoff_seconds(

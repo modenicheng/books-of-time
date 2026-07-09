@@ -199,6 +199,40 @@ Index(
 )
 
 
+class CommentVisibilityEvent(Base):
+    __tablename__ = "comment_visibility_events"
+
+    id: Mapped[int] = mapped_column(
+        bigint_pk_type, primary_key=True, autoincrement=True
+    )
+    rpid: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    bvid: Mapped[str] = mapped_column(Text, nullable=False)
+    previous_comment_observation_id: Mapped[int | None] = mapped_column(BigInteger)
+    current_comment_observation_id: Mapped[int | None] = mapped_column(BigInteger)
+    event_type: Mapped[str] = mapped_column(Text, nullable=False)
+    old_visibility: Mapped[str | None] = mapped_column(Text)
+    new_visibility: Mapped[str | None] = mapped_column(Text)
+    missing_reason: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+        server_default=func.now(),
+    )
+
+
+Index("idx_comment_visibility_events_rpid", CommentVisibilityEvent.rpid)
+Index(
+    "idx_comment_visibility_events_current",
+    CommentVisibilityEvent.current_comment_observation_id,
+)
+Index(
+    "idx_comment_visibility_events_type",
+    CommentVisibilityEvent.event_type,
+    CommentVisibilityEvent.created_at.desc(),
+)
+
+
 class MediaAsset(TimestampMixin, Base):
     __tablename__ = "media_assets"
 
