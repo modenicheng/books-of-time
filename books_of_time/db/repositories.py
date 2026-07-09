@@ -93,6 +93,80 @@ class CollectionTaskRepository:
         await self.session.flush()
         return task
 
+    async def list_tasks(
+        self,
+        *,
+        status: TaskStatus | None = None,
+        limit: int = 20,
+    ) -> list[CollectionTask]:
+        stmt = select(CollectionTask).order_by(
+            CollectionTask.priority.desc(),
+            CollectionTask.created_at.asc(),
+            CollectionTask.id.asc(),
+        )
+        if status is not None:
+            stmt = stmt.where(CollectionTask.status == status)
+        rows = await self.session.scalars(stmt.limit(limit))
+        return list(rows)
+
+    async def retry_failed(
+        self,
+        *,
+        now: datetime,
+        target_id: str | None = None,
+        kind: TaskKind | None = None,
+        limit: int = 100,
+    ) -> int:
+        stmt = (
+            select(CollectionTask)
+            .where(CollectionTask.status == TaskStatus.FAILED)
+            .order_by(CollectionTask.updated_at.asc(), CollectionTask.id.asc())
+            .limit(limit)
+            .with_for_update(skip_locked=True)
+        )
+        if target_id is not None:
+            stmt = stmt.where(CollectionTask.target_id == target_id)
+        if kind is not None:
+            stmt = stmt.where(CollectionTask.kind == kind)
+
+        tasks = list(await self.session.scalars(stmt))
+        for task in tasks:
+            task.status = TaskStatus.PENDING
+            task.not_before = now
+            task.lease_owner = None
+            task.lease_until = None
+            task.retry_count = 0
+
+        await self.session.flush()
+        return len(tasks)
+
+    async def recover_expired_leases(
+        self,
+        *,
+        now: datetime,
+        limit: int = 100,
+    ) -> int:
+        rows = await self.session.scalars(
+            select(CollectionTask)
+            .where(
+                CollectionTask.status == TaskStatus.RUNNING,
+                CollectionTask.lease_until.is_not(None),
+                CollectionTask.lease_until <= now,
+            )
+            .order_by(CollectionTask.lease_until.asc(), CollectionTask.id.asc())
+            .limit(limit)
+            .with_for_update(skip_locked=True)
+        )
+        tasks = list(rows)
+        for task in tasks:
+            task.status = TaskStatus.PENDING
+            task.not_before = now
+            task.lease_owner = None
+            task.lease_until = None
+
+        await self.session.flush()
+        return len(tasks)
+
 
 class CollectionRunRepository:
     def __init__(self, session: AsyncSession) -> None:
