@@ -11,6 +11,7 @@ from books_of_time.db.models import (
     CommentObservationMedia,
     CommentStateEvent,
     CommentVisibilityEvent,
+    ImportantCommentWatchlist,
     MediaAsset,
     MediaSource,
     RawPageObservation,
@@ -216,6 +217,51 @@ async def test_comment_repository_records_state_changes_and_skips_noop() -> None
         like_event = events[2]
         assert like_event.old_value == {"bucket": "10-99", "count": 12}
         assert like_event.new_value == {"bucket": "100-999", "count": 120}
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_comment_repository_adds_reply_growth_to_watchlist() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    first = _parsed_comment_page(
+        captured_at=datetime(2026, 7, 8, 10, 0, tzinfo=UTC),
+        reply_count=1,
+        position=5,
+    )
+    second = _parsed_comment_page(
+        captured_at=datetime(2026, 7, 8, 10, 1, tzinfo=UTC),
+        reply_count=8,
+        position=5,
+    )
+
+    async with session_factory() as session:
+        for page in (first, second):
+            raw_page = await RawPageObservationRepository(
+                session
+            ).insert_from_parsed_page(
+                page,
+                request_type=BilibiliRequestType.COMMENT_HOT,
+            )
+            await CommentRepository(session).upsert_page(
+                page,
+                raw_page_observation_id=raw_page.id,
+            )
+        await session.commit()
+
+    async with session_factory() as session:
+        watch = await session.scalar(select(ImportantCommentWatchlist))
+
+        assert watch is not None
+        assert watch.rpid == 1001
+        assert watch.reason == "reply_growth"
+        assert watch.reply_count == 8
+        assert watch.hot_position == 5
+        assert watch.extra["reply_delta"] == 7
 
     await engine.dispose()
 

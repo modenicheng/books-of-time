@@ -13,6 +13,7 @@ from books_of_time.db.models import (
     CommentEntity,
     CommentObservation,
     CommentObservationMedia,
+    ImportantCommentWatchlist,
     MediaSource,
     RawPageObservation,
     RawPayload,
@@ -184,6 +185,7 @@ async def test_worker_fetch_hot_comments_archives_raw_and_writes_observations(
         raw_page = await session.scalar(select(RawPageObservation))
         entity = await session.scalar(select(CommentEntity))
         observation = await session.scalar(select(CommentObservation))
+        watch = await session.scalar(select(ImportantCommentWatchlist))
         media_source = await session.scalar(select(MediaSource))
         media_link = await session.scalar(select(CommentObservationMedia))
 
@@ -218,6 +220,11 @@ async def test_worker_fetch_hot_comments_archives_raw_and_writes_observations(
         assert observation.raw_payload_id == raw_payloads[1].id
         assert observation.raw_page_observation_id == raw_page.id
         assert observation.content == "first comment"
+        assert watch is not None
+        assert watch.rpid == 1001
+        assert watch.reason == "hot_top"
+        assert watch.hot_position == 1
+        assert watch.priority >= 90
         assert media_source is not None
         assert media_source.fetch_status == "pending"
         assert media_link is not None

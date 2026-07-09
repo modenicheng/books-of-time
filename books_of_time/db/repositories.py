@@ -20,6 +20,7 @@ from books_of_time.db.models import (
     CommentStateEvent,
     CommentVisibilityEvent,
     FrontierState,
+    ImportantCommentWatchlist,
     RawPageObservation,
     RawPayload,
     RequestBackoffState,
@@ -663,6 +664,11 @@ class CommentRepository:
                 current=observation,
                 created_at=parsed.captured_at,
             )
+            await self._upsert_watchlist_candidates(
+                previous=previous_observation,
+                current=observation,
+                created_at=parsed.captured_at,
+            )
             observations.append(observation)
         await self.session.flush()
         return observations
@@ -775,6 +781,99 @@ class CommentRepository:
                 created_at=created_at,
             )
         )
+
+    async def _upsert_watchlist_candidates(
+        self,
+        *,
+        previous: CommentObservation | None,
+        current: CommentObservation,
+        created_at: datetime,
+    ) -> None:
+        if (
+            current.sort_mode == "hot"
+            and current.position is not None
+            and current.position <= 3
+        ):
+            await self._upsert_watchlist_item(
+                current=current,
+                reason="hot_top",
+                priority=100 - current.position,
+                score=float(100 - current.position),
+                extra={"hot_position": current.position},
+                created_at=created_at,
+            )
+
+        if (
+            previous is not None
+            and previous.reply_count is not None
+            and current.reply_count is not None
+        ):
+            reply_delta = current.reply_count - previous.reply_count
+            if reply_delta >= 5:
+                priority = 80 + min(reply_delta, 19)
+                await self._upsert_watchlist_item(
+                    current=current,
+                    reason="reply_growth",
+                    priority=priority,
+                    score=float(reply_delta),
+                    extra={"reply_delta": reply_delta},
+                    created_at=created_at,
+                )
+
+    async def _upsert_watchlist_item(
+        self,
+        *,
+        current: CommentObservation,
+        reason: str,
+        priority: int,
+        score: float,
+        extra: dict[str, Any],
+        created_at: datetime,
+    ) -> None:
+        item = await self.session.scalar(
+            select(ImportantCommentWatchlist)
+            .where(
+                ImportantCommentWatchlist.bvid == current.bvid,
+                ImportantCommentWatchlist.rpid == current.rpid,
+            )
+            .limit(1)
+        )
+        if item is None:
+            item = ImportantCommentWatchlist(
+                bvid=current.bvid,
+                rpid=current.rpid,
+                root_rpid=current.rpid,
+                reason=reason,
+                priority=priority,
+                score=score,
+                reply_count=current.reply_count,
+                like_count=current.like_count,
+                hot_position=current.position if current.sort_mode == "hot" else None,
+                last_comment_observation_id=current.id,
+                first_seen_at=created_at,
+                last_seen_at=created_at,
+                expires_at=None,
+                active=True,
+                extra=extra,
+                created_at=created_at,
+                updated_at=created_at,
+            )
+            self.session.add(item)
+            return
+
+        if priority >= item.priority:
+            item.reason = reason
+            item.priority = priority
+            item.score = score
+            item.extra = extra
+        item.reply_count = current.reply_count
+        item.like_count = current.like_count
+        if current.sort_mode == "hot":
+            item.hot_position = current.position
+        item.last_comment_observation_id = current.id
+        item.last_seen_at = created_at
+        item.active = True
+        item.updated_at = created_at
 
     def _add_changed_state_events(
         self,

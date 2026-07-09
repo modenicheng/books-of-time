@@ -233,6 +233,44 @@ Index(
 )
 
 
+class ImportantCommentWatchlist(TimestampMixin, Base):
+    __tablename__ = "important_comment_watchlist"
+    __table_args__ = (UniqueConstraint("bvid", "rpid"),)
+
+    id: Mapped[int] = mapped_column(
+        bigint_pk_type, primary_key=True, autoincrement=True
+    )
+    bvid: Mapped[str] = mapped_column(Text, nullable=False)
+    rpid: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    root_rpid: Mapped[int | None] = mapped_column(BigInteger)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    reply_count: Mapped[int | None] = mapped_column(BigInteger)
+    like_count: Mapped[int | None] = mapped_column(BigInteger)
+    hot_position: Mapped[int | None] = mapped_column(Integer)
+    last_comment_observation_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    first_seen_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    extra: Mapped[dict[str, Any]] = mapped_column(
+        json_dict_type,
+        nullable=False,
+        default=dict,
+    )
+
+
+Index("idx_important_watchlist_active", ImportantCommentWatchlist.active)
+Index(
+    "idx_important_watchlist_priority",
+    ImportantCommentWatchlist.active,
+    ImportantCommentWatchlist.priority.desc(),
+    ImportantCommentWatchlist.updated_at.desc(),
+)
+Index("idx_important_watchlist_rpid", ImportantCommentWatchlist.rpid)
+
+
 class MediaAsset(TimestampMixin, Base):
     __tablename__ = "media_assets"
 

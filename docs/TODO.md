@@ -164,10 +164,10 @@
 
 ## P2: Important Replies
 
-- [ ] 建立 `important_comment_watchlist` 表。
-- [ ] 定义 root priority 计算：回复增长、点赞增长、热门位置、争议关键词、最近出现。
-- [ ] 热门评论前排进入 watchlist。
-- [ ] 回复数增长快的 root 进入 watchlist。
+- [x] 建立 `important_comment_watchlist` 表。
+- [~] 定义 root priority 计算：回复增长、点赞增长、热门位置、争议关键词、最近出现（已实现回复增长和热门位置）。
+- [x] 热门评论前排进入 watchlist。
+- [x] 回复数增长快的 root 进入 watchlist。
 - [ ] 实现 `FetchCommentRepliesTask`。
 - [ ] 实现 `ReplyCollector`。
 - [ ] 楼中楼写入 comment entities 和 observations。
