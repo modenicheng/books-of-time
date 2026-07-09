@@ -34,7 +34,7 @@
 - [x] 为请求失败建立统一错误类型：timeout、403、429、captcha、5xx、parse_error。
 - [x] 建立 `request_backoff_states` 表。
 - [x] 将失败退避接入 worker 和 request layer。
-- [ ] 增加 raw inspect CLI：`bot raw inspect <raw_payload_id>`。
+- [x] 增加 raw inspect CLI：`bot raw inspect <raw_payload_id>`。
 
 ## P0: Task Queue And Worker
 
