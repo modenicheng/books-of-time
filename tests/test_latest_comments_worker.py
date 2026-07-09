@@ -246,6 +246,44 @@ async def test_collect_pauses_before_latest_request_when_video_stats_uses_budget
 
 
 @pytest.mark.asyncio
+async def test_task_payload_max_scan_seconds_override_is_per_run(tmp_path) -> None:
+    client = FakeLatestClient(
+        {
+            "": latest_body(rpid=3003, next_offset="offset-2"),
+            "offset-2": latest_body(rpid=3002, next_offset="", is_end=True),
+        }
+    )
+    engine, session_factory, worker, now = await build_worker_with_task(
+        tmp_path,
+        client,
+        max_scan_seconds=55,
+    )
+    async with session_factory() as session:
+        task = await session.scalar(select(CollectionTask))
+        assert task is not None
+        task.payload = {**task.payload, "max_scan_seconds": 0}
+        await session.commit()
+
+    executed = await worker.run_once(now=now)
+    assert executed is True
+
+    collector = worker.collectors[TaskKind.FETCH_LATEST_COMMENTS]
+    assert isinstance(collector, LatestCommentCollector)
+    assert collector.max_scan_seconds == 55
+    assert client.latest_offsets == []
+
+    async with session_factory() as session:
+        state = await session.scalar(select(FrontierState))
+
+        assert state is not None
+        assert state.last_scan_status == "baseline_paused"
+        assert state.last_scan_truncated is True
+        assert state.cursor == ""
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_baseline_resumes_from_saved_cursor_and_marks_tail_complete(
     tmp_path,
 ) -> None:

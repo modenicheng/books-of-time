@@ -6,6 +6,7 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from books_of_time.collectors.hot_comments import HotCommentCollector
+from books_of_time.collectors.latest_comments import LatestCommentCollector
 from books_of_time.collectors.video_stats import VideoStatsCollector
 from books_of_time.domain.enums import TaskKind
 from books_of_time.http.client import RawHttpClient
@@ -60,6 +61,7 @@ def build_worker(
     client = build_bilibili_client(cfg)
     raw_dir = Path(cfg.get("storage", {}).get("raw_dir", "./data/raw"))
     scheduler_cfg = cfg.get("scheduler", {})
+    latest_comments_cfg = cfg.get("latest_comments", {})
     return Worker(
         session_factory=session_factory,
         collectors={
@@ -72,6 +74,22 @@ def build_worker(
                 client=client,
                 raw_store=RawPayloadFileStore(raw_dir),
                 run_id=run_id,
+            ),
+            TaskKind.FETCH_LATEST_COMMENTS: LatestCommentCollector(
+                client=client,
+                raw_store=RawPayloadFileStore(raw_dir),
+                run_id=run_id,
+                max_scan_seconds=float(latest_comments_cfg.get("max_scan_seconds", 55)),
+                page_retry_attempts=int(
+                    latest_comments_cfg.get("page_retry_attempts", 3)
+                ),
+                page_retry_backoff_seconds=[
+                    float(value)
+                    for value in latest_comments_cfg.get(
+                        "page_retry_backoff_seconds",
+                        [1, 3, 5],
+                    )
+                ],
             ),
         },
         lease_owner=lease_owner,

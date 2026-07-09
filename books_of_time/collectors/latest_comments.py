@@ -69,6 +69,12 @@ class LatestCommentCollector:
 
     async def collect(self, task: CollectionTask, session: AsyncSession) -> None:
         started_at = self.monotonic()
+        configured_max_scan_seconds = task.payload.get("max_scan_seconds")
+        max_scan_seconds = (
+            float(configured_max_scan_seconds)
+            if configured_max_scan_seconds is not None
+            else self.max_scan_seconds
+        )
         bvid = str(task.payload.get("bvid") or task.target_id)
         aid = await self._resolve_aid(task, session, bvid)
         now = datetime.now(UTC)
@@ -87,6 +93,7 @@ class LatestCommentCollector:
                 bvid=bvid,
                 aid=aid,
                 started_at=started_at,
+                max_scan_seconds=max_scan_seconds,
             )
             await frontier_repo.save(state)
             return
@@ -98,6 +105,7 @@ class LatestCommentCollector:
                 bvid=bvid,
                 aid=aid,
                 started_at=started_at,
+                max_scan_seconds=max_scan_seconds,
             )
             await frontier_repo.save(state)
             return
@@ -108,6 +116,7 @@ class LatestCommentCollector:
             bvid=bvid,
             aid=aid,
             started_at=started_at,
+            max_scan_seconds=max_scan_seconds,
         )
         await frontier_repo.save(state)
 
@@ -153,11 +162,13 @@ class LatestCommentCollector:
             parser_version=parser_version,
         )
 
-    def _time_expired(self, started_at: float) -> bool:
-        return self.monotonic() - started_at >= self.max_scan_seconds
+    def _time_expired(self, started_at: float, *, max_scan_seconds: float) -> bool:
+        return self.monotonic() - started_at >= max_scan_seconds
 
-    def _remaining_scan_seconds(self, started_at: float) -> float:
-        return self.max_scan_seconds - (self.monotonic() - started_at)
+    def _remaining_scan_seconds(
+        self, started_at: float, *, max_scan_seconds: float
+    ) -> float:
+        return max_scan_seconds - (self.monotonic() - started_at)
 
     def _retry_backoff_seconds(self, attempt_index: int) -> float:
         return self.page_retry_backoff_seconds[
@@ -176,11 +187,12 @@ class LatestCommentCollector:
         aid: int,
         offset: str,
         started_at: float,
+        max_scan_seconds: float,
         baseline: bool,
     ) -> FetchResult | None:
         attempts = int(state.extra.get("failed_attempts") or 0)
         while attempts < self.page_retry_attempts:
-            if self._time_expired(started_at):
+            if self._time_expired(started_at, max_scan_seconds=max_scan_seconds):
                 if attempts > 0 or state.extra.get("failed_cursor") == offset:
                     self._mark_paused_after_failed_attempts(
                         state,
@@ -206,7 +218,7 @@ class LatestCommentCollector:
                 if attempts >= self.page_retry_attempts:
                     self._mark_corrupted(state, baseline=baseline)
                     return None
-                if self._time_expired(started_at):
+                if self._time_expired(started_at, max_scan_seconds=max_scan_seconds):
                     self._mark_paused_after_failed_attempts(
                         state,
                         cursor=offset,
@@ -216,7 +228,9 @@ class LatestCommentCollector:
                     )
                     return None
                 backoff_seconds = self._retry_backoff_seconds(attempts - 1)
-                if backoff_seconds > self._remaining_scan_seconds(started_at):
+                if backoff_seconds > self._remaining_scan_seconds(
+                    started_at, max_scan_seconds=max_scan_seconds
+                ):
                     self._mark_paused_after_failed_attempts(
                         state,
                         cursor=offset,
@@ -238,6 +252,7 @@ class LatestCommentCollector:
         bvid: str,
         aid: int,
         started_at: float,
+        max_scan_seconds: float,
     ) -> None:
         extra = dict(state.extra or {})
         extra.setdefault("baseline_started_at", datetime.now(UTC).isoformat())
@@ -249,7 +264,9 @@ class LatestCommentCollector:
         state.extra = extra
 
         while True:
-            if pages_this_run > 0 and self._time_expired(started_at):
+            if pages_this_run > 0 and self._time_expired(
+                started_at, max_scan_seconds=max_scan_seconds
+            ):
                 self._mark_paused(state, cursor=offset, baseline=True)
                 await self._enqueue_followup(session, task)
                 return
@@ -264,6 +281,7 @@ class LatestCommentCollector:
                 aid=aid,
                 offset=offset,
                 started_at=started_at,
+                max_scan_seconds=max_scan_seconds,
                 baseline=True,
             )
             if result is None:
@@ -464,6 +482,7 @@ class LatestCommentCollector:
         bvid: str,
         aid: int,
         started_at: float,
+        max_scan_seconds: float,
     ) -> None:
         baseline_start_frontier_rpid = state.extra.get("baseline_start_frontier_rpid")
         if baseline_start_frontier_rpid is None:
@@ -487,7 +506,7 @@ class LatestCommentCollector:
             )
 
         while True:
-            if self._time_expired(started_at):
+            if self._time_expired(started_at, max_scan_seconds=max_scan_seconds):
                 self._mark_paused(state, cursor=offset, baseline=True)
                 await self._enqueue_followup(session, task)
                 return
@@ -503,6 +522,7 @@ class LatestCommentCollector:
                 aid=aid,
                 offset=offset,
                 started_at=started_at,
+                max_scan_seconds=max_scan_seconds,
                 baseline=True,
             )
             if result is None:
@@ -556,6 +576,7 @@ class LatestCommentCollector:
         bvid: str,
         aid: int,
         started_at: float,
+        max_scan_seconds: float,
     ) -> None:
         old_frontier_rpid = state.frontier_rpid
         if old_frontier_rpid is None:
@@ -579,7 +600,7 @@ class LatestCommentCollector:
             )
 
         while True:
-            if self._time_expired(started_at):
+            if self._time_expired(started_at, max_scan_seconds=max_scan_seconds):
                 self._mark_paused(state, cursor=offset, baseline=False)
                 await self._enqueue_followup(session, task)
                 return
@@ -595,6 +616,7 @@ class LatestCommentCollector:
                 aid=aid,
                 offset=offset,
                 started_at=started_at,
+                max_scan_seconds=max_scan_seconds,
                 baseline=False,
             )
             if result is None:

@@ -98,14 +98,17 @@
 ## P1: Latest Comments Frontier
 
 - [x] 建立 `frontier_states` 基础 ORM 表。
-- [ ] 实现 latest comments parser。
-- [ ] 实现 `LatestCommentCollector`。
-- [ ] 第一次采集按 page limit 扫描 N 页。
-- [ ] 第二次采集遇到旧 frontier 后停止。
-- [ ] 未遇到旧 frontier 时标记 `last_scan_truncated=true`。
-- [ ] 更新 `frontier_rpid`、`frontier_time`、`cursor`。
-- [ ] CLI 支持 `bot collect-latest-comments BVxxxx`。
-- [ ] 测试 frontier 正常到达和 truncated 两种情况。
+- [x] 实现 latest comments parser。
+- [x] 实现 `LatestCommentCollector`。
+- [x] 第一次采集按 cursor baseline tail scan，并支持 55 秒暂停恢复。
+- [x] baseline tail 完成后执行 head sweep，并在完成后设置官方 frontier。
+- [x] 增量采集遇到旧 frontier 后停止。
+- [x] 未遇到旧 frontier 到达服务端末尾时标记 `frontier_missing`。
+- [x] 更新 `frontier_rpid`、`frontier_time`、`cursor`。
+- [x] 实现 page-level retry/backoff。
+- [x] 实现 paused/corrupted 状态落库。
+- [x] CLI 支持 `bot collect-latest-comments BVxxxx`。
+- [x] 测试 frontier 正常到达、暂停恢复、frontier_missing 和 corrupted 情况。
 
 ## P1: Coverage And Data Quality
 

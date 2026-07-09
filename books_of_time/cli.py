@@ -36,6 +36,11 @@ def build_parser() -> argparse.ArgumentParser:
     comments.add_argument("--mode", choices=["hot"], default="hot")
     comments.add_argument("--priority", type=int, default=80)
 
+    latest_comments = subparsers.add_parser("collect-latest-comments")
+    latest_comments.add_argument("bvid")
+    latest_comments.add_argument("--priority", type=int, default=70)
+    latest_comments.add_argument("--max-scan-seconds", type=float, default=55)
+
     worker = subparsers.add_parser("worker")
     worker_sub = worker.add_subparsers(dest="worker_command", required=True)
     worker_sub.add_parser("run-once")
@@ -66,6 +71,15 @@ async def _run(args: argparse.Namespace) -> None:
 
     if args.command == "video" and args.video_command == "comments":
         await _enqueue_video_comments(cfg, args.bvid, args.mode, args.priority)
+        return
+
+    if args.command == "collect-latest-comments":
+        await _enqueue_latest_comments(
+            cfg,
+            args.bvid,
+            args.priority,
+            args.max_scan_seconds,
+        )
         return
 
     if args.command == "worker" and args.worker_command == "run-once":
@@ -121,6 +135,29 @@ async def _enqueue_video_comments(
         )
         await session.commit()
     logger.info("Queued hot comments task for %s", bvid)
+
+
+async def _enqueue_latest_comments(
+    cfg: dict,
+    bvid: str,
+    priority: int,
+    max_scan_seconds: float,
+) -> None:
+    session_factory = build_session_factory(cfg)
+    payload = {"bvid": bvid, "mode": "latest"}
+    if max_scan_seconds != 55:
+        payload["max_scan_seconds"] = max_scan_seconds
+    async with session_factory() as session:
+        await CollectionTaskRepository(session).enqueue(
+            kind=TaskKind.FETCH_LATEST_COMMENTS,
+            target_type="video",
+            target_id=bvid,
+            priority=priority,
+            payload=payload,
+            not_before=datetime.now(UTC),
+        )
+        await session.commit()
+    logger.info("Queued latest comments task for %s", bvid)
 
 
 async def _discover_user(cfg: dict, mid: str, page: int) -> None:
