@@ -1,6 +1,6 @@
 # Phase 1I Video Info Snapshots Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Execution mode:** Implement inline in this main session. Avoid opening subagents unless the user explicitly asks for them again.
 
 **Goal:** Save title, description, tag/category names, and UP owner snapshots from the existing video stats payload.
 
