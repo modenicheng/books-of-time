@@ -75,7 +75,7 @@
 - [x] 真实 B站视频指标采集烟测通过。
 - [ ] 保存视频标题、简介、tag、UP 主信息快照。
 - [ ] 记录视频删除、不可见、权限异常状态。
-- [ ] 增加 `bot video stats BVxxxx` 查询 CLI。
+- [x] 增加 `bot video stats BVxxxx` 查询 CLI。
 - [ ] 基于最近 1 小时播放增量计算动态下次快照时间。
 - [ ] 将快照策略接入 scheduler，而不只是纯函数测试。
 
