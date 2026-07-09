@@ -14,7 +14,7 @@ from books_of_time.db.repositories import (
     CollectionTaskRepository,
 )
 from books_of_time.db.schema import create_schema
-from books_of_time.domain.enums import TaskKind
+from books_of_time.domain.enums import TaskKind, TaskStatus
 from books_of_time.parsers.discovery import parse_user_video_list
 from books_of_time.task_orchestrator.discovery import DiscoveryScheduler
 
@@ -51,6 +51,28 @@ def build_parser() -> argparse.ArgumentParser:
     worker = subparsers.add_parser("worker")
     worker_sub = worker.add_subparsers(dest="worker_command", required=True)
     worker_sub.add_parser("run-once")
+    worker_loop = worker_sub.add_parser("loop")
+    worker_loop.add_argument("--idle-sleep-seconds", type=float, default=5)
+    worker_loop.add_argument("--max-iterations", type=int, default=None)
+    worker_loop.add_argument("--stop-when-idle", action="store_true")
+
+    task = subparsers.add_parser("task")
+    task_sub = task.add_subparsers(dest="task_command", required=True)
+    task_list = task_sub.add_parser("list")
+    task_list.add_argument(
+        "--status",
+        choices=[status.value for status in TaskStatus],
+        default=None,
+    )
+    task_list.add_argument("--limit", type=int, default=20)
+    task_retry_failed = task_sub.add_parser("retry-failed")
+    task_retry_failed.add_argument("--target-id", default=None)
+    task_retry_failed.add_argument(
+        "--kind",
+        choices=[kind.value for kind in TaskKind],
+        default=None,
+    )
+    task_retry_failed.add_argument("--limit", type=int, default=100)
 
     discover = subparsers.add_parser("discover-user")
     discover.add_argument("mid")
@@ -101,6 +123,28 @@ async def _run(args: argparse.Namespace) -> None:
         )
         executed = await worker.run_once()
         logger.info("Worker executed task: %s", executed)
+        return
+
+    if args.command == "worker" and args.worker_command == "loop":
+        worker = build_worker(
+            cfg,
+            run_id=f"cli-{datetime.now(UTC):%Y%m%dT%H%M%SZ}-{uuid4().hex[:8]}",
+            lease_owner="cli-worker",
+        )
+        executed = await worker.run_loop(
+            idle_sleep_seconds=args.idle_sleep_seconds,
+            max_iterations=args.max_iterations,
+            stop_when_idle=args.stop_when_idle,
+        )
+        logger.info("Worker loop executed tasks: %s", executed)
+        return
+
+    if args.command == "task" and args.task_command == "list":
+        await _list_tasks(cfg, args.status, args.limit)
+        return
+
+    if args.command == "task" and args.task_command == "retry-failed":
+        await _retry_failed_tasks(cfg, args.target_id, args.kind, args.limit)
         return
 
     if args.command == "discover-user":
@@ -200,6 +244,59 @@ async def _show_coverage(cfg: dict, bvid: str, limit: int) -> None:
             row.truncated,
             row.corrupted,
         )
+
+
+async def _list_tasks(cfg: dict, status: str | None, limit: int) -> None:
+    session_factory = build_session_factory(cfg)
+    status_filter = TaskStatus(status) if status is not None else None
+    capped_limit = min(max(limit, 1), 200)
+    async with session_factory() as session:
+        rows = await CollectionTaskRepository(session).list_tasks(
+            status=status_filter,
+            limit=capped_limit,
+        )
+
+    if not rows:
+        logger.info("No tasks found")
+        return
+
+    for row in rows:
+        logger.info(
+            "task id=%s kind=%s target=%s:%s status=%s priority=%s "
+            "retries=%s/%s not_before=%s lease_owner=%s lease_until=%s",
+            row.id,
+            row.kind,
+            row.target_type,
+            row.target_id,
+            row.status,
+            row.priority,
+            row.retry_count,
+            row.max_retries,
+            row.not_before.isoformat(),
+            row.lease_owner,
+            row.lease_until.isoformat() if row.lease_until is not None else None,
+        )
+
+
+async def _retry_failed_tasks(
+    cfg: dict,
+    target_id: str | None,
+    kind: str | None,
+    limit: int,
+) -> None:
+    session_factory = build_session_factory(cfg)
+    kind_filter = TaskKind(kind) if kind is not None else None
+    capped_limit = min(max(limit, 1), 500)
+    async with session_factory() as session:
+        retried = await CollectionTaskRepository(session).retry_failed(
+            now=datetime.now(UTC),
+            target_id=target_id,
+            kind=kind_filter,
+            limit=capped_limit,
+        )
+        await session.commit()
+
+    logger.info("Retried failed tasks: %s", retried)
 
 
 async def _discover_user(cfg: dict, mid: str, page: int) -> None:
