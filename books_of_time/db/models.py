@@ -184,6 +184,7 @@ class CollectionTask(TimestampMixin, Base):
     )
     target_type: Mapped[str] = mapped_column(Text, nullable=False)
     target_id: Mapped[str] = mapped_column(Text, nullable=False)
+    idempotency_key: Mapped[str | None] = mapped_column(Text)
     priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     budget_cost: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     status: Mapped[TaskStatus] = mapped_column(
@@ -215,6 +216,17 @@ Index(
     CollectionTask.target_type,
     CollectionTask.target_id,
     CollectionTask.status,
+)
+Index(
+    "uq_collection_tasks_active_idempotency_key",
+    CollectionTask.idempotency_key,
+    unique=True,
+    sqlite_where=CollectionTask.status.in_(
+        [TaskStatus.PENDING, TaskStatus.RUNNING, TaskStatus.BACKOFF]
+    ),
+    postgresql_where=CollectionTask.status.in_(
+        [TaskStatus.PENDING, TaskStatus.RUNNING, TaskStatus.BACKOFF]
+    ),
 )
 
 

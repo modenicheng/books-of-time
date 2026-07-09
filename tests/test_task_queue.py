@@ -1,9 +1,10 @@
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from books_of_time.db.models import Base
+from books_of_time.db.models import Base, CollectionTask
 from books_of_time.db.repositories import CollectionTaskRepository
 from books_of_time.domain.enums import TaskKind, TaskStatus
 
@@ -48,6 +49,90 @@ async def test_task_repository_leases_highest_priority_due_task() -> None:
         assert task.status == TaskStatus.RUNNING
         assert task.lease_owner == "worker-1"
         assert task.lease_until == now + timedelta(seconds=120)
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_task_repository_reuses_active_task_with_same_idempotency_key() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    now = datetime(2026, 7, 8, 10, 0, tzinfo=UTC)
+
+    async with session_factory() as session:
+        repo = CollectionTaskRepository(session)
+        first = await repo.enqueue(
+            kind=TaskKind.FETCH_VIDEO_STATS,
+            target_type="video",
+            target_id="BVDEDUP",
+            priority=10,
+            payload={"bvid": "BVDEDUP", "attempt": 1},
+            not_before=now,
+            idempotency_key="fetch_video_stats:video:BVDEDUP",
+        )
+        second = await repo.enqueue(
+            kind=TaskKind.FETCH_VIDEO_STATS,
+            target_type="video",
+            target_id="BVDEDUP",
+            priority=99,
+            payload={"bvid": "BVDEDUP", "attempt": 2},
+            not_before=now + timedelta(minutes=1),
+            idempotency_key="fetch_video_stats:video:BVDEDUP",
+        )
+        await session.commit()
+
+        tasks = list(await session.scalars(select(CollectionTask)))
+
+        assert second.id == first.id
+        assert len(tasks) == 1
+        assert tasks[0].priority == 10
+        assert tasks[0].payload["attempt"] == 1
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_task_repository_allows_reenqueue_after_success() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    now = datetime(2026, 7, 8, 10, 0, tzinfo=UTC)
+
+    async with session_factory() as session:
+        repo = CollectionTaskRepository(session)
+        first = await repo.enqueue(
+            kind=TaskKind.FETCH_VIDEO_STATS,
+            target_type="video",
+            target_id="BVDEDUP",
+            priority=10,
+            payload={"bvid": "BVDEDUP", "attempt": 1},
+            not_before=now,
+            idempotency_key="fetch_video_stats:video:BVDEDUP",
+        )
+        first.status = TaskStatus.SUCCEEDED
+        await session.commit()
+
+        second = await repo.enqueue(
+            kind=TaskKind.FETCH_VIDEO_STATS,
+            target_type="video",
+            target_id="BVDEDUP",
+            priority=99,
+            payload={"bvid": "BVDEDUP", "attempt": 2},
+            not_before=now + timedelta(minutes=1),
+            idempotency_key="fetch_video_stats:video:BVDEDUP",
+        )
+        await session.commit()
+
+        tasks = list(await session.scalars(select(CollectionTask)))
+
+        assert second.id != first.id
+        assert len(tasks) == 2
+        assert second.priority == 99
 
     await engine.dispose()
 

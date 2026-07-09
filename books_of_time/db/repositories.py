@@ -50,11 +50,33 @@ class CollectionTaskRepository:
         not_before: datetime,
         budget_cost: int = 1,
         max_retries: int = 3,
+        idempotency_key: str | None = None,
     ) -> CollectionTask:
+        if idempotency_key is not None:
+            existing = await self.session.scalar(
+                select(CollectionTask)
+                .where(
+                    CollectionTask.idempotency_key == idempotency_key,
+                    CollectionTask.status.in_(
+                        (
+                            TaskStatus.PENDING,
+                            TaskStatus.RUNNING,
+                            TaskStatus.BACKOFF,
+                        )
+                    ),
+                )
+                .order_by(CollectionTask.created_at.asc(), CollectionTask.id.asc())
+                .limit(1)
+                .with_for_update(skip_locked=True)
+            )
+            if existing is not None:
+                return existing
+
         task = CollectionTask(
             kind=kind,
             target_type=target_type,
             target_id=target_id,
+            idempotency_key=idempotency_key,
             priority=priority,
             budget_cost=budget_cost,
             payload=payload,
