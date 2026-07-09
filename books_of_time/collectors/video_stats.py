@@ -9,12 +9,17 @@ from books_of_time.coverage import CoverageDraft
 from books_of_time.db.models import CollectionTask
 from books_of_time.db.repositories import (
     RawPayloadRepository,
+    VideoInfoSnapshotRepository,
     VideoMetricSnapshotRepository,
 )
 from books_of_time.domain.enums import TaskKind
 from books_of_time.http.client import FetchResult
 from books_of_time.http.errors import ParseFailure
-from books_of_time.parsers.video import VIDEO_PARSER_VERSION, parse_video_stats
+from books_of_time.parsers.video import (
+    VIDEO_PARSER_VERSION,
+    parse_video_info_snapshot,
+    parse_video_stats,
+)
 from books_of_time.storage.filesystem import RawPayloadFileStore
 
 
@@ -55,8 +60,14 @@ class VideoStatsCollector:
         )
 
         try:
+            payload = json.loads(result.body)
             parsed = parse_video_stats(
-                json.loads(result.body),
+                payload,
+                captured_at=result.captured_at,
+                raw_payload_id=raw.id,
+            )
+            info_snapshot = parse_video_info_snapshot(
+                payload,
                 captured_at=result.captured_at,
                 raw_payload_id=raw.id,
             )
@@ -68,6 +79,7 @@ class VideoStatsCollector:
                 fetch_result=result,
             ) from exc
         await VideoMetricSnapshotRepository(session).insert_from_parsed(parsed)
+        await VideoInfoSnapshotRepository(session).insert_from_parsed(info_snapshot)
         return CoverageDraft(
             task_kind=TaskKind.FETCH_VIDEO_STATS,
             target_type=task.target_type,

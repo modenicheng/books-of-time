@@ -41,6 +41,10 @@ class FakeBilibiliClient:
                     "share": 6,
                     "reply": 78,
                     "danmaku": 90,
+                    "title": "Demo Video",
+                    "desc": "A useful description",
+                    "owner": {"mid": 12345, "name": "Example UP"},
+                    "tag": [{"tag_name": "攻略"}, {"name": "游戏"}],
                 },
             }
         ).encode()
@@ -149,6 +153,7 @@ async def test_worker_fetch_video_stats_archives_raw_then_writes_snapshot(
         coverage = await session.scalar(select(CollectionCoverageStat))
         raw = await session.scalar(select(RawPayload))
         snapshot = await session.scalar(select(VideoMetricSnapshot))
+        info_snapshot = await session.scalar(select(VideoInfoSnapshot))
 
         assert task.status == TaskStatus.SUCCEEDED
         assert coverage is not None
@@ -165,6 +170,14 @@ async def test_worker_fetch_video_stats_archives_raw_then_writes_snapshot(
         assert snapshot.bvid == "BV1abc"
         assert snapshot.view_count == 1234
         assert snapshot.raw_payload_id == raw.id
+        assert info_snapshot is not None
+        assert info_snapshot.bvid == "BV1abc"
+        assert info_snapshot.title == "Demo Video"
+        assert info_snapshot.description == "A useful description"
+        assert info_snapshot.owner_mid == 12345
+        assert info_snapshot.owner_name == "Example UP"
+        assert info_snapshot.tags["names"] == ["攻略", "游戏"]
+        assert info_snapshot.raw_payload_id == raw.id
 
     await engine.dispose()
 
