@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import select
@@ -120,6 +120,48 @@ async def test_discovery_loop_preserves_uid_pool_metadata() -> None:
     assert task.payload["source_mid"] == "300"
     assert task.payload["source_pool_type"] == "game"
     assert task.payload["source_pool_id"] == "genshin"
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_discovery_loop_schedules_terminal_snapshot_at_stop_hour() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    terminal_at = datetime(2026, 7, 8, 14, 0, tzinfo=UTC)
+    async with session_factory() as session:
+        session.add(
+            KnownVideo(
+                bvid="BVTERM",
+                source_mid="100",
+                pubdate=terminal_at - timedelta(hours=1),
+                first_seen_at=terminal_at - timedelta(minutes=30),
+            )
+        )
+        await session.commit()
+
+    client = FakeDiscoveryClient(
+        {"100": _video_list_result("100", captured_at=terminal_at)}
+    )
+    loop = DiscoveryLoop(
+        session_factory=session_factory,
+        client=client,
+        matrix_uids=["100"],
+    )
+
+    result = await loop.run_once(now=terminal_at)
+
+    async with session_factory() as session:
+        tasks = list(await session.scalars(select(CollectionTask)))
+
+    assert result.uids_scanned == 1
+    assert result.videos_seen == 0
+    assert len(tasks) == 1
+    assert tasks[0].target_id == "BVTERM"
+    assert tasks[0].payload["reason"] == "daily_terminal_snapshot"
 
     await engine.dispose()
 

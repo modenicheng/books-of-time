@@ -13,6 +13,9 @@ from books_of_time.common.logger import get_logger
 from books_of_time.http.client import FetchResult
 from books_of_time.parsers.discovery import parse_user_video_list
 from books_of_time.task_orchestrator.discovery import DiscoveryScheduler
+from books_of_time.task_orchestrator.video_snapshot_scheduler import (
+    VideoSnapshotScheduler,
+)
 
 logger = get_logger(__name__)
 
@@ -73,6 +76,7 @@ class DiscoveryLoop:
             session_factory=session_factory,
             fresh_video_window=fresh_video_window,
         )
+        self.snapshot_scheduler = VideoSnapshotScheduler()
 
     async def run_once(self, *, now: datetime | None = None) -> DiscoveryLoopResult:
         effective_now = now or datetime.now(UTC)
@@ -91,6 +95,10 @@ class DiscoveryLoop:
                     created = await self.scheduler.handle_discovered_videos(
                         session=session,
                         videos=videos,
+                        now=effective_now,
+                    )
+                    await self.snapshot_scheduler.schedule_terminal_snapshots(
+                        session=session,
                         now=effective_now,
                     )
                     await session.commit()

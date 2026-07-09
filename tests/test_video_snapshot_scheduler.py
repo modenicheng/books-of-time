@@ -106,3 +106,95 @@ async def test_video_snapshot_scheduler_skips_unknown_video() -> None:
     assert task is None
     assert tasks == []
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_video_snapshot_scheduler_enqueues_daily_terminal_snapshot_once() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    terminal_at = datetime(2026, 7, 8, 14, 0, tzinfo=UTC)  # 22:00 Asia/Shanghai
+    async with session_factory() as session:
+        session.add_all(
+            [
+                KnownVideo(
+                    bvid="BV1",
+                    source_mid="123",
+                    pubdate=terminal_at - timedelta(hours=1),
+                    first_seen_at=terminal_at - timedelta(minutes=30),
+                ),
+                KnownVideo(
+                    bvid="BV2",
+                    source_mid="123",
+                    pubdate=terminal_at - timedelta(minutes=10),
+                    first_seen_at=terminal_at - timedelta(minutes=5),
+                ),
+            ]
+        )
+        await session.commit()
+
+        first_result = await VideoSnapshotScheduler().schedule_terminal_snapshots(
+            session=session,
+            now=terminal_at,
+        )
+        second_result = await VideoSnapshotScheduler().schedule_terminal_snapshots(
+            session=session,
+            now=terminal_at + timedelta(minutes=1),
+        )
+        await session.commit()
+
+    async with session_factory() as session:
+        tasks = (
+            await session.scalars(select(CollectionTask).order_by(CollectionTask.id))
+        ).all()
+
+        assert len(first_result) == 2
+        assert len(second_result) == 2
+        assert len(tasks) == 2
+        assert [task.target_id for task in tasks] == ["BV1", "BV2"]
+        assert [task.not_before for task in tasks] == [terminal_at, terminal_at]
+        assert [task.payload["reason"] for task in tasks] == [
+            "daily_terminal_snapshot",
+            "daily_terminal_snapshot",
+        ]
+        assert all("terminal:2026-07-08" in str(task.idempotency_key) for task in tasks)
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_video_snapshot_scheduler_skips_terminal_snapshot_before_stop_hour() -> (
+    None
+):
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    before_terminal = datetime(2026, 7, 8, 13, 59, tzinfo=UTC)  # 21:59 Asia/Shanghai
+    async with session_factory() as session:
+        session.add(
+            KnownVideo(
+                bvid="BV1",
+                source_mid="123",
+                pubdate=before_terminal - timedelta(hours=1),
+                first_seen_at=before_terminal - timedelta(minutes=30),
+            )
+        )
+        await session.commit()
+
+        result = await VideoSnapshotScheduler().schedule_terminal_snapshots(
+            session=session,
+            now=before_terminal,
+        )
+        await session.commit()
+
+    async with session_factory() as session:
+        tasks = (await session.scalars(select(CollectionTask))).all()
+
+        assert result == []
+        assert tasks == []
+
+    await engine.dispose()
