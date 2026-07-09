@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -19,10 +20,12 @@ from books_of_time.db.models import (
     FrontierState,
     RawPageObservation,
     RawPayload,
+    RequestBackoffState,
     VideoMetricSnapshot,
 )
 from books_of_time.domain.enums import BilibiliRequestType, TaskKind, TaskStatus
 from books_of_time.http.client import FetchResult
+from books_of_time.http.errors import RequestFailure
 from books_of_time.parsers.comments import (
     COMMENT_PARSER_VERSION,
     ParsedComment,
@@ -241,6 +244,65 @@ class CollectionCoverageRepository:
         return list(rows)
 
 
+class RequestBackoffRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def record_failure(
+        self,
+        *,
+        platform: str,
+        scope: str,
+        failure: RequestFailure,
+        now: datetime,
+        default_seconds: Mapping[str, int],
+        max_seconds: int,
+    ) -> RequestBackoffState:
+        state = await self.session.scalar(
+            select(RequestBackoffState).where(
+                RequestBackoffState.platform == platform,
+                RequestBackoffState.request_type == failure.request_type,
+                RequestBackoffState.scope == scope,
+            )
+        )
+        if state is None:
+            state = RequestBackoffState(
+                platform=platform,
+                request_type=failure.request_type,
+                scope=scope,
+                error_kind=failure.kind.value,
+                status_code=failure.status_code,
+                retry_after_seconds=failure.retry_after_seconds,
+                fail_count=0,
+                first_failed_at=now,
+                last_failed_at=now,
+                backoff_until=now,
+                last_message=str(failure),
+                extra={},
+                created_at=now,
+                updated_at=now,
+            )
+            self.session.add(state)
+
+        state.fail_count += 1
+        state.error_kind = failure.kind.value
+        state.status_code = failure.status_code
+        state.retry_after_seconds = failure.retry_after_seconds
+        state.last_failed_at = now
+        state.last_message = str(failure)
+        state.backoff_until = now + timedelta(
+            seconds=_backoff_seconds(
+                failure=failure,
+                fail_count=state.fail_count,
+                default_seconds=default_seconds,
+                max_seconds=max_seconds,
+            )
+        )
+        state.updated_at = now
+        await self.session.flush()
+        return state
+
+
 class VideoMetricSnapshotRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -450,3 +512,17 @@ def _hash_params(params: dict[str, Any] | None) -> bytes | None:
         return None
     canonical = json.dumps(params, ensure_ascii=False, sort_keys=True).encode()
     return hashlib.sha256(canonical).digest()
+
+
+def _backoff_seconds(
+    *,
+    failure: RequestFailure,
+    fail_count: int,
+    default_seconds: Mapping[str, int],
+    max_seconds: int,
+) -> int:
+    base = failure.retry_after_seconds
+    if base is None:
+        base = int(default_seconds.get(failure.kind.value, 300))
+    multiplier = 2 ** min(max(fail_count - 1, 0), 5)
+    return min(int(base) * multiplier, max_seconds)

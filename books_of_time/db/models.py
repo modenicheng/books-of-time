@@ -291,6 +291,48 @@ Index("idx_collection_coverage_task", CollectionCoverageStat.collection_task_id)
 Index("idx_collection_coverage_run", CollectionCoverageStat.run_id)
 
 
+class RequestBackoffState(TimestampMixin, Base):
+    __tablename__ = "request_backoff_states"
+    __table_args__ = (UniqueConstraint("platform", "request_type", "scope"),)
+
+    id: Mapped[int] = mapped_column(
+        bigint_pk_type, primary_key=True, autoincrement=True
+    )
+    platform: Mapped[str] = mapped_column(Text, nullable=False)
+    request_type: Mapped[BilibiliRequestType] = mapped_column(
+        Enum(BilibiliRequestType, values_callable=lambda x: [e.value for e in x]),
+        nullable=False,
+    )
+    scope: Mapped[str] = mapped_column(Text, nullable=False)
+    error_kind: Mapped[str] = mapped_column(Text, nullable=False)
+    status_code: Mapped[int | None] = mapped_column(Integer)
+    retry_after_seconds: Mapped[int | None] = mapped_column(Integer)
+    fail_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    first_failed_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    last_failed_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    backoff_until: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    last_message: Mapped[str | None] = mapped_column(Text)
+    extra: Mapped[dict[str, Any]] = mapped_column(
+        json_dict_type,
+        nullable=False,
+        default=dict,
+    )
+
+
+Index(
+    "idx_request_backoff_key",
+    RequestBackoffState.platform,
+    RequestBackoffState.request_type,
+    RequestBackoffState.scope,
+)
+Index("idx_request_backoff_until", RequestBackoffState.backoff_until)
+Index(
+    "idx_request_backoff_error_time",
+    RequestBackoffState.error_kind,
+    RequestBackoffState.last_failed_at.desc(),
+)
+
+
 class KnownVideo(TimestampMixin, Base):
     __tablename__ = "known_videos"
 
