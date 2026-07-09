@@ -12,7 +12,9 @@ from books_of_time.db.models import (
     CollectionTask,
     CommentEntity,
     CommentObservation,
+    CommentObservationMedia,
     FrontierState,
+    MediaSource,
     RawPageObservation,
 )
 from books_of_time.db.repositories import CollectionTaskRepository
@@ -27,9 +29,13 @@ def latest_body(
     rpid: int | None,
     next_offset: str,
     is_end: bool = False,
+    media_urls: list[str] | None = None,
 ) -> bytes:
     replies = []
     if rpid is not None:
+        content = {"message": f"comment {rpid}"}
+        if media_urls:
+            content["pictures"] = [{"img_src": url} for url in media_urls]
         replies = [
             {
                 "rpid": rpid,
@@ -39,7 +45,7 @@ def latest_body(
                 "like": rpid % 10,
                 "rcount": 0,
                 "member": {"mid": str(rpid), "uname": f"User {rpid}"},
-                "content": {"message": f"comment {rpid}"},
+                "content": content,
             }
         ]
     return json.dumps(
@@ -297,7 +303,11 @@ async def test_baseline_resumes_from_saved_cursor_and_marks_tail_complete(
 ) -> None:
     client = FakeLatestClient(
         {
-            "": latest_body(rpid=3003, next_offset="offset-2"),
+            "": latest_body(
+                rpid=3003,
+                next_offset="offset-2",
+                media_urls=["https://i0.hdslb.com/bfs/new_dyn/latest-a.jpg"],
+            ),
             "offset-2": latest_body(rpid=3002, next_offset="", is_end=True),
         }
     )
@@ -318,6 +328,11 @@ async def test_baseline_resumes_from_saved_cursor_and_marks_tail_complete(
         observation_count = await session.scalar(
             select(func.count(CommentObservation.id))
         )
+        media_source = await session.scalar(select(MediaSource))
+        media_link = await session.scalar(select(CommentObservationMedia))
+        tasks = (
+            await session.scalars(select(CollectionTask).order_by(CollectionTask.id))
+        ).all()
 
         assert state is not None
         assert state.last_scan_status == "baseline_tail_complete"
@@ -328,6 +343,16 @@ async def test_baseline_resumes_from_saved_cursor_and_marks_tail_complete(
         assert [page.cursor for page in raw_pages] == ["", "offset-2"]
         assert entity_count == 2
         assert observation_count == 2
+        assert len(tasks) == 2
+        assert tasks[1].kind == TaskKind.FETCH_MEDIA_ASSET
+        assert (
+            tasks[1].payload["url"] == "https://i0.hdslb.com/bfs/new_dyn/latest-a.jpg"
+        )
+        assert media_source is not None
+        assert media_source.fetch_status == "pending"
+        assert media_link is not None
+        assert media_link.rpid == 3003
+        assert media_link.position == 0
 
     await engine.dispose()
 

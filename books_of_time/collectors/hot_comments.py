@@ -15,6 +15,7 @@ from books_of_time.db.repositories import (
 from books_of_time.domain.enums import BilibiliRequestType, TaskKind
 from books_of_time.http.client import FetchResult
 from books_of_time.http.errors import ParseFailure
+from books_of_time.media.normalizer import MediaService
 from books_of_time.parsers.comments import (
     COMMENT_PARSER_VERSION,
     parse_hot_comment_page,
@@ -96,6 +97,11 @@ class HotCommentCollector:
         observations = await CommentRepository(session).upsert_page(
             parsed,
             raw_page_observation_id=raw_page.id,
+        )
+        await MediaService(session).register_page_media(
+            parsed=parsed,
+            observations=observations,
+            raw_page_id=raw_page.id,
         )
         return CoverageDraft(
             task_kind=TaskKind.FETCH_HOT_COMMENTS,

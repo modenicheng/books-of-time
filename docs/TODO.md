@@ -82,13 +82,13 @@
 ## P0: Media Assets
 
 - [ ] 建立 `media` 子系统目录：downloader、hasher、storage、normalizer、similarity。
-- [ ] 建立 `media_sources` ORM 表，记录评论中看到的图片 URL 引用。
-- [ ] 建立 `media_assets` ORM 表，使用 `blob_sha256` 做完全一致去重。
-- [ ] 建立 `comment_observation_media` ORM 表，支持单评论多图和同图多评论。
-- [ ] 评论 parser 提取图片引用到 `ParsedComment.media`。
-- [ ] 评论写入阶段登记 media source 和 observation-media 关系。
-- [ ] 为 pending media source 生成 `FETCH_MEDIA_ASSET` 任务。
-- [ ] 新增 `bilibili:media_image` 请求类型和限流配置。
+- [x] 建立 `media_sources` ORM 表，记录评论中看到的图片 URL 引用。
+- [x] 建立 `media_assets` ORM 表，使用 `blob_sha256` 做完全一致去重。
+- [x] 建立 `comment_observation_media` ORM 表，支持单评论多图和同图多评论。
+- [x] 评论 parser 提取图片引用到 `ParsedComment.media`。
+- [x] 评论写入阶段登记 media source 和 observation-media 关系。
+- [x] 为 pending media source 生成 `FETCH_MEDIA_ASSET` 任务。
+- [x] 新增 `bilibili:media_image` 请求类型和限流配置。
 - [ ] 实现本地文件系统 media storage：`data/media/sha256/ab/cd/<hash>.<ext>`。
 - [ ] 实现 media 图片下载 worker，走统一 http 请求层和限流。
 - [ ] 下载后计算 `blob_sha256` 并复用已有 `media_asset`。

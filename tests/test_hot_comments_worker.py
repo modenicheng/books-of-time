@@ -12,6 +12,8 @@ from books_of_time.db.models import (
     CollectionTask,
     CommentEntity,
     CommentObservation,
+    CommentObservationMedia,
+    MediaSource,
     RawPageObservation,
     RawPayload,
 )
@@ -67,7 +69,14 @@ class FakeBilibiliClient:
                             "like": 12,
                             "rcount": 3,
                             "member": {"mid": "42", "uname": "Alice"},
-                            "content": {"message": "first comment"},
+                            "content": {
+                                "message": "first comment",
+                                "pictures": [
+                                    {
+                                        "img_src": "https://i0.hdslb.com/bfs/new_dyn/a.jpg"
+                                    }
+                                ],
+                            },
                         }
                     ],
                 },
@@ -123,7 +132,10 @@ async def test_worker_fetch_hot_comments_archives_raw_and_writes_observations(
     assert executed is True
 
     async with session_factory() as session:
-        task = await session.scalar(select(CollectionTask))
+        tasks = (
+            await session.scalars(select(CollectionTask).order_by(CollectionTask.id))
+        ).all()
+        task = tasks[0]
         coverage = await session.scalar(select(CollectionCoverageStat))
         raw_payloads = (
             await session.scalars(select(RawPayload).order_by(RawPayload.id.asc()))
@@ -131,8 +143,14 @@ async def test_worker_fetch_hot_comments_archives_raw_and_writes_observations(
         raw_page = await session.scalar(select(RawPageObservation))
         entity = await session.scalar(select(CommentEntity))
         observation = await session.scalar(select(CommentObservation))
+        media_source = await session.scalar(select(MediaSource))
+        media_link = await session.scalar(select(CommentObservationMedia))
 
         assert task.status == TaskStatus.SUCCEEDED
+        assert len(tasks) == 2
+        assert tasks[1].kind == TaskKind.FETCH_MEDIA_ASSET
+        assert tasks[1].target_type == "media_source"
+        assert tasks[1].payload["url"] == "https://i0.hdslb.com/bfs/new_dyn/a.jpg"
         assert coverage is not None
         assert coverage.task_kind == TaskKind.FETCH_HOT_COMMENTS
         assert coverage.status == "succeeded"
@@ -159,5 +177,11 @@ async def test_worker_fetch_hot_comments_archives_raw_and_writes_observations(
         assert observation.raw_payload_id == raw_payloads[1].id
         assert observation.raw_page_observation_id == raw_page.id
         assert observation.content == "first comment"
+        assert media_source is not None
+        assert media_source.fetch_status == "pending"
+        assert media_link is not None
+        assert media_link.comment_observation_id == observation.id
+        assert media_link.media_source_id == media_source.id
+        assert media_link.position == 0
 
     await engine.dispose()

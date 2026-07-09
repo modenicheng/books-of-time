@@ -8,6 +8,9 @@ from books_of_time.db.models import (
     Base,
     CommentEntity,
     CommentObservation,
+    CommentObservationMedia,
+    MediaAsset,
+    MediaSource,
     RawPageObservation,
 )
 from books_of_time.db.repositories import (
@@ -96,6 +99,77 @@ async def test_comment_repository_upserts_entity_and_appends_observations() -> N
         assert observations[0].raw_page_observation_id == raw_page.id
         assert observations[0].content == "first comment"
         assert observations[0].author_name == "Alice"
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_media_tables_represent_sources_assets_and_comment_links() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    now = datetime(2026, 7, 8, 10, 0, tzinfo=UTC)
+
+    async with session_factory() as session:
+        asset = MediaAsset(
+            blob_sha256=b"a" * 32,
+            pixel_sha256=b"b" * 32,
+            mime_type="image/jpeg",
+            file_ext=".jpg",
+            width=640,
+            height=480,
+            size_bytes=1234,
+            storage_uri="file://data/media/sha256/aa/aa/aaaa.jpg",
+            first_seen_at=now,
+            first_raw_page_id=11,
+            phash=1,
+            dhash=2,
+            ahash=3,
+        )
+        session.add(asset)
+        await session.flush()
+
+        source = MediaSource(
+            platform="bilibili",
+            source_url_hash=b"c" * 32,
+            source_url="https://i0.hdslb.com/bfs/new_dyn/a.jpg",
+            normalized_url_hash=b"d" * 32,
+            normalized_url="https://i0.hdslb.com/bfs/new_dyn/a.jpg",
+            media_asset_id=asset.id,
+            fetch_status="succeeded",
+            first_seen_at=now,
+            last_seen_at=now,
+            first_raw_page_id=11,
+            last_raw_page_id=11,
+        )
+        session.add(source)
+        await session.flush()
+
+        session.add(
+            CommentObservationMedia(
+                comment_observation_id=22,
+                bvid="BV1abc",
+                rpid=1001,
+                media_source_id=source.id,
+                media_asset_id=asset.id,
+                position=0,
+                role="comment_image",
+                raw_page_id=11,
+            )
+        )
+        await session.commit()
+
+    async with session_factory() as session:
+        assert await session.scalar(select(func.count(MediaAsset.id))) == 1
+        assert await session.scalar(select(func.count(MediaSource.id))) == 1
+        link = await session.scalar(select(CommentObservationMedia))
+
+        assert link is not None
+        assert link.bvid == "BV1abc"
+        assert link.rpid == 1001
+        assert link.position == 0
 
     await engine.dispose()
 

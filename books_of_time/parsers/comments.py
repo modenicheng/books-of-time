@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
@@ -10,6 +10,13 @@ COMMENT_PARSER_VERSION = "comments.v1"
 
 class CommentParseError(ValueError):
     pass
+
+
+@dataclass(frozen=True)
+class ParsedCommentMedia:
+    url: str
+    position: int
+    role: str = "comment_image"
 
 
 @dataclass(frozen=True)
@@ -26,6 +33,7 @@ class ParsedComment:
     like_count: int | None
     reply_count: int | None
     position: int
+    media: list[ParsedCommentMedia] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -190,7 +198,51 @@ def _parse_comment(
         like_count=_int_or_none(item.get("like")),
         reply_count=_int_or_none(item.get("rcount")),
         position=position,
+        media=_parse_comment_media(content),
     )
+
+
+def _parse_comment_media(content: Any) -> list[ParsedCommentMedia]:
+    if not isinstance(content, dict):
+        return []
+
+    media: list[ParsedCommentMedia] = []
+    for candidate in (content.get("pictures"), content.get("picture")):
+        if not isinstance(candidate, list):
+            continue
+        for item in candidate:
+            url = _media_url(item)
+            if url is None:
+                continue
+            media.append(
+                ParsedCommentMedia(
+                    url=url,
+                    position=len(media),
+                    role="comment_image",
+                )
+            )
+    return media
+
+
+def _media_url(item: Any) -> str | None:
+    if isinstance(item, str):
+        url = item
+    elif isinstance(item, dict):
+        url = next(
+            (
+                item.get(key)
+                for key in ("img_src", "url", "src")
+                if isinstance(item.get(key), str)
+            ),
+            None,
+        )
+    else:
+        url = None
+
+    if not isinstance(url, str):
+        return None
+    stripped = url.strip()
+    return stripped or None
 
 
 def _page_extra(data: dict[str, Any]) -> dict[str, Any]:

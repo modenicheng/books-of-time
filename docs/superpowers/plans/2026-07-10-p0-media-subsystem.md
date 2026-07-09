@@ -20,30 +20,30 @@
 
 ### Task 1: Media Schema And Parser Discovery
 
-- [ ] Add `TaskKind.FETCH_MEDIA_ASSET` and `BilibiliRequestType.MEDIA_IMAGE`.
-- [ ] Add `ParsedCommentMedia` and `ParsedComment.media`.
-- [ ] Parse common Bilibili comment image fields into ordered media items.
-- [ ] Add `media_sources`, `media_assets`, and `comment_observation_media` models.
-- [ ] Add repository tests for parser media extraction and schema creation.
-- [ ] Verify with `uv run pytest tests/test_comments_parser.py tests/test_comment_repositories.py -v`.
+- [x] Add `TaskKind.FETCH_MEDIA_ASSET` and `BilibiliRequestType.MEDIA_IMAGE`.
+- [x] Add `ParsedCommentMedia` and `ParsedComment.media`.
+- [x] Parse common Bilibili comment image fields into ordered media items.
+- [x] Add `media_sources`, `media_assets`, and `comment_observation_media` models.
+- [x] Add repository tests for parser media extraction and schema creation.
+- [x] Verify with `uv run pytest tests/test_comments_parser.py tests/test_comment_repositories.py -v`.
 - [ ] Commit as `feat: add media reference schema`.
 
 ### Task 2: MediaService Registration
 
-- [ ] Add `books_of_time/media/` package with `normalizer.py`.
-- [ ] Implement `MediaService.register_comment_media(...)`.
-- [ ] Upsert `media_sources` by `(platform, source_url_hash)`.
-- [ ] Insert `comment_observation_media` rows by comment observation and media position.
-- [ ] Enqueue `FETCH_MEDIA_ASSET` tasks for pending media sources.
-- [ ] Verify a single multi-image comment creates multiple relation rows and one pending task per distinct URL.
+- [x] Add `books_of_time/media/` package with `normalizer.py`.
+- [x] Implement `MediaService.register_comment_media(...)`.
+- [x] Upsert `media_sources` by `(platform, source_url_hash)`.
+- [x] Insert `comment_observation_media` rows by comment observation and media position.
+- [x] Enqueue `FETCH_MEDIA_ASSET` tasks for pending media sources.
+- [x] Verify a single multi-image comment creates multiple relation rows and one pending task per distinct URL.
 - [ ] Commit as `feat: register comment media sources`.
 
 ### Task 3: Wire Comment Collection And Docs
 
-- [ ] Call `MediaService` after `CommentRepository.upsert_page()` in hot/latest collectors.
-- [ ] Update TODO checkboxes for Media-1 items.
-- [ ] Run `uv run pytest`.
-- [ ] Run `uv run ruff check .`.
+- [x] Call `MediaService` after `CommentRepository.upsert_page()` in hot/latest collectors.
+- [x] Update TODO checkboxes for Media-1 items.
+- [x] Run `uv run pytest`.
+- [x] Run `uv run ruff check .`.
 - [ ] Commit as `feat: collect comment media references`.
 
 ### Follow-Up Tasks

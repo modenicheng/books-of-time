@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import (
@@ -13,6 +13,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    func,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -155,6 +156,88 @@ Index(
     "idx_comment_observations_raw_page",
     CommentObservation.raw_page_observation_id,
 )
+
+
+class MediaAsset(TimestampMixin, Base):
+    __tablename__ = "media_assets"
+
+    id: Mapped[int] = mapped_column(
+        bigint_pk_type, primary_key=True, autoincrement=True
+    )
+    blob_sha256: Mapped[bytes] = mapped_column(
+        LargeBinary(32), nullable=False, unique=True
+    )
+    pixel_sha256: Mapped[bytes | None] = mapped_column(LargeBinary(32))
+    mime_type: Mapped[str | None] = mapped_column(Text)
+    file_ext: Mapped[str | None] = mapped_column(Text)
+    width: Mapped[int | None] = mapped_column(Integer)
+    height: Mapped[int | None] = mapped_column(Integer)
+    size_bytes: Mapped[int | None] = mapped_column(BigInteger)
+    storage_uri: Mapped[str] = mapped_column(Text, nullable=False)
+    first_seen_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    first_raw_page_id: Mapped[int | None] = mapped_column(BigInteger)
+    phash: Mapped[int | None] = mapped_column(BigInteger)
+    dhash: Mapped[int | None] = mapped_column(BigInteger)
+    ahash: Mapped[int | None] = mapped_column(BigInteger)
+
+
+Index("idx_media_assets_pixel_sha256", MediaAsset.pixel_sha256)
+Index("idx_media_assets_phash", MediaAsset.phash)
+
+
+class MediaSource(TimestampMixin, Base):
+    __tablename__ = "media_sources"
+    __table_args__ = (UniqueConstraint("platform", "source_url_hash"),)
+
+    id: Mapped[int] = mapped_column(
+        bigint_pk_type, primary_key=True, autoincrement=True
+    )
+    platform: Mapped[str] = mapped_column(Text, nullable=False, default="bilibili")
+    source_url_hash: Mapped[bytes] = mapped_column(LargeBinary(32), nullable=False)
+    source_url: Mapped[str | None] = mapped_column(Text)
+    normalized_url_hash: Mapped[bytes | None] = mapped_column(LargeBinary(32))
+    normalized_url: Mapped[str | None] = mapped_column(Text)
+    media_asset_id: Mapped[int | None] = mapped_column(BigInteger)
+    fetch_status: Mapped[str] = mapped_column(Text, nullable=False, default="pending")
+    fetch_error_type: Mapped[str | None] = mapped_column(Text)
+    fetch_error_message: Mapped[str | None] = mapped_column(Text)
+    first_seen_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    first_raw_page_id: Mapped[int | None] = mapped_column(BigInteger)
+    last_raw_page_id: Mapped[int | None] = mapped_column(BigInteger)
+
+
+Index("idx_media_sources_asset", MediaSource.media_asset_id)
+Index("idx_media_sources_fetch_status", MediaSource.fetch_status)
+Index("idx_media_sources_normalized_url", MediaSource.normalized_url_hash)
+
+
+class CommentObservationMedia(Base):
+    __tablename__ = "comment_observation_media"
+    __table_args__ = (UniqueConstraint("comment_observation_id", "position"),)
+
+    id: Mapped[int] = mapped_column(
+        bigint_pk_type, primary_key=True, autoincrement=True
+    )
+    comment_observation_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    bvid: Mapped[str] = mapped_column(Text, nullable=False)
+    rpid: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    media_source_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    media_asset_id: Mapped[int | None] = mapped_column(BigInteger)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    role: Mapped[str | None] = mapped_column(Text)
+    raw_page_id: Mapped[int | None] = mapped_column(BigInteger)
+    created_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+        server_default=func.now(),
+    )
+
+
+Index("idx_comment_obs_media_rpid", CommentObservationMedia.rpid)
+Index("idx_comment_obs_media_asset", CommentObservationMedia.media_asset_id)
+Index("idx_comment_obs_media_source", CommentObservationMedia.media_source_id)
 
 
 class VideoMetricSnapshot(Base):

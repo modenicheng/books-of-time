@@ -79,6 +79,42 @@ def test_parse_hot_comment_page_extracts_public_comment_fields() -> None:
     assert second.position == 2
 
 
+def test_parse_hot_comment_page_extracts_comment_images() -> None:
+    page = parse_hot_comment_page(
+        {
+            "code": 0,
+            "data": {
+                "replies": [
+                    {
+                        "rpid": 1001,
+                        "oid": 777,
+                        "content": {
+                            "message": "image comment",
+                            "pictures": [
+                                {"img_src": "https://i0.hdslb.com/bfs/new_dyn/a.jpg"},
+                                {"url": "https://i0.hdslb.com/bfs/new_dyn/b.png"},
+                            ],
+                        },
+                    }
+                ]
+            },
+        },
+        bvid="BV1abc",
+        oid=777,
+        captured_at=datetime(2026, 7, 8, 10, 0, tzinfo=UTC),
+        raw_payload_id=42,
+        page_number=1,
+    )
+
+    media = page.comments[0].media
+    assert [item.url for item in media] == [
+        "https://i0.hdslb.com/bfs/new_dyn/a.jpg",
+        "https://i0.hdslb.com/bfs/new_dyn/b.png",
+    ]
+    assert [item.position for item in media] == [0, 1]
+    assert [item.role for item in media] == ["comment_image", "comment_image"]
+
+
 def test_parse_hot_comment_page_rejects_missing_replies_list() -> None:
     with pytest.raises(CommentParseError, match=r"data\.replies"):
         parse_hot_comment_page(
