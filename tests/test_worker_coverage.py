@@ -12,9 +12,11 @@ from books_of_time.db.models import (
     CollectionCoverageStat,
     CollectionRun,
     CollectionTask,
+    RequestBackoffState,
 )
 from books_of_time.db.repositories import CollectionTaskRepository
-from books_of_time.domain.enums import TaskKind, TaskStatus
+from books_of_time.domain.enums import BilibiliRequestType, TaskKind, TaskStatus
+from books_of_time.http.errors import RequestErrorKind, RequestFailure
 from books_of_time.worker import Worker
 
 
@@ -42,6 +44,17 @@ class SuccessfulCollector:
 class FailingCollector:
     async def collect(self, task: CollectionTask, session) -> CoverageDraft:
         raise RuntimeError("boom")
+
+
+class RateLimitedCollector:
+    async def collect(self, task: CollectionTask, session) -> CoverageDraft:
+        raise RequestFailure(
+            kind=RequestErrorKind.RATE_LIMITED,
+            request_type=BilibiliRequestType.VIDEO_STATS,
+            message="rate limited",
+            status_code=429,
+            retry_after_seconds=45,
+        )
 
 
 @pytest.mark.asyncio
@@ -82,6 +95,55 @@ async def test_worker_writes_run_and_coverage_on_success() -> None:
             assert stat.reason == "complete"
             assert task is not None
             assert task.status == TaskStatus.SUCCEEDED
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_worker_uses_request_failure_backoff_for_retry() -> None:
+    engine, session_factory = await _create_session_factory()
+    now = datetime(2099, 1, 1, tzinfo=UTC)
+    try:
+        async with session_factory() as session:
+            await CollectionTaskRepository(session).enqueue(
+                kind=TaskKind.FETCH_VIDEO_STATS,
+                target_type="video",
+                target_id="BV1xx",
+                priority=100,
+                payload={"bvid": "BV1xx"},
+                not_before=now - timedelta(seconds=1),
+                max_retries=3,
+            )
+            await session.commit()
+
+        worker = Worker(
+            session_factory=session_factory,
+            collectors={TaskKind.FETCH_VIDEO_STATS: RateLimitedCollector()},
+            run_id="run-1",
+            lease_owner="worker-1",
+            retry_delay_seconds=30,
+        )
+
+        with pytest.raises(RequestFailure, match="rate limited"):
+            await worker.run_once(now=now)
+
+        async with session_factory() as session:
+            stat = await session.scalar(select(CollectionCoverageStat))
+            task = await session.scalar(select(CollectionTask))
+            backoff = await session.scalar(select(RequestBackoffState))
+
+            assert stat is not None
+            assert stat.status == "failed"
+            assert stat.reason == "429"
+            assert stat.extra["request_type"] == BilibiliRequestType.VIDEO_STATS
+            assert stat.extra["status_code"] == 429
+            assert task is not None
+            assert task.status == TaskStatus.PENDING
+            assert task.retry_count == 1
+            assert task.not_before == now + timedelta(seconds=45)
+            assert backoff is not None
+            assert backoff.error_kind == "429"
+            assert backoff.backoff_until == now + timedelta(seconds=45)
     finally:
         await engine.dispose()
 

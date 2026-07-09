@@ -12,8 +12,10 @@ from books_of_time.db.repositories import (
     CollectionCoverageRepository,
     CollectionRunRepository,
     CollectionTaskRepository,
+    RequestBackoffRepository,
 )
 from books_of_time.domain.enums import TaskKind, TaskStatus
+from books_of_time.http.errors import RequestFailure
 
 
 class Collector(Protocol):
@@ -34,6 +36,8 @@ class Worker:
         lease_owner: str,
         lease_seconds: int = 120,
         retry_delay_seconds: int = 300,
+        request_backoff_defaults: Mapping[str, int] | None = None,
+        request_backoff_max_seconds: int = 21600,
     ) -> None:
         self.session_factory = session_factory
         self.collectors = collectors
@@ -41,6 +45,18 @@ class Worker:
         self.lease_owner = lease_owner
         self.lease_seconds = lease_seconds
         self.retry_delay_seconds = retry_delay_seconds
+        self.request_backoff_defaults = dict(
+            request_backoff_defaults
+            or {
+                "timeout": 60,
+                "403": 1800,
+                "429": 900,
+                "captcha": 3600,
+                "5xx": 300,
+                "parse_error": 300,
+            }
+        )
+        self.request_backoff_max_seconds = request_backoff_max_seconds
 
     async def run_once(self, *, now: datetime | None = None) -> bool:
         effective_now = now or datetime.now(UTC)
@@ -69,21 +85,45 @@ class Worker:
                 draft = await collector.collect(task, session)
             except Exception as exc:
                 finished_at = datetime.now(UTC)
+                backoff_until = effective_now + timedelta(
+                    seconds=self.retry_delay_seconds
+                )
+                if isinstance(exc, RequestFailure):
+                    backoff = await RequestBackoffRepository(session).record_failure(
+                        platform="bilibili",
+                        scope="global",
+                        failure=exc,
+                        now=effective_now,
+                        default_seconds=self.request_backoff_defaults,
+                        max_seconds=self.request_backoff_max_seconds,
+                    )
+                    backoff_until = backoff.backoff_until
+                    reason = exc.kind.value
+                    extra = {
+                        "exception_type": type(exc).__name__,
+                        "message": str(exc),
+                        "request_type": exc.request_type.value,
+                        "status_code": exc.status_code,
+                    }
+                else:
+                    reason = "collector_exception"
+                    extra = {
+                        "exception_type": type(exc).__name__,
+                        "message": str(exc),
+                    }
                 await coverage_repo.insert_failed(
                     task=task,
                     run_id=self.run_id,
                     started_at=effective_now,
                     finished_at=finished_at,
-                    reason="collector_exception",
-                    extra={"exception_type": type(exc).__name__, "message": str(exc)},
+                    reason=reason,
+                    extra=extra,
                 )
                 await run_repo.record_task_failed(run, now=finished_at)
                 task.retry_count += 1
                 if task.retry_count <= task.max_retries:
                     task.status = TaskStatus.PENDING
-                    task.not_before = effective_now + timedelta(
-                        seconds=self.retry_delay_seconds
-                    )
+                    task.not_before = backoff_until
                 else:
                     task.status = TaskStatus.FAILED
                 task.lease_owner = None
