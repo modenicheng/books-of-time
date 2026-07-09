@@ -40,6 +40,7 @@ Books of Time = 二游社区公共舆论状态的时间机器
 - 热门评论页面采集。
 - 最新评论 frontier 增量采集。
 - 楼中楼重点采集。
+- 评论图片引用、图片实体、评论-图片关系和本地图片文件归档。
 - raw payload 归档和 raw page observation。
 - 评论实体、评论观测、状态事件。
 - 采集覆盖率统计。
@@ -50,6 +51,7 @@ Books of Time = 二游社区公共舆论状态的时间机器
 - 输入 BV 后可以生成任务、限流请求、保存 raw、写入 `video_metric_snapshots`。
 - 输入 BV 后可以抓热门评论第一页并写入 `comment_entities` 与 `comment_observations`。
 - 最新评论可以从第一页向旧 frontier 扫描，遇到 frontier 停止，未遇到时标记 truncated。
+- 评论中的图片引用可以登记为 `media_sources`，图片二进制可以本地保存为去重后的 `media_assets`，并通过 `comment_observation_media` 关联到评论观测。
 - 每轮采集可以输出覆盖率：热门页数、最新评论 frontier 是否到达、楼中楼 root 数、请求成功率。
 - raw payload 可以根据数据库索引找到原始文件，并可重新解析。
 - 请求失败不会伪装成数据缺失，403/429/timeout 有明确退避状态。
@@ -60,6 +62,7 @@ Books of Time = 二游社区公共舆论状态的时间机器
 - 不做前端 dashboard。
 - 不做用户长期画像。
 - 不做全量深页评论实时采集。
+- 不在采集主链路中做相似图片聚类；相似分析必须离线、可重跑。
 
 ## Phase 2: Event Archive
 

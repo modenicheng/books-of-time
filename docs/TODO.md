@@ -79,6 +79,30 @@
 - [x] 基于最近 1 小时播放增量计算动态下次快照时间。
 - [x] 将快照策略接入 scheduler，而不只是纯函数测试。
 
+## P0: Media Assets
+
+- [ ] 建立 `media` 子系统目录：downloader、hasher、storage、normalizer、similarity。
+- [ ] 建立 `media_sources` ORM 表，记录评论中看到的图片 URL 引用。
+- [ ] 建立 `media_assets` ORM 表，使用 `blob_sha256` 做完全一致去重。
+- [ ] 建立 `comment_observation_media` ORM 表，支持单评论多图和同图多评论。
+- [ ] 评论 parser 提取图片引用到 `ParsedComment.media`。
+- [ ] 评论写入阶段登记 media source 和 observation-media 关系。
+- [ ] 为 pending media source 生成 `FETCH_MEDIA_ASSET` 任务。
+- [ ] 新增 `bilibili:media_image` 请求类型和限流配置。
+- [ ] 实现本地文件系统 media storage：`data/media/sha256/ab/cd/<hash>.<ext>`。
+- [ ] 实现 media 图片下载 worker，走统一 http 请求层和限流。
+- [ ] 下载后计算 `blob_sha256` 并复用已有 `media_asset`。
+- [ ] 图片保存到本地文件系统，不引入外部 S3/OSS。
+- [ ] 记录 MIME、文件扩展名、width、height、size_bytes。
+- [ ] 计算 `pixel_sha256`，作为像素完全一致候选依据。
+- [ ] 预留并写入 `phash` / `dhash` / `ahash` 字段。
+- [ ] 回填 `media_sources.media_asset_id` 和 `comment_observation_media.media_asset_id`。
+- [ ] 建立 `media_similarity_edges` ORM 表。
+- [ ] 建立 `media_clusters` 和 `media_cluster_members` ORM 表。
+- [ ] 实现离线相似图片分析任务，不阻塞采集链路。
+- [ ] 图片参与评论状态指纹：`media_ordered_hash` / `media_set_hash`。
+- [ ] 评论状态事件支持 `MEDIA_CHANGED` / `MEDIA_ADDED` / `MEDIA_REMOVED` / `MEDIA_ORDER_CHANGED`。
+
 ## P1: Hot Comments
 
 - [x] 调研 bilibili-api-python 评论接口，确认热门评论和最新评论方法。
