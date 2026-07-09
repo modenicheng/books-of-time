@@ -59,7 +59,7 @@
 - [x] 建立 `DiscoveryScheduler.handle_discovered_videos()`。
 - [x] 新发现视频自动触发 `fetch_video_stats` 任务。
 - [x] 使用 bilibili-api-python `User.get_videos()` 构造 UID 投稿列表请求。
-- [ ] 实现常驻 discovery loop，每分钟扫描配置的矩阵 UID。
+- [x] 实现常驻 discovery loop，每分钟扫描配置的矩阵 UID。
 - [ ] 支持事件级 UID 池和游戏级 UID 池。
 - [ ] 增加 Redis Set 或数据库幂等机制记录已处理 BV。
 - [ ] 对 `pubdate <= now - 2min` 的视频按策略处理，避免发现延迟造成黄金窗口缺口。
