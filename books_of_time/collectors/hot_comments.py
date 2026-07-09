@@ -14,6 +14,7 @@ from books_of_time.db.repositories import (
 )
 from books_of_time.domain.enums import BilibiliRequestType, TaskKind
 from books_of_time.http.client import FetchResult
+from books_of_time.http.errors import ParseFailure
 from books_of_time.parsers.comments import (
     COMMENT_PARSER_VERSION,
     parse_hot_comment_page,
@@ -53,8 +54,16 @@ class HotCommentCollector:
             video_result = await self.client.get_video_stats(bvid)
             video_raw = await self._archive_raw(video_result, session)
             raw_payloads_saved += 1
-            video_payload = json.loads(video_result.body)
-            aid = _extract_aid(video_payload)
+            try:
+                video_payload = json.loads(video_result.body)
+                aid = _extract_aid(video_payload)
+            except Exception as exc:
+                raise ParseFailure(
+                    request_type=video_result.request_type,
+                    message=str(exc),
+                    status_code=video_result.status_code,
+                    fetch_result=video_result,
+                ) from exc
             task.payload = {
                 **task.payload,
                 "aid": aid,
@@ -64,14 +73,22 @@ class HotCommentCollector:
         comments_result = await self.client.get_hot_comments(aid=int(aid), page=page)
         comments_raw = await self._archive_raw(comments_result, session)
         raw_payloads_saved += 1
-        parsed = parse_hot_comment_page(
-            json.loads(comments_result.body),
-            bvid=bvid,
-            oid=int(aid),
-            captured_at=comments_result.captured_at,
-            raw_payload_id=comments_raw.id,
-            page_number=page,
-        )
+        try:
+            parsed = parse_hot_comment_page(
+                json.loads(comments_result.body),
+                bvid=bvid,
+                oid=int(aid),
+                captured_at=comments_result.captured_at,
+                raw_payload_id=comments_raw.id,
+                page_number=page,
+            )
+        except Exception as exc:
+            raise ParseFailure(
+                request_type=comments_result.request_type,
+                message=str(exc),
+                status_code=comments_result.status_code,
+                fetch_result=comments_result,
+            ) from exc
         raw_page = await RawPageObservationRepository(session).insert_from_parsed_page(
             parsed,
             request_type=BilibiliRequestType.COMMENT_HOT,

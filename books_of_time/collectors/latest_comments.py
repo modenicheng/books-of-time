@@ -27,6 +27,7 @@ from books_of_time.db.repositories import (
 )
 from books_of_time.domain.enums import BilibiliRequestType, TaskKind
 from books_of_time.http.client import FetchResult
+from books_of_time.http.errors import ParseFailure
 from books_of_time.parsers.comments import (
     COMMENT_PARSER_VERSION,
     ParsedCommentPage,
@@ -232,11 +233,19 @@ class LatestCommentCollector:
             return int(aid)
         video_result = await self.client.get_video_stats(bvid)
         video_raw = await self._archive_raw(video_result, session, parser_version=None)
-        video_payload = json.loads(video_result.body)
-        data = video_payload.get("data") or {}
-        resolved = data.get("aid")
-        if resolved is None:
-            raise ValueError("Video info payload does not contain data.aid")
+        try:
+            video_payload = json.loads(video_result.body)
+            data = video_payload.get("data") or {}
+            resolved = data.get("aid")
+            if resolved is None:
+                raise ValueError("Video info payload does not contain data.aid")
+        except Exception as exc:
+            raise ParseFailure(
+                request_type=video_result.request_type,
+                message=str(exc),
+                status_code=video_result.status_code,
+                fetch_result=video_result,
+            ) from exc
         task.payload = {
             **task.payload,
             "aid": int(resolved),
@@ -439,15 +448,23 @@ class LatestCommentCollector:
             session,
             parser_version=COMMENT_PARSER_VERSION,
         )
-        parsed = parse_latest_comment_page(
-            json.loads(result.body),
-            bvid=bvid,
-            oid=aid,
-            captured_at=result.captured_at,
-            raw_payload_id=raw.id,
-            page_number=page_number,
-            request_offset=request_offset,
-        )
+        try:
+            parsed = parse_latest_comment_page(
+                json.loads(result.body),
+                bvid=bvid,
+                oid=aid,
+                captured_at=result.captured_at,
+                raw_payload_id=raw.id,
+                page_number=page_number,
+                request_offset=request_offset,
+            )
+        except Exception as exc:
+            raise ParseFailure(
+                request_type=result.request_type,
+                message=str(exc),
+                status_code=result.status_code,
+                fetch_result=result,
+            ) from exc
         raw_page = await RawPageObservationRepository(session).insert_from_parsed_page(
             parsed,
             request_type=BilibiliRequestType.COMMENT_LATEST,

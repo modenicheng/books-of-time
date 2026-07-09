@@ -11,11 +11,13 @@ from books_of_time.db.models import (
     CollectionCoverageStat,
     CollectionTask,
     RawPayload,
+    RequestBackoffState,
     VideoMetricSnapshot,
 )
 from books_of_time.db.repositories import CollectionTaskRepository
 from books_of_time.domain.enums import BilibiliRequestType, TaskKind, TaskStatus
 from books_of_time.http.client import FetchResult
+from books_of_time.http.errors import ParseFailure
 from books_of_time.storage.filesystem import RawPayloadFileStore
 from books_of_time.worker import Worker
 
@@ -44,6 +46,19 @@ class FakeBilibiliClient:
             params={"bvid": bvid},
             status_code=200,
             body=body,
+            captured_at=datetime(2026, 7, 8, 10, 0, tzinfo=UTC),
+        )
+
+
+class FakeMalformedBilibiliClient:
+    async def get_video_stats(self, bvid: str) -> FetchResult:
+        return FetchResult(
+            request_type=BilibiliRequestType.VIDEO_STATS,
+            method="GET",
+            url="https://api.bilibili.com/x/web-interface/archive/stat",
+            params={"bvid": bvid},
+            status_code=200,
+            body=b'{"code":0,"data":{}}',
             captured_at=datetime(2026, 7, 8, 10, 0, tzinfo=UTC),
         )
 
@@ -108,5 +123,62 @@ async def test_worker_fetch_video_stats_archives_raw_then_writes_snapshot(
         assert snapshot.bvid == "BV1abc"
         assert snapshot.view_count == 1234
         assert snapshot.raw_payload_id == raw.id
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_worker_records_video_stats_parse_error_as_request_backoff(
+    tmp_path,
+) -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    now = datetime(2026, 7, 8, 10, 0, tzinfo=UTC)
+
+    async with session_factory() as session:
+        await CollectionTaskRepository(session).enqueue(
+            kind=TaskKind.FETCH_VIDEO_STATS,
+            target_type="video",
+            target_id="BV1abc",
+            priority=100,
+            payload={"bvid": "BV1abc"},
+            not_before=now - timedelta(seconds=1),
+        )
+        await session.commit()
+
+    worker = Worker(
+        session_factory=session_factory,
+        collectors={
+            TaskKind.FETCH_VIDEO_STATS: VideoStatsCollector(
+                client=FakeMalformedBilibiliClient(),
+                raw_store=RawPayloadFileStore(tmp_path),
+                run_id="test-run",
+            )
+        },
+        run_id="test-run",
+        lease_owner="worker-test",
+        request_backoff_defaults={"parse_error": 30},
+    )
+
+    with pytest.raises(ParseFailure):
+        await worker.run_once(now=now)
+
+    async with session_factory() as session:
+        coverage = await session.scalar(select(CollectionCoverageStat))
+        backoff = await session.scalar(select(RequestBackoffState))
+        task = await session.scalar(select(CollectionTask))
+
+        assert coverage is not None
+        assert coverage.status == "failed"
+        assert coverage.reason == "parse_error"
+        assert backoff is not None
+        assert backoff.error_kind == "parse_error"
+        assert backoff.backoff_until == now + timedelta(seconds=30)
+        assert task is not None
+        assert task.status == TaskStatus.PENDING
+        assert task.not_before == now + timedelta(seconds=30)
 
     await engine.dispose()

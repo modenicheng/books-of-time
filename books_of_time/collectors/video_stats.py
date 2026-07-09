@@ -13,6 +13,7 @@ from books_of_time.db.repositories import (
 )
 from books_of_time.domain.enums import TaskKind
 from books_of_time.http.client import FetchResult
+from books_of_time.http.errors import ParseFailure
 from books_of_time.parsers.video import VIDEO_PARSER_VERSION, parse_video_stats
 from books_of_time.storage.filesystem import RawPayloadFileStore
 
@@ -53,11 +54,19 @@ class VideoStatsCollector:
             parser_version=VIDEO_PARSER_VERSION,
         )
 
-        parsed = parse_video_stats(
-            json.loads(result.body),
-            captured_at=result.captured_at,
-            raw_payload_id=raw.id,
-        )
+        try:
+            parsed = parse_video_stats(
+                json.loads(result.body),
+                captured_at=result.captured_at,
+                raw_payload_id=raw.id,
+            )
+        except Exception as exc:
+            raise ParseFailure(
+                request_type=result.request_type,
+                message=str(exc),
+                status_code=result.status_code,
+                fetch_result=result,
+            ) from exc
         await VideoMetricSnapshotRepository(session).insert_from_parsed(parsed)
         return CoverageDraft(
             task_kind=TaskKind.FETCH_VIDEO_STATS,

@@ -31,9 +31,9 @@
 - [x] 建立 `raw_payloads` ORM 索引表。
 - [x] 保存 raw payload hash、storage URI、status code、request type 和 parser version。
 - [x] 建立 `raw_page_observations` 表。
-- [ ] 为请求失败建立统一错误类型：timeout、403、429、captcha、5xx、parse_error。
-- [ ] 建立 `request_backoff_states` 表。
-- [ ] 将失败退避接入 worker 和 request layer。
+- [x] 为请求失败建立统一错误类型：timeout、403、429、captcha、5xx、parse_error。
+- [x] 建立 `request_backoff_states` 表。
+- [x] 将失败退避接入 worker 和 request layer。
 - [ ] 增加 raw inspect CLI：`bot raw inspect <raw_payload_id>`。
 
 ## P0: Task Queue And Worker
