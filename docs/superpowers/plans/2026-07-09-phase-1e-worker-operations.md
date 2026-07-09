@@ -1,152 +1,165 @@
 # Phase 1E Worker Operations Implementation Plan
 
-> **Execution mode:** Implement this plan inline in the main session. Avoid opening subagents unless the user explicitly asks for them again.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make the existing collection task queue operable with a worker loop, queue inspection, failed-task retry, and expired lease recovery.
+**Goal:** Make the existing task queue operable through a long-running worker loop, task inspection CLI, failed-task retry CLI, and expired lease recovery.
 
-**Architecture:** Extend `CollectionTaskRepository` with queue operations, add a cooperative `Worker.run_loop()` around existing `run_once()`, and expose small CLI helpers for task inspection and retry. Keep behavior in repositories and worker methods so CLI stays thin and testable.
+**Architecture:** Extend `CollectionTaskRepository` with small queue operations, then have `Worker` recover expired leases before each lease attempt and expose a cooperative `run_loop()`. Add CLI commands that call those repository and worker APIs directly.
 
 **Tech Stack:** Python 3.12, SQLAlchemy async ORM, argparse CLI, pytest-asyncio, Ruff.
 
 ## Global Constraints
 
-- Keep the worker loop cooperative and simple. No multiprocessing, no daemon supervisor, no signal framework in this slice.
+- Keep the worker loop cooperative and simple. No multiprocessing, daemon supervisor, or signal framework in this slice.
 - The loop must be testable without waiting in real time.
-- The loop must not swallow collector exceptions silently. `run_once()` keeps its current behavior of re-raising collector failures after committing retry state.
-- CLI task list is inspection-only.
+- `run_once()` keeps re-raising collector failures after committing retry state.
+- `task list` is inspection-only.
 - `retry-failed` only moves `failed` tasks back to `pending`; it does not clone tasks or reset raw evidence.
 - Lease recovery only handles tasks stuck in `running` with `lease_until <= now`.
+- Do not increment `retry_count` during lease recovery.
 - Task uniqueness/idempotency keys remain out of scope for Phase 1E.
+- Execute inline in this main session; do not dispatch subagents unless the user asks again.
 - Preserve unrelated dirty changes in `books_of_time/http/client.py` and `books_of_time/http/rate_limiter.py`.
-- Execute inline in the main session unless the user explicitly asks for subagents.
 
 ---
 
 ## File Structure
 
-- Modify `books_of_time/db/repositories.py`: add `recover_expired_leases`, `list_tasks`, and `retry_failed`.
-- Modify `books_of_time/worker.py`: add `run_loop`.
-- Modify `books_of_time/cli.py`: add `worker loop`, `task list`, `task retry-failed`, and helper functions.
+- Modify `books_of_time/db/repositories.py`: add task listing, failed retry, and expired lease recovery methods.
+- Modify `books_of_time/worker.py`: add `run_loop()` and call lease recovery before leasing a task.
+- Modify `books_of_time/cli.py`: add `worker loop`, `task list`, and `task retry-failed` commands.
+- Modify `docs/TODO.md`: mark completed Phase 1E Task Queue items.
 - Modify `tests/test_task_queue.py`: repository queue operation tests.
-- Modify `tests/test_worker_coverage.py`: worker loop tests using lightweight collectors.
-- Modify `tests/test_cli.py`: parser and helper tests.
-- Modify `docs/TODO.md`: mark completed Task Queue items.
+- Modify `tests/test_worker_loop.py`: worker loop behavior tests.
+- Modify `tests/test_cli.py`: parser and CLI helper tests.
 
 ---
 
-### Task 1: Queue Repository Operations
+### Task 1: Repository Queue Operations
 
 **Files:**
 - Modify: `books_of_time/db/repositories.py`
-- Modify: `tests/test_task_queue.py`
+- Test: `tests/test_task_queue.py`
 
 **Interfaces:**
-- Produces: `CollectionTaskRepository.recover_expired_leases(now: datetime, limit: int = 100) -> int`
-- Produces: `CollectionTaskRepository.list_tasks(status: TaskStatus | None = None, limit: int = 20) -> list[CollectionTask]`
-- Produces: `CollectionTaskRepository.retry_failed(now: datetime, target_id: str | None = None, kind: TaskKind | None = None, limit: int = 100) -> int`
+- Produces: `CollectionTaskRepository.list_tasks(status: TaskStatus | None = None, limit: int = 20) -> list[CollectionTask]`.
+- Produces: `CollectionTaskRepository.retry_failed(target_id: str | None, kind: TaskKind | None, now: datetime, limit: int = 100) -> int`.
+- Produces: `CollectionTaskRepository.recover_expired_leases(now: datetime, limit: int = 100) -> int`.
 
 - [ ] **Step 1: Write failing repository tests**
 
-Add tests to `tests/test_task_queue.py`:
+Add tests that enqueue tasks, manually set statuses, and assert:
 
 ```python
-@pytest.mark.asyncio
-async def test_task_repository_recovers_expired_running_leases() -> None:
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    session_factory = async_sessionmaker(engine, expire_on_commit=False)
-    now = datetime(2099, 1, 1, tzinfo=UTC)
+async def test_task_repository_lists_by_status_and_limit(db_session):
+    repo = CollectionTaskRepository(db_session)
+    await repo.enqueue(
+        kind=TaskKind.FETCH_VIDEO_STATS,
+        target_type="video",
+        target_id="BV1",
+        priority=100,
+        payload={"bvid": "BV1"},
+        not_before=datetime(2099, 1, 1, tzinfo=UTC),
+    )
+    second = await repo.enqueue(
+        kind=TaskKind.FETCH_HOT_COMMENTS,
+        target_type="video",
+        target_id="BV2",
+        priority=90,
+        payload={"bvid": "BV2"},
+        not_before=datetime(2099, 1, 1, tzinfo=UTC),
+    )
+    second.status = TaskStatus.FAILED
+    await db_session.commit()
 
-    async with session_factory() as session:
-        task = await CollectionTaskRepository(session).enqueue(
-            kind=TaskKind.FETCH_VIDEO_STATS,
-            target_type="video",
-            target_id="BV1xx",
-            priority=10,
-            payload={"bvid": "BV1xx"},
-            not_before=now - timedelta(minutes=10),
-        )
-        task.status = TaskStatus.RUNNING
-        task.lease_owner = "dead-worker"
-        task.lease_until = now - timedelta(seconds=1)
-        task.retry_count = 2
-        await session.commit()
+    failed = await repo.list_tasks(status=TaskStatus.FAILED, limit=10)
 
-        recovered = await CollectionTaskRepository(session).recover_expired_leases(
-            now=now
-        )
-        await session.commit()
-
-        assert recovered == 1
-        assert task.status == TaskStatus.PENDING
-        assert task.lease_owner is None
-        assert task.lease_until is None
-        assert task.not_before == now
-        assert task.retry_count == 2
-
-    await engine.dispose()
+    assert [task.target_id for task in failed] == ["BV2"]
 ```
 
-Add list/retry-failed tests:
+```python
+async def test_task_repository_retries_failed_tasks(db_session):
+    repo = CollectionTaskRepository(db_session)
+    task = await repo.enqueue(
+        kind=TaskKind.FETCH_LATEST_COMMENTS,
+        target_type="video",
+        target_id="BV3",
+        priority=70,
+        payload={"bvid": "BV3"},
+        not_before=datetime(2099, 1, 1, tzinfo=UTC),
+    )
+    task.status = TaskStatus.FAILED
+    task.retry_count = 3
+    task.lease_owner = "dead-worker"
+    task.lease_until = datetime(2099, 1, 1, tzinfo=UTC)
+    await db_session.commit()
+
+    retried = await repo.retry_failed(
+        target_id="BV3",
+        kind=TaskKind.FETCH_LATEST_COMMENTS,
+        now=datetime(2099, 1, 2, tzinfo=UTC),
+        limit=100,
+    )
+    await db_session.refresh(task)
+
+    assert retried == 1
+    assert task.status == TaskStatus.PENDING
+    assert task.retry_count == 0
+    assert task.lease_owner is None
+    assert task.lease_until is None
+```
 
 ```python
-@pytest.mark.asyncio
-async def test_task_repository_lists_by_status_and_retries_failed() -> None:
-    ...
-    pending = await repo.list_tasks(status=TaskStatus.PENDING, limit=10)
-    assert [task.target_id for task in pending] == ["BVPENDING"]
-    retried = await repo.retry_failed(now=now, target_id="BVFAILED", limit=10)
-    assert retried == 1
-    assert failed.status == TaskStatus.PENDING
-    assert failed.retry_count == 0
+async def test_task_repository_recovers_expired_running_leases(db_session):
+    repo = CollectionTaskRepository(db_session)
+    task = await repo.enqueue(
+        kind=TaskKind.FETCH_VIDEO_STATS,
+        target_type="video",
+        target_id="BV4",
+        priority=100,
+        payload={"bvid": "BV4"},
+        not_before=datetime(2099, 1, 1, tzinfo=UTC),
+    )
+    task.status = TaskStatus.RUNNING
+    task.retry_count = 2
+    task.lease_owner = "dead-worker"
+    task.lease_until = datetime(2099, 1, 1, tzinfo=UTC)
+    await db_session.commit()
+
+    recovered = await repo.recover_expired_leases(
+        now=datetime(2099, 1, 1, 0, 0, 1, tzinfo=UTC),
+        limit=100,
+    )
+    await db_session.refresh(task)
+
+    assert recovered == 1
+    assert task.status == TaskStatus.PENDING
+    assert task.retry_count == 2
+    assert task.not_before == datetime(2099, 1, 1, 0, 0, 1, tzinfo=UTC)
+    assert task.lease_owner is None
+    assert task.lease_until is None
 ```
 
 - [ ] **Step 2: Verify RED**
 
+Run:
+
 ```bash
 uv run pytest tests/test_task_queue.py -v
 ```
 
-Expected: FAIL because repository methods do not exist.
+Expected: FAIL because the repository methods do not exist.
 
 - [ ] **Step 3: Implement repository methods**
 
-In `books_of_time/db/repositories.py`, add methods to `CollectionTaskRepository`:
-
-```python
-async def recover_expired_leases(self, *, now: datetime, limit: int = 100) -> int:
-    rows = await self.session.scalars(
-        select(CollectionTask)
-        .where(
-            CollectionTask.status == TaskStatus.RUNNING,
-            CollectionTask.lease_until.is_not(None),
-            CollectionTask.lease_until <= now,
-        )
-        .order_by(CollectionTask.lease_until.asc(), CollectionTask.id.asc())
-        .limit(limit)
-        .with_for_update(skip_locked=True)
-    )
-    tasks = list(rows)
-    for task in tasks:
-        task.status = TaskStatus.PENDING
-        task.lease_owner = None
-        task.lease_until = None
-        task.not_before = now
-    await self.session.flush()
-    return len(tasks)
-```
-
-Add `list_tasks` and `retry_failed` with the interfaces above. `retry_failed`
-filters `TaskStatus.FAILED`, optional `target_id`, optional `kind`, orders by
-`updated_at.asc(), id.asc()`, resets status/lease/retry fields, and returns the
-count.
+Use SQLAlchemy `select(CollectionTask)`, order by priority and id for list output, filter failed tasks oldest first for retry, and update matching expired running leases in ORM objects to keep behavior easy to inspect.
 
 - [ ] **Step 4: Verify GREEN**
 
+Run:
+
 ```bash
 uv run pytest tests/test_task_queue.py -v
-uv run ruff check books_of_time/db/repositories.py tests/test_task_queue.py
 ```
 
 Expected: PASS.
@@ -160,107 +173,81 @@ git commit -m "feat: add task queue operations"
 
 ---
 
-### Task 2: Worker Loop
+### Task 2: Worker Loop And Lease Recovery
 
 **Files:**
 - Modify: `books_of_time/worker.py`
-- Modify: `tests/test_worker_coverage.py`
+- Test: `tests/test_worker_loop.py`
 
 **Interfaces:**
-- Consumes: `CollectionTaskRepository.recover_expired_leases(...)`
-- Produces: `Worker.run_loop(idle_sleep_seconds: float = 5, max_iterations: int | None = None, stop_when_idle: bool = False, sleep: Callable[[float], Awaitable[None]] | None = None) -> int`
+- Consumes: `CollectionTaskRepository.recover_expired_leases(now, limit)`.
+- Produces: `Worker.run_loop(idle_sleep_seconds: float = 5, max_iterations: int | None = None, stop_when_idle: bool = False, sleep: Callable[[float], Awaitable[None]] | None = None) -> int`.
 
 - [ ] **Step 1: Write failing worker loop tests**
 
-Add tests to `tests/test_worker_coverage.py`:
+Add tests that use a simple collector returning `CoverageDraft` and assert:
 
 ```python
-class CountingCollector:
-    def __init__(self) -> None:
-        self.count = 0
+async def test_worker_loop_runs_due_tasks_until_idle(session_factory):
+    slept = []
 
-    async def collect(self, task: CollectionTask, session) -> CoverageDraft:
-        self.count += 1
-        return CoverageDraft(
-            task_kind=task.kind,
-            target_type=task.target_type,
-            target_id=task.target_id,
-            reason="complete",
-        )
+    async def fake_sleep(seconds: float) -> None:
+        slept.append(seconds)
+
+    worker = Worker(
+        session_factory=session_factory,
+        collectors={TaskKind.FETCH_VIDEO_STATS: collector},
+        run_id="run-loop-test",
+        lease_owner="worker-1",
+    )
+
+    executed = await worker.run_loop(
+        idle_sleep_seconds=0.5,
+        max_iterations=3,
+        sleep=fake_sleep,
+    )
+
+    assert executed == 2
+    assert slept == [0.5]
 ```
-
-Test two due tasks execute and loop stops when idle:
 
 ```python
-executed = await worker.run_loop(
-    idle_sleep_seconds=0,
-    max_iterations=5,
-    stop_when_idle=True,
-    sleep=lambda seconds: None,
-)
-assert executed == 2
-```
+async def test_worker_recovers_expired_lease_before_leasing(session_factory):
+    async with session_factory() as session:
+        task = await CollectionTaskRepository(session).enqueue(...)
+        task.status = TaskStatus.RUNNING
+        task.lease_owner = "dead-worker"
+        task.lease_until = datetime(2099, 1, 1, tzinfo=UTC)
+        await session.commit()
 
-Test expired lease recovery before leasing.
+    worker = Worker(...)
+    executed = await worker.run_once(
+        now=datetime(2099, 1, 1, 0, 0, 1, tzinfo=UTC),
+    )
+
+    assert executed is True
+```
 
 - [ ] **Step 2: Verify RED**
 
+Run:
+
 ```bash
-uv run pytest tests/test_worker_coverage.py -v
+uv run pytest tests/test_worker_loop.py -v
 ```
 
-Expected: FAIL because `run_loop` does not exist.
+Expected: FAIL because `run_loop()` and recovery integration do not exist.
 
-- [ ] **Step 3: Implement `run_loop`**
+- [ ] **Step 3: Implement worker behavior**
 
-In `books_of_time/worker.py`, import:
-
-```python
-import asyncio
-from collections.abc import Awaitable, Callable, Mapping
-```
-
-Add:
-
-```python
-async def run_loop(
-    self,
-    *,
-    idle_sleep_seconds: float = 5,
-    max_iterations: int | None = None,
-    stop_when_idle: bool = False,
-    sleep: Callable[[float], Awaitable[None] | None] | None = None,
-) -> int:
-    sleep_func = sleep or asyncio.sleep
-    iterations = 0
-    executed_count = 0
-    while max_iterations is None or iterations < max_iterations:
-        iterations += 1
-        now = datetime.now(UTC)
-        async with self.session_factory() as session:
-            recovered = await CollectionTaskRepository(session).recover_expired_leases(
-                now=now
-            )
-            await session.commit()
-        executed = await self.run_once(now=now)
-        if executed:
-            executed_count += 1
-            continue
-        if stop_when_idle:
-            break
-        maybe_awaitable = sleep_func(idle_sleep_seconds)
-        if maybe_awaitable is not None:
-            await maybe_awaitable
-    return executed_count
-```
-
-The local `recovered` variable can be omitted if unused.
+Add `recover_expired_leases()` at the start of `run_once()`. Add `run_loop()` using injectable `sleep` and `max_iterations` for tests. Propagate exceptions from `run_once()`.
 
 - [ ] **Step 4: Verify GREEN**
 
+Run:
+
 ```bash
-uv run pytest tests/test_worker_coverage.py tests/test_task_queue.py -v
-uv run ruff check books_of_time/worker.py tests/test_worker_coverage.py
+uv run pytest tests/test_worker_loop.py tests/test_worker_coverage.py -v
 ```
 
 Expected: PASS.
@@ -268,149 +255,145 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add books_of_time/worker.py tests/test_worker_coverage.py
-git commit -m "feat: add cooperative worker loop"
+git add books_of_time/worker.py tests/test_worker_loop.py
+git commit -m "feat: add worker loop"
 ```
 
 ---
 
-### Task 3: Task CLI And Progress Docs
+### Task 3: CLI Worker And Task Operations
 
 **Files:**
 - Modify: `books_of_time/cli.py`
-- Modify: `tests/test_cli.py`
-- Modify: `docs/TODO.md`
+- Test: `tests/test_cli.py`
 
 **Interfaces:**
-- Consumes: queue repository methods.
-- Produces: `bot worker loop`
-- Produces: `bot task list`
-- Produces: `bot task retry-failed`
+- Consumes: `Worker.run_loop(...)`.
+- Consumes: `CollectionTaskRepository.list_tasks(...)`.
+- Consumes: `CollectionTaskRepository.retry_failed(...)`.
 
 - [ ] **Step 1: Write failing CLI tests**
 
-In `tests/test_cli.py`, add parser tests:
+Add parser tests:
 
 ```python
-def test_worker_loop_parser_accepts_options() -> None:
-    args = build_parser().parse_args(
-        ["worker", "loop", "--idle-seconds", "0.1", "--max-iterations", "2"]
-    )
+def test_parser_accepts_worker_loop():
+    args = build_parser().parse_args(["worker", "loop", "--max-iterations", "1"])
+
+    assert args.command == "worker"
     assert args.worker_command == "loop"
-    assert args.idle_seconds == 0.1
-    assert args.max_iterations == 2
-
-
-def test_task_list_and_retry_failed_parsers() -> None:
-    list_args = build_parser().parse_args(["task", "list", "--status", "failed"])
-    assert list_args.command == "task"
-    assert list_args.task_command == "list"
-    retry_args = build_parser().parse_args(
-        ["task", "retry-failed", "--target-id", "BV1xx", "--kind", "fetch_video_stats"]
-    )
-    assert retry_args.task_command == "retry-failed"
+    assert args.max_iterations == 1
 ```
 
-Add helper tests for `_list_tasks` and `_retry_failed_tasks` using a temporary
-sqlite database, similar to existing coverage helper tests.
+```python
+def test_parser_accepts_task_list_and_retry_failed():
+    list_args = build_parser().parse_args(["task", "list", "--status", "failed"])
+    retry_args = build_parser().parse_args(
+        [
+            "task",
+            "retry-failed",
+            "--target-id",
+            "BV1",
+            "--kind",
+            "fetch_latest_comments",
+        ]
+    )
+
+    assert list_args.task_command == "list"
+    assert list_args.status == "failed"
+    assert retry_args.task_command == "retry-failed"
+    assert retry_args.target_id == "BV1"
+    assert retry_args.kind == "fetch_latest_comments"
+```
+
+Add helper tests for `_list_tasks()` and `_retry_failed_tasks()` using the test DB.
 
 - [ ] **Step 2: Verify RED**
+
+Run:
 
 ```bash
 uv run pytest tests/test_cli.py -v
 ```
 
-Expected: FAIL because commands/helpers do not exist.
+Expected: FAIL because commands and helpers do not exist.
 
 - [ ] **Step 3: Implement CLI**
 
-In `build_parser()`:
+Add:
 
-- change `worker_sub.add_parser("run-once")` to also add `loop` with
-  `--idle-seconds`, `--max-iterations`, and `--stop-when-idle`.
-- add `task = subparsers.add_parser("task")`, with `list` and `retry-failed`.
+- `bot worker loop --idle-sleep-seconds 5 --max-iterations N --stop-when-idle`
+- `bot task list --status STATUS --limit LIMIT`
+- `bot task retry-failed --target-id TARGET --kind KIND --limit LIMIT`
 
-In `_run()`:
+Clamp list limits to `200` and retry limits to `500`. Parse `TaskStatus` and `TaskKind` from enum values.
 
-- `worker run-once` keeps current behavior.
-- `worker loop` builds worker and calls `run_loop(...)`.
-- `task list` calls `_list_tasks(cfg, status, limit)`.
-- `task retry-failed` calls `_retry_failed_tasks(cfg, target_id, kind, limit)`.
+- [ ] **Step 4: Verify GREEN**
 
-Add helpers:
+Run:
 
-```python
-async def _list_tasks(cfg: dict, status: str | None, limit: int) -> None: ...
-async def _retry_failed_tasks(
-    cfg: dict,
-    target_id: str | None,
-    kind: str | None,
-    limit: int,
-) -> None: ...
+```bash
+uv run pytest tests/test_cli.py -v
 ```
 
-Use `TaskStatus(status)` and `TaskKind(kind)` for validation.
+Expected: PASS.
 
-- [ ] **Step 4: Update TODO**
+- [ ] **Step 5: Commit**
 
-Mark these in `docs/TODO.md`:
-
-```markdown
-- [x] 增加 `worker loop`。
-- [x] 增加 `task list` CLI。
-- [x] 增加 `task retry-failed` CLI。
-- [x] 增加 running task lease 过期回收。
-- [x] 增加 collection run id 与 run 生命周期表。
+```bash
+git add books_of_time/cli.py tests/test_cli.py
+git commit -m "feat: add task operations cli"
 ```
+
+---
+
+### Task 4: TODO Sync And Full Verification
+
+**Files:**
+- Modify: `docs/TODO.md`
+
+**Interfaces:**
+- Consumes: completed repository, worker, and CLI behavior.
+
+- [ ] **Step 1: Update TODO checkboxes**
+
+Mark these items complete:
+
+- `增加 worker loop。`
+- `增加 task list CLI。`
+- `增加 task retry-failed CLI。`
+- `增加 running task lease 过期回收。`
+- `增加 collection run id 与 run 生命周期表。`
 
 Leave task uniqueness/idempotency unchecked.
 
-- [ ] **Step 5: Full verification**
+- [ ] **Step 2: Run full tests**
 
 ```bash
 uv run pytest
+```
+
+Expected: all tests pass.
+
+- [ ] **Step 3: Run lint**
+
+```bash
 uv run ruff check .
 ```
 
-Expected:
+Expected: exit code 0.
 
-```text
-61+ passed
-All checks passed!
-```
-
-- [ ] **Step 6: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
-git add books_of_time/cli.py tests/test_cli.py docs/TODO.md
-git commit -m "feat: add task queue cli operations"
+git add docs/TODO.md
+git commit -m "docs: mark worker operations progress"
 ```
 
 ---
 
 ## Self-Review
 
-Spec coverage:
-
-- Worker loop: Task 2.
-- `bot worker loop`: Task 3.
-- `bot task list`: Task 3.
-- `bot task retry-failed`: Task 3.
-- Expired lease recovery: Task 1 and Task 2.
-- TODO sync: Task 3.
-
-Placeholder scan:
-
-- No `TBD`, no unspecified "appropriate" handling, and every task includes a
-  concrete test command.
-
-Type consistency:
-
-- CLI status uses `TaskStatus` values.
-- CLI kind uses `TaskKind` values.
-- Repository methods return concrete counts/lists consumed by worker and CLI.
-
-Execution choice:
-
-Execute inline in the main session. Do not dispatch subagents unless the user
-explicitly asks for them again.
+- Spec coverage: the plan covers worker loop, CLI worker loop, task list, retry-failed, expired lease recovery, TODO sync, and verification.
+- Placeholder scan: no TBD/fill-later placeholders are present.
+- Type consistency: repository, worker, and CLI method names match the Phase 1E design.
