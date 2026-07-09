@@ -9,7 +9,10 @@ from uuid import uuid4
 from books_of_time.app import build_bilibili_client, build_session_factory, build_worker
 from books_of_time.common.logger import get_logger
 from books_of_time.config import load_config
-from books_of_time.db.repositories import CollectionTaskRepository
+from books_of_time.db.repositories import (
+    CollectionCoverageRepository,
+    CollectionTaskRepository,
+)
 from books_of_time.db.schema import create_schema
 from books_of_time.domain.enums import TaskKind
 from books_of_time.parsers.discovery import parse_user_video_list
@@ -40,6 +43,10 @@ def build_parser() -> argparse.ArgumentParser:
     latest_comments.add_argument("bvid")
     latest_comments.add_argument("--priority", type=int, default=70)
     latest_comments.add_argument("--max-scan-seconds", type=float, default=55)
+
+    coverage = subparsers.add_parser("coverage")
+    coverage.add_argument("bvid")
+    coverage.add_argument("--limit", type=int, default=20)
 
     worker = subparsers.add_parser("worker")
     worker_sub = worker.add_subparsers(dest="worker_command", required=True)
@@ -80,6 +87,10 @@ async def _run(args: argparse.Namespace) -> None:
             args.priority,
             args.max_scan_seconds,
         )
+        return
+
+    if args.command == "coverage":
+        await _show_coverage(cfg, args.bvid, args.limit)
         return
 
     if args.command == "worker" and args.worker_command == "run-once":
@@ -158,6 +169,37 @@ async def _enqueue_latest_comments(
         )
         await session.commit()
     logger.info("Queued latest comments task for %s", bvid)
+
+
+async def _show_coverage(cfg: dict, bvid: str, limit: int) -> None:
+    session_factory = build_session_factory(cfg)
+    async with session_factory() as session:
+        rows = await CollectionCoverageRepository(session).list_for_target(
+            target_type="video",
+            target_id=bvid,
+            limit=limit,
+        )
+
+    if not rows:
+        logger.info("No coverage rows for %s", bvid)
+        return
+
+    for row in rows:
+        logger.info(
+            "%s %s status=%s reason=%s pages=%s/%s items=%s "
+            "frontier_reached=%s frontier_missing=%s truncated=%s corrupted=%s",
+            row.finished_at.isoformat(),
+            row.task_kind,
+            row.status,
+            row.reason,
+            row.pages_succeeded,
+            row.pages_requested,
+            row.items_observed,
+            row.frontier_reached,
+            row.frontier_missing,
+            row.truncated,
+            row.corrupted,
+        )
 
 
 async def _discover_user(cfg: dict, mid: str, page: int) -> None:
