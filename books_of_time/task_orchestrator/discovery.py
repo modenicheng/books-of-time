@@ -16,6 +16,8 @@ class DiscoveredVideo:
     bvid: str
     pubdate: datetime
     source_mid: str
+    source_pool_type: str | None = None
+    source_pool_id: str | None = None
 
 
 class DiscoveryScheduler:
@@ -65,6 +67,8 @@ class DiscoveryScheduler:
                     "bvid": video.bvid,
                     "source_mid": video.source_mid,
                     "reason": "fresh_discovery",
+                    "source_pool_type": video.source_pool_type,
+                    "source_pool_id": video.source_pool_id,
                 },
                 not_before=now,
                 idempotency_key=(

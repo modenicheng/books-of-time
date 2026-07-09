@@ -11,7 +11,10 @@ from books_of_time.db.base import Base
 from books_of_time.db.models import CollectionTask, KnownVideo
 from books_of_time.domain.enums import BilibiliRequestType
 from books_of_time.http.client import FetchResult
-from books_of_time.task_orchestrator.discovery_loop import DiscoveryLoop
+from books_of_time.task_orchestrator.discovery_loop import (
+    DiscoveryLoop,
+    DiscoveryUidSource,
+)
 
 
 class FakeDiscoveryClient:
@@ -83,6 +86,40 @@ async def test_discovery_loop_scans_configured_uids_and_enqueues_tasks() -> None
     assert client.calls == [("100", 1), ("200", 1)]
     assert [video.bvid for video in known] == ["BV100", "BV200"]
     assert [task.target_id for task in tasks] == ["BV100", "BV200"]
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_discovery_loop_preserves_uid_pool_metadata() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    now = datetime(2099, 1, 1, tzinfo=UTC)
+    client = FakeDiscoveryClient(
+        {"300": _video_list_result("300", "BVGAME", captured_at=now)}
+    )
+    loop = DiscoveryLoop(
+        session_factory=session_factory,
+        client=client,
+        uid_sources=[
+            DiscoveryUidSource(mid="300", pool_type="game", pool_id="genshin")
+        ],
+    )
+
+    result = await loop.run_once(now=now)
+
+    async with session_factory() as session:
+        task = await session.scalar(select(CollectionTask))
+
+    assert result.uids_scanned == 1
+    assert client.calls == [("300", 1)]
+    assert task is not None
+    assert task.payload["source_mid"] == "300"
+    assert task.payload["source_pool_type"] == "game"
+    assert task.payload["source_pool_id"] == "genshin"
 
     await engine.dispose()
 

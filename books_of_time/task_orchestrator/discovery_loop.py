@@ -37,18 +37,38 @@ class DiscoveryLoopResult:
         )
 
 
+@dataclass(frozen=True)
+class DiscoveryUidSource:
+    mid: str
+    pool_type: str = "matrix"
+    pool_id: str | None = None
+
+
 class DiscoveryLoop:
     def __init__(
         self,
         *,
         session_factory: async_sessionmaker[AsyncSession],
         client: DiscoveryVideoClient,
-        matrix_uids: list[str],
+        matrix_uids: list[str] | None = None,
+        uid_sources: list[DiscoveryUidSource] | None = None,
         fresh_video_window: timedelta = timedelta(minutes=2),
     ) -> None:
         self.session_factory = session_factory
         self.client = client
-        self.matrix_uids = [str(uid) for uid in matrix_uids]
+        if uid_sources is not None:
+            self.uid_sources = [
+                DiscoveryUidSource(
+                    mid=str(source.mid),
+                    pool_type=source.pool_type,
+                    pool_id=source.pool_id,
+                )
+                for source in uid_sources
+            ]
+        else:
+            self.uid_sources = [
+                DiscoveryUidSource(mid=str(uid)) for uid in (matrix_uids or [])
+            ]
         self.scheduler = DiscoveryScheduler(
             session_factory=session_factory,
             fresh_video_window=fresh_video_window,
@@ -58,12 +78,14 @@ class DiscoveryLoop:
         effective_now = now or datetime.now(UTC)
         result = DiscoveryLoopResult()
 
-        for mid in self.matrix_uids:
+        for source in self.uid_sources:
             try:
-                fetched = await self.client.get_user_video_list(mid=mid, page=1)
+                fetched = await self.client.get_user_video_list(mid=source.mid, page=1)
                 videos = parse_user_video_list(
                     json.loads(fetched.body),
-                    source_mid=mid,
+                    source_mid=source.mid,
+                    source_pool_type=source.pool_type,
+                    source_pool_id=source.pool_id,
                 )
                 async with self.session_factory() as session:
                     created = await self.scheduler.handle_discovered_videos(
@@ -73,7 +95,13 @@ class DiscoveryLoop:
                     )
                     await session.commit()
             except Exception as exc:
-                logger.warning("Discovery scan failed for uid=%s: %s", mid, exc)
+                logger.warning(
+                    "Discovery scan failed for uid=%s pool=%s:%s: %s",
+                    source.mid,
+                    source.pool_type,
+                    source.pool_id,
+                    exc,
+                )
                 result = result.add(DiscoveryLoopResult(errors=1))
                 continue
 

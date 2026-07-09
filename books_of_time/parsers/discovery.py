@@ -10,6 +10,8 @@ def parse_user_video_list(
     payload: dict[str, Any],
     *,
     source_mid: str,
+    source_pool_type: str | None = None,
+    source_pool_id: str | None = None,
 ) -> list[DiscoveredVideo]:
     archives = payload.get("data", {}).get("list", {}).get("vlist", [])
     videos: list[DiscoveredVideo] = []
@@ -23,6 +25,8 @@ def parse_user_video_list(
                 bvid=str(bvid),
                 pubdate=datetime.fromtimestamp(int(pubdate), tz=UTC),
                 source_mid=source_mid,
+                source_pool_type=source_pool_type,
+                source_pool_id=source_pool_id,
             )
         )
     return videos
