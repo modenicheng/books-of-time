@@ -33,6 +33,17 @@ class ParsedVideoInfoSnapshot:
     raw_payload_id: int | None
 
 
+@dataclass(frozen=True)
+class ParsedVideoAvailabilitySnapshot:
+    bvid: str
+    captured_at: datetime
+    status: str
+    bili_code: int | None
+    bili_message: str | None
+    http_status_code: int | None
+    raw_payload_id: int | None
+
+
 def parse_video_stats(
     payload: dict[str, Any],
     *,
@@ -51,6 +62,29 @@ def parse_video_stats(
         share_count=stats.get("share"),
         reply_count=stats.get("reply"),
         danmaku_count=stats.get("danmaku"),
+        raw_payload_id=raw_payload_id,
+    )
+
+
+def parse_video_availability_snapshot(
+    payload: dict[str, Any],
+    *,
+    captured_at: datetime,
+    raw_payload_id: int | None,
+    requested_bvid: str,
+    http_status_code: int | None,
+) -> ParsedVideoAvailabilitySnapshot:
+    data = payload.get("data") or {}
+    code = _optional_int(payload.get("code"))
+    message = payload.get("message")
+    bvid = str(data.get("bvid") or requested_bvid)
+    return ParsedVideoAvailabilitySnapshot(
+        bvid=bvid,
+        captured_at=captured_at,
+        status=_availability_status(code=code, message=message, data=data),
+        bili_code=code,
+        bili_message=message if isinstance(message, str) else None,
+        http_status_code=http_status_code,
         raw_payload_id=raw_payload_id,
     )
 
@@ -79,6 +113,27 @@ def _optional_int(value: Any) -> int | None:
     if value is None:
         return None
     return int(value)
+
+
+def _availability_status(
+    *,
+    code: int | None,
+    message: Any,
+    data: dict[str, Any],
+) -> str:
+    if code in (0, None) and data.get("bvid"):
+        return "visible"
+
+    text = message.lower() if isinstance(message, str) else ""
+    if code == -403 or any(keyword in text for keyword in ("权限", "无权", "forbid")):
+        return "permission_denied"
+    if code == -404 or any(
+        keyword in text for keyword in ("不存在", "删除", "not found")
+    ):
+        return "deleted"
+    if any(keyword in text for keyword in ("不可见", "隐藏", "审核", "下架")):
+        return "invisible"
+    return "unknown_error"
 
 
 def _extract_tags(data: dict[str, Any]) -> dict[str, Any]:

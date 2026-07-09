@@ -1,6 +1,12 @@
 from datetime import UTC, datetime
 
-from books_of_time.parsers.video import parse_video_info_snapshot, parse_video_stats
+import pytest
+
+from books_of_time.parsers.video import (
+    parse_video_availability_snapshot,
+    parse_video_info_snapshot,
+    parse_video_stats,
+)
 
 
 def test_parse_video_stats_maps_bilibili_stat_payload_to_snapshot_fields() -> None:
@@ -105,3 +111,52 @@ def test_parse_video_info_snapshot_accepts_missing_optional_metadata() -> None:
     assert snapshot.owner_mid is None
     assert snapshot.owner_name is None
     assert snapshot.tags == {"names": [], "source_fields": []}
+
+
+def test_parse_video_availability_snapshot_marks_visible_payload() -> None:
+    captured_at = datetime(2026, 7, 8, 10, 0, tzinfo=UTC)
+
+    snapshot = parse_video_availability_snapshot(
+        {"code": 0, "message": "OK", "data": {"bvid": "BV1abc"}},
+        captured_at=captured_at,
+        raw_payload_id=42,
+        requested_bvid="BVfallback",
+        http_status_code=200,
+    )
+
+    assert snapshot.bvid == "BV1abc"
+    assert snapshot.captured_at == captured_at
+    assert snapshot.status == "visible"
+    assert snapshot.bili_code == 0
+    assert snapshot.bili_message == "OK"
+    assert snapshot.http_status_code == 200
+    assert snapshot.raw_payload_id == 42
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        ({"code": -404, "message": "稿件不存在"}, "deleted"),
+        ({"code": -403, "message": "权限不足"}, "permission_denied"),
+        ({"code": -1, "message": "稿件不可见"}, "invisible"),
+        ({"code": -500, "message": "unknown"}, "unknown_error"),
+    ],
+)
+def test_parse_video_availability_snapshot_classifies_business_errors(
+    payload: dict,
+    expected: str,
+) -> None:
+    captured_at = datetime(2026, 7, 8, 10, 0, tzinfo=UTC)
+
+    snapshot = parse_video_availability_snapshot(
+        payload,
+        captured_at=captured_at,
+        raw_payload_id=42,
+        requested_bvid="BV1abc",
+        http_status_code=200,
+    )
+
+    assert snapshot.bvid == "BV1abc"
+    assert snapshot.status == expected
+    assert snapshot.bili_code == payload["code"]
+    assert snapshot.bili_message == payload["message"]
