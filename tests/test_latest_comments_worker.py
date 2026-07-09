@@ -560,6 +560,8 @@ async def test_head_sweep_pause_keeps_tail_complete_and_resumes_from_saved_curso
         assert state.last_scan_status == "baseline_paused"
         assert state.last_scan_truncated is True
         assert state.cursor == "offset-head-2"
+        assert state.frontier_rpid is None
+        assert state.frontier_time is None
         assert state.extra["baseline_status"] == "baseline_tail_complete"
         assert state.extra["baseline_start_frontier_rpid"] == 3003
 

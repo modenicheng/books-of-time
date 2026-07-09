@@ -7,9 +7,16 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Protocol
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from books_of_time.db.models import CollectionTask, FrontierState, RawPayload
+from books_of_time.db.models import (
+    CollectionTask,
+    CommentObservation,
+    FrontierState,
+    RawPageObservation,
+    RawPayload,
+)
 from books_of_time.db.repositories import (
     CollectionTaskRepository,
     CommentRepository,
@@ -379,6 +386,39 @@ class LatestCommentCollector:
         if baseline:
             state.extra["baseline_status"] = "baseline_corrupted"
 
+    async def _load_head_sweep_provisional_frontier(
+        self,
+        session: AsyncSession,
+        *,
+        bvid: str,
+        tail_page_count: int,
+    ) -> tuple[int | None, datetime | None]:
+        head_page_stmt = (
+            select(RawPageObservation)
+            .where(
+                RawPageObservation.request_type == BilibiliRequestType.COMMENT_LATEST,
+                RawPageObservation.target_type == "video",
+                RawPageObservation.target_id == bvid,
+            )
+            .order_by(RawPageObservation.captured_at.asc(), RawPageObservation.id.asc())
+            .offset(max(tail_page_count, 0))
+            .limit(1)
+        )
+        head_page = await session.scalar(head_page_stmt)
+        if head_page is None:
+            return None, None
+
+        comment_stmt = (
+            select(CommentObservation)
+            .where(CommentObservation.raw_page_observation_id == head_page.id)
+            .order_by(CommentObservation.position.asc(), CommentObservation.id.asc())
+            .limit(1)
+        )
+        newest_comment = await session.scalar(comment_stmt)
+        if newest_comment is None:
+            return None, None
+        return newest_comment.rpid, head_page.captured_at
+
     async def _run_head_sweep(
         self,
         task: CollectionTask,
@@ -398,8 +438,17 @@ class LatestCommentCollector:
         offset = str(state.cursor or "")
         page_number = 1
         seen_cursors: set[str] = set()
-        newest_rpid = state.frontier_rpid
-        newest_captured_at = state.frontier_time
+        newest_rpid: int | None = None
+        newest_captured_at: datetime | None = None
+        if offset:
+            (
+                newest_rpid,
+                newest_captured_at,
+            ) = await self._load_head_sweep_provisional_frontier(
+                session,
+                bvid=bvid,
+                tail_page_count=int(state.last_scan_pages or 0),
+            )
 
         while True:
             if self._time_expired(started_at):
@@ -436,8 +485,6 @@ class LatestCommentCollector:
             if newest_rpid is None and parsed.comments:
                 newest_rpid = parsed.comments[0].rpid
                 newest_captured_at = result.captured_at
-                state.frontier_rpid = newest_rpid
-                state.frontier_time = newest_captured_at
 
             if any(
                 comment.rpid == int(baseline_start_frontier_rpid)
