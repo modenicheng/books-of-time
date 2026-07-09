@@ -8,6 +8,7 @@ from books_of_time import cli
 from books_of_time.cli import _show_coverage, build_parser
 from books_of_time.coverage import CoverageDraft
 from books_of_time.db.base import Base
+from books_of_time.db.models import VideoMetricSnapshot
 from books_of_time.db.repositories import (
     CollectionCoverageRepository,
     CollectionTaskRepository,
@@ -100,6 +101,15 @@ def test_raw_inspect_parser_accepts_payload_id() -> None:
     assert args.raw_command == "inspect"
     assert args.raw_payload_id == 123
     assert args.preview_bytes == 20
+
+
+def test_video_stats_parser_accepts_bvid_and_limit() -> None:
+    args = build_parser().parse_args(["video", "stats", "BV1abc", "--limit", "5"])
+
+    assert args.command == "video"
+    assert args.video_command == "stats"
+    assert args.bvid == "BV1abc"
+    assert args.limit == 5
 
 
 def test_discovery_loop_parser_accepts_options() -> None:
@@ -212,6 +222,56 @@ async def test_inspect_raw_payload_logs_metadata_and_preview(tmp_path, caplog) -
     assert f"raw id={raw_id}" in caplog.text
     assert "bilibili:video_stats" in caplog.text
     assert "hello raw" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_show_video_stats_logs_latest_snapshots(tmp_path, caplog) -> None:
+    db_path = tmp_path / "video-stats.sqlite3"
+    cfg = {"database": {"url": f"sqlite+aiosqlite:///{db_path}"}}
+    engine = create_async_engine(cfg["database"]["url"])
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    captured_at = datetime(2099, 1, 1, tzinfo=UTC)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        session.add(
+            VideoMetricSnapshot(
+                bvid="BV1abc",
+                captured_at=captured_at,
+                view_count=100,
+                like_count=10,
+                coin_count=2,
+                favorite_count=3,
+                share_count=4,
+                reply_count=5,
+                danmaku_count=6,
+                raw_payload_id=42,
+            )
+        )
+        await session.commit()
+    await engine.dispose()
+
+    await cli._show_video_stats(cfg, "BV1abc", limit=20)
+
+    assert "BV1abc" in caplog.text
+    assert "view=100" in caplog.text
+    assert "like=10" in caplog.text
+    assert "raw_payload_id=42" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_show_video_stats_logs_empty_state(tmp_path, caplog) -> None:
+    db_path = tmp_path / "video-stats-empty.sqlite3"
+    cfg = {"database": {"url": f"sqlite+aiosqlite:///{db_path}"}}
+    engine = create_async_engine(cfg["database"]["url"])
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    await engine.dispose()
+
+    await cli._show_video_stats(cfg, "BVEMPTY", limit=20)
+
+    assert "No video stats snapshots for BVEMPTY" in caplog.text
 
 
 @pytest.mark.asyncio

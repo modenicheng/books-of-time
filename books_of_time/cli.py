@@ -14,6 +14,7 @@ from books_of_time.db.repositories import (
     CollectionCoverageRepository,
     CollectionTaskRepository,
     RawPayloadRepository,
+    VideoMetricSnapshotRepository,
 )
 from books_of_time.db.schema import create_schema
 from books_of_time.domain.enums import TaskKind, TaskStatus
@@ -42,6 +43,9 @@ def build_parser() -> argparse.ArgumentParser:
     comments.add_argument("bvid")
     comments.add_argument("--mode", choices=["hot"], default="hot")
     comments.add_argument("--priority", type=int, default=80)
+    stats = video_sub.add_parser("stats")
+    stats.add_argument("bvid")
+    stats.add_argument("--limit", type=int, default=20)
 
     latest_comments = subparsers.add_parser("collect-latest-comments")
     latest_comments.add_argument("bvid")
@@ -117,6 +121,10 @@ async def _run(args: argparse.Namespace) -> None:
 
     if args.command == "video" and args.video_command == "comments":
         await _enqueue_video_comments(cfg, args.bvid, args.mode, args.priority)
+        return
+
+    if args.command == "video" and args.video_command == "stats":
+        await _show_video_stats(cfg, args.bvid, args.limit)
         return
 
     if args.command == "collect-latest-comments":
@@ -278,6 +286,36 @@ async def _show_coverage(cfg: dict, bvid: str, limit: int) -> None:
             row.frontier_missing,
             row.truncated,
             row.corrupted,
+        )
+
+
+async def _show_video_stats(cfg: dict, bvid: str, limit: int) -> None:
+    session_factory = build_session_factory(cfg)
+    capped_limit = min(max(limit, 1), 200)
+    async with session_factory() as session:
+        rows = await VideoMetricSnapshotRepository(session).list_for_bvid(
+            bvid=bvid,
+            limit=capped_limit,
+        )
+
+    if not rows:
+        logger.info("No video stats snapshots for %s", bvid)
+        return
+
+    for row in rows:
+        logger.info(
+            "%s bvid=%s view=%s like=%s coin=%s favorite=%s share=%s "
+            "reply=%s danmaku=%s raw_payload_id=%s",
+            row.captured_at.isoformat(),
+            row.bvid,
+            row.view_count,
+            row.like_count,
+            row.coin_count,
+            row.favorite_count,
+            row.share_count,
+            row.reply_count,
+            row.danmaku_count,
+            row.raw_payload_id,
         )
 
 
