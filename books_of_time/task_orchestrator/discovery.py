@@ -67,6 +67,9 @@ class DiscoveryScheduler:
                     "reason": "fresh_discovery",
                 },
                 not_before=now,
+                idempotency_key=(
+                    f"{TaskKind.FETCH_VIDEO_STATS.value}:video:{video.bvid}:discovery"
+                ),
             )
             created.append(video.bvid)
 

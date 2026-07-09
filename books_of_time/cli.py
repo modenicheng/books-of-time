@@ -164,6 +164,7 @@ async def _monitor_video(cfg: dict, bvid: str, priority: int) -> None:
             priority=priority,
             payload={"bvid": bvid, "reason": "manual_monitor"},
             not_before=datetime.now(UTC),
+            idempotency_key=f"{TaskKind.FETCH_VIDEO_STATS.value}:video:{bvid}:manual",
         )
         await session.commit()
     logger.info("Queued video stats task for %s", bvid)
@@ -187,6 +188,7 @@ async def _enqueue_video_comments(
             priority=priority,
             payload={"bvid": bvid, "mode": mode, "page": 1},
             not_before=datetime.now(UTC),
+            idempotency_key=f"{TaskKind.FETCH_HOT_COMMENTS.value}:video:{bvid}:hot",
         )
         await session.commit()
     logger.info("Queued hot comments task for %s", bvid)
@@ -210,6 +212,9 @@ async def _enqueue_latest_comments(
             priority=priority,
             payload=payload,
             not_before=datetime.now(UTC),
+            idempotency_key=(
+                f"{TaskKind.FETCH_LATEST_COMMENTS.value}:video:{bvid}:manual"
+            ),
         )
         await session.commit()
     logger.info("Queued latest comments task for %s", bvid)

@@ -166,6 +166,28 @@ async def test_list_tasks_logs_matching_tasks(tmp_path, caplog) -> None:
 
 
 @pytest.mark.asyncio
+async def test_monitor_video_reuses_active_task(tmp_path) -> None:
+    db_path = tmp_path / "monitor.sqlite3"
+    cfg = {"database": {"url": f"sqlite+aiosqlite:///{db_path}"}}
+    engine = create_async_engine(cfg["database"]["url"])
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    await engine.dispose()
+
+    await cli._monitor_video(cfg, "BVDEDUP", priority=100)
+    await cli._monitor_video(cfg, "BVDEDUP", priority=50)
+
+    engine = create_async_engine(cfg["database"]["url"])
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        tasks = await CollectionTaskRepository(session).list_tasks(limit=10)
+    await engine.dispose()
+
+    assert [task.target_id for task in tasks] == ["BVDEDUP"]
+    assert tasks[0].priority == 100
+
+
+@pytest.mark.asyncio
 async def test_retry_failed_tasks_requeues_matching_tasks(tmp_path, caplog) -> None:
     db_path = tmp_path / "retry.sqlite3"
     cfg = {"database": {"url": f"sqlite+aiosqlite:///{db_path}"}}
