@@ -100,8 +100,8 @@
 - [x] 建立 `media_similarity_edges` ORM 表。
 - [x] 建立 `media_clusters` 和 `media_cluster_members` ORM 表。
 - [x] 实现离线相似图片分析任务，不阻塞采集链路。
-- [ ] 图片参与评论状态指纹：`media_ordered_hash` / `media_set_hash`。
-- [ ] 评论状态事件支持 `MEDIA_CHANGED` / `MEDIA_ADDED` / `MEDIA_REMOVED` / `MEDIA_ORDER_CHANGED`。
+- [x] 图片参与评论状态指纹：`media_ordered_hash` / `media_set_hash`。
+- [x] 评论状态事件支持 `MEDIA_CHANGED` / `MEDIA_ADDED` / `MEDIA_REMOVED` / `MEDIA_ORDER_CHANGED`。
 
 ## P1: Hot Comments
 

@@ -6,6 +6,8 @@
 
 **Architecture:** Extend comment parsing with `ParsedCommentMedia`, add media ORM tables and repositories, then call a `MediaService` after comment observations are inserted. Downloading, binary storage, and image metadata are separate follow-up tasks.
 
+**Current status:** Media discovery, local download/storage, image metadata/hash extraction, phash similarity analysis, and media state events are implemented. Remaining media work should focus on migrations, production smoke tests, and richer analysis such as OCR/CLIP.
+
 **Tech Stack:** Python 3.12, SQLAlchemy async ORM, argparse/worker task queue, pytest-asyncio, Ruff.
 
 ## Global Constraints

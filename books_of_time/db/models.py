@@ -130,6 +130,8 @@ class CommentObservation(Base):
     position: Mapped[int | None] = mapped_column(Integer)
     content: Mapped[str | None] = mapped_column(Text)
     content_hash: Mapped[bytes] = mapped_column(LargeBinary(32), nullable=False)
+    media_ordered_hash: Mapped[bytes | None] = mapped_column(LargeBinary(32))
+    media_set_hash: Mapped[bytes | None] = mapped_column(LargeBinary(32))
     like_count: Mapped[int | None] = mapped_column(BigInteger)
     reply_count: Mapped[int | None] = mapped_column(BigInteger)
     author_mid: Mapped[int | None] = mapped_column(BigInteger)
@@ -156,6 +158,44 @@ Index(
 Index(
     "idx_comment_observations_raw_page",
     CommentObservation.raw_page_observation_id,
+)
+
+
+class CommentStateEvent(Base):
+    __tablename__ = "comment_state_events"
+
+    id: Mapped[int] = mapped_column(
+        bigint_pk_type, primary_key=True, autoincrement=True
+    )
+    rpid: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    bvid: Mapped[str] = mapped_column(Text, nullable=False)
+    previous_comment_observation_id: Mapped[int | None] = mapped_column(BigInteger)
+    current_comment_observation_id: Mapped[int] = mapped_column(
+        BigInteger, nullable=False
+    )
+    event_type: Mapped[str] = mapped_column(Text, nullable=False)
+    old_value: Mapped[dict[str, Any]] = mapped_column(
+        json_dict_type,
+        nullable=False,
+        default=dict,
+    )
+    new_value: Mapped[dict[str, Any]] = mapped_column(
+        json_dict_type,
+        nullable=False,
+        default=dict,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+        server_default=func.now(),
+    )
+
+
+Index("idx_comment_state_events_rpid", CommentStateEvent.rpid)
+Index(
+    "idx_comment_state_events_current",
+    CommentStateEvent.current_comment_observation_id,
 )
 
 
