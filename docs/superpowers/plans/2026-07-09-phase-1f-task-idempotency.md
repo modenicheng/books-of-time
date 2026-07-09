@@ -1,6 +1,6 @@
 # Phase 1F Raw Inspect And Task Idempotency Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Execution mode:** Implement inline in this main session. Avoid opening subagents unless the user explicitly asks for them again.
 
 **Goal:** Add raw payload inspection and active-task idempotency so evidence can be checked from CLI and duplicate active queue work is avoided.
 
