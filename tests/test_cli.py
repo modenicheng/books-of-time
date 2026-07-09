@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, datetime
 
 import pytest
@@ -101,6 +102,26 @@ def test_raw_inspect_parser_accepts_payload_id() -> None:
     assert args.preview_bytes == 20
 
 
+def test_discovery_loop_parser_accepts_options() -> None:
+    args = build_parser().parse_args(
+        [
+            "discovery",
+            "loop",
+            "--interval-seconds",
+            "0.1",
+            "--max-iterations",
+            "1",
+            "--stop-when-idle",
+        ]
+    )
+
+    assert args.command == "discovery"
+    assert args.discovery_command == "loop"
+    assert args.interval_seconds == 0.1
+    assert args.max_iterations == 1
+    assert args.stop_when_idle is True
+
+
 @pytest.mark.asyncio
 async def test_show_coverage_lists_latest_rows(tmp_path, caplog) -> None:
     db_path = tmp_path / "coverage.sqlite3"
@@ -191,6 +212,66 @@ async def test_inspect_raw_payload_logs_metadata_and_preview(tmp_path, caplog) -
     assert f"raw id={raw_id}" in caplog.text
     assert "bilibili:video_stats" in caplog.text
     assert "hello raw" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_run_discovery_loop_uses_configured_matrix_uids(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    db_path = tmp_path / "discovery.sqlite3"
+    cfg = {
+        "database": {"url": f"sqlite+aiosqlite:///{db_path}"},
+        "discovery": {"matrix_uids": ["123"]},
+        "scheduler": {"discovery_scan_seconds": 60},
+    }
+    engine = create_async_engine(cfg["database"]["url"])
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    await engine.dispose()
+
+    now = datetime(2099, 1, 1, tzinfo=UTC)
+
+    class FakeClient:
+        async def get_user_video_list(self, mid: str, page: int = 1) -> FetchResult:
+            assert mid == "123"
+            assert page == 1
+            body = {
+                "data": {
+                    "list": {
+                        "vlist": [
+                            {"bvid": "BVDISCOVERY", "created": int(now.timestamp())}
+                        ]
+                    }
+                }
+            }
+            return FetchResult(
+                request_type=BilibiliRequestType.USER_VIDEO_LIST,
+                method="GET",
+                url="https://api.bilibili.com/x/space/wbi/arc/search",
+                params={"mid": mid},
+                status_code=200,
+                body=json.dumps(body).encode(),
+                captured_at=now,
+                response_headers={},
+            )
+
+    monkeypatch.setattr(cli, "build_bilibili_client", lambda cfg: FakeClient())
+
+    await cli._run_discovery_loop(
+        cfg,
+        interval_seconds=0.1,
+        max_iterations=1,
+        stop_when_idle=False,
+    )
+
+    engine = create_async_engine(cfg["database"]["url"])
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        tasks = await CollectionTaskRepository(session).list_tasks(limit=10)
+    await engine.dispose()
+
+    assert [task.target_id for task in tasks] == ["BVDISCOVERY"]
 
 
 @pytest.mark.asyncio

@@ -20,6 +20,7 @@ from books_of_time.domain.enums import TaskKind, TaskStatus
 from books_of_time.parsers.discovery import parse_user_video_list
 from books_of_time.storage.filesystem import RawPayloadFileStore
 from books_of_time.task_orchestrator.discovery import DiscoveryScheduler
+from books_of_time.task_orchestrator.discovery_loop import DiscoveryLoop
 
 logger = get_logger(__name__)
 
@@ -82,6 +83,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
     )
     task_retry_failed.add_argument("--limit", type=int, default=100)
+
+    discovery = subparsers.add_parser("discovery")
+    discovery_sub = discovery.add_subparsers(dest="discovery_command", required=True)
+    discovery_loop = discovery_sub.add_parser("loop")
+    discovery_loop.add_argument("--interval-seconds", type=float, default=None)
+    discovery_loop.add_argument("--max-iterations", type=int, default=None)
+    discovery_loop.add_argument("--stop-when-idle", action="store_true")
 
     discover = subparsers.add_parser("discover-user")
     discover.add_argument("mid")
@@ -158,6 +166,15 @@ async def _run(args: argparse.Namespace) -> None:
 
     if args.command == "task" and args.task_command == "retry-failed":
         await _retry_failed_tasks(cfg, args.target_id, args.kind, args.limit)
+        return
+
+    if args.command == "discovery" and args.discovery_command == "loop":
+        await _run_discovery_loop(
+            cfg,
+            interval_seconds=args.interval_seconds,
+            max_iterations=args.max_iterations,
+            stop_when_idle=args.stop_when_idle,
+        )
         return
 
     if args.command == "discover-user":
@@ -350,6 +367,40 @@ async def _retry_failed_tasks(
         await session.commit()
 
     logger.info("Retried failed tasks: %s", retried)
+
+
+async def _run_discovery_loop(
+    cfg: dict,
+    *,
+    interval_seconds: float | None,
+    max_iterations: int | None,
+    stop_when_idle: bool,
+) -> None:
+    scheduler_cfg = cfg.get("scheduler", {})
+    discovery_cfg = cfg.get("discovery", {})
+    matrix_uids = [str(uid) for uid in discovery_cfg.get("matrix_uids", [])]
+    effective_interval = (
+        float(interval_seconds)
+        if interval_seconds is not None
+        else float(scheduler_cfg.get("discovery_scan_seconds", 60))
+    )
+    loop = DiscoveryLoop(
+        session_factory=build_session_factory(cfg),
+        client=build_bilibili_client(cfg),
+        matrix_uids=matrix_uids,
+    )
+    result = await loop.run_loop(
+        interval_seconds=effective_interval,
+        max_iterations=max_iterations,
+        stop_when_idle=stop_when_idle,
+    )
+    logger.info(
+        "Discovery loop scanned_uids=%s videos_seen=%s videos_created=%s errors=%s",
+        result.uids_scanned,
+        result.videos_seen,
+        result.videos_created,
+        result.errors,
+    )
 
 
 async def _discover_user(cfg: dict, mid: str, page: int) -> None:
