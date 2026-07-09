@@ -218,6 +218,79 @@ Index(
 )
 
 
+class CollectionRun(TimestampMixin, Base):
+    __tablename__ = "collection_runs"
+    __table_args__ = (UniqueConstraint("run_id"),)
+
+    id: Mapped[int] = mapped_column(
+        bigint_pk_type, primary_key=True, autoincrement=True
+    )
+    run_id: Mapped[str] = mapped_column(Text, nullable=False)
+    worker_id: Mapped[str] = mapped_column(Text, nullable=False)
+    started_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="running")
+    tasks_started: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    tasks_succeeded: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    tasks_failed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    extra: Mapped[dict[str, Any]] = mapped_column(
+        json_dict_type,
+        nullable=False,
+        default=dict,
+    )
+
+
+Index("idx_collection_runs_run_id", CollectionRun.run_id)
+Index("idx_collection_runs_started_at", CollectionRun.started_at.desc())
+
+
+class CollectionCoverageStat(TimestampMixin, Base):
+    __tablename__ = "collection_coverage_stats"
+
+    id: Mapped[int] = mapped_column(
+        bigint_pk_type, primary_key=True, autoincrement=True
+    )
+    collection_task_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    run_id: Mapped[str] = mapped_column(Text, nullable=False)
+    task_kind: Mapped[TaskKind] = mapped_column(
+        Enum(TaskKind, values_callable=lambda x: [e.value for e in x]),
+        nullable=False,
+    )
+    target_type: Mapped[str] = mapped_column(Text, nullable=False)
+    target_id: Mapped[str] = mapped_column(Text, nullable=False)
+    started_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    finished_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    pages_requested: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    pages_succeeded: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    items_observed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    raw_payloads_saved: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0
+    )
+    parse_errors: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    request_errors: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    frontier_reached: Mapped[bool | None] = mapped_column(Boolean)
+    frontier_missing: Mapped[bool | None] = mapped_column(Boolean)
+    truncated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    corrupted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    reason: Mapped[str | None] = mapped_column(Text)
+    extra: Mapped[dict[str, Any]] = mapped_column(
+        json_dict_type,
+        nullable=False,
+        default=dict,
+    )
+
+
+Index(
+    "idx_collection_coverage_target_time",
+    CollectionCoverageStat.target_type,
+    CollectionCoverageStat.target_id,
+    CollectionCoverageStat.finished_at.desc(),
+)
+Index("idx_collection_coverage_task", CollectionCoverageStat.collection_task_id)
+Index("idx_collection_coverage_run", CollectionCoverageStat.run_id)
+
+
 class KnownVideo(TimestampMixin, Base):
     __tablename__ = "known_videos"
 

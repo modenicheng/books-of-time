@@ -9,7 +9,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
 
+from books_of_time.coverage import CoverageDraft
 from books_of_time.db.models import (
+    CollectionCoverageStat,
+    CollectionRun,
     CollectionTask,
     CommentEntity,
     CommentObservation,
@@ -86,6 +89,156 @@ class CollectionTaskRepository:
         task.lease_until = now + timedelta(seconds=lease_seconds)
         await self.session.flush()
         return task
+
+
+class CollectionRunRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def get_or_create_running(
+        self,
+        *,
+        run_id: str,
+        worker_id: str,
+        now: datetime,
+    ) -> CollectionRun:
+        run = await self.session.scalar(
+            select(CollectionRun).where(CollectionRun.run_id == run_id)
+        )
+        if run is not None:
+            return run
+
+        run = CollectionRun(
+            run_id=run_id,
+            worker_id=worker_id,
+            started_at=now,
+            finished_at=None,
+            status="running",
+            tasks_started=0,
+            tasks_succeeded=0,
+            tasks_failed=0,
+            extra={},
+            created_at=now,
+            updated_at=now,
+        )
+        self.session.add(run)
+        await self.session.flush()
+        return run
+
+    async def record_task_started(self, run: CollectionRun, *, now: datetime) -> None:
+        run.tasks_started += 1
+        run.status = "running"
+        run.finished_at = None
+        run.updated_at = now
+        await self.session.flush()
+
+    async def record_task_succeeded(
+        self,
+        run: CollectionRun,
+        *,
+        now: datetime,
+    ) -> None:
+        run.tasks_succeeded += 1
+        run.status = "succeeded"
+        run.finished_at = now
+        run.updated_at = now
+        await self.session.flush()
+
+    async def record_task_failed(self, run: CollectionRun, *, now: datetime) -> None:
+        run.tasks_failed += 1
+        run.status = "failed"
+        run.finished_at = now
+        run.updated_at = now
+        await self.session.flush()
+
+
+class CollectionCoverageRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def insert_from_draft(
+        self,
+        *,
+        task: CollectionTask,
+        run_id: str,
+        draft: CoverageDraft,
+        started_at: datetime,
+        finished_at: datetime,
+    ) -> CollectionCoverageStat:
+        stat = CollectionCoverageStat(
+            collection_task_id=task.id,
+            run_id=run_id,
+            task_kind=draft.task_kind,
+            target_type=draft.target_type,
+            target_id=draft.target_id,
+            started_at=started_at,
+            finished_at=finished_at,
+            status=draft.status,
+            pages_requested=draft.pages_requested,
+            pages_succeeded=draft.pages_succeeded,
+            items_observed=draft.items_observed,
+            raw_payloads_saved=draft.raw_payloads_saved,
+            parse_errors=draft.parse_errors,
+            request_errors=draft.request_errors,
+            frontier_reached=draft.frontier_reached,
+            frontier_missing=draft.frontier_missing,
+            truncated=draft.truncated,
+            corrupted=draft.corrupted,
+            reason=draft.reason,
+            extra=draft.extra,
+            created_at=finished_at,
+            updated_at=finished_at,
+        )
+        self.session.add(stat)
+        await self.session.flush()
+        return stat
+
+    async def insert_failed(
+        self,
+        *,
+        task: CollectionTask,
+        run_id: str,
+        started_at: datetime,
+        finished_at: datetime,
+        reason: str,
+        extra: dict[str, Any] | None = None,
+    ) -> CollectionCoverageStat:
+        draft = CoverageDraft(
+            task_kind=task.kind,
+            target_type=task.target_type,
+            target_id=task.target_id,
+            request_errors=1,
+            reason=reason,
+            extra=extra or {},
+        )
+        stat = await self.insert_from_draft(
+            task=task,
+            run_id=run_id,
+            draft=draft,
+            started_at=started_at,
+            finished_at=finished_at,
+        )
+        stat.status = "failed"
+        await self.session.flush()
+        return stat
+
+    async def list_for_target(
+        self,
+        *,
+        target_type: str,
+        target_id: str,
+        limit: int = 20,
+    ) -> list[CollectionCoverageStat]:
+        rows = await self.session.scalars(
+            select(CollectionCoverageStat)
+            .where(
+                CollectionCoverageStat.target_type == target_type,
+                CollectionCoverageStat.target_id == target_id,
+            )
+            .order_by(CollectionCoverageStat.finished_at.desc())
+            .limit(limit)
+        )
+        return list(rows)
 
 
 class VideoMetricSnapshotRepository:

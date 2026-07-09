@@ -7,6 +7,8 @@ from books_of_time.db.engine import (
     shutdown_db,
 )
 from books_of_time.db.models import (
+    CollectionCoverageStat,
+    CollectionRun,
     CollectionTask,
     RawPayload,
     VideoMetricSnapshot,
@@ -14,6 +16,8 @@ from books_of_time.db.models import (
 
 __all__ = [
     "Base",
+    "CollectionCoverageStat",
+    "CollectionRun",
     "CollectionTask",
     "RawPayload",
     "TimestampMixin",
