@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import json
 from datetime import UTC, datetime
+from pathlib import Path
 from uuid import uuid4
 
 from books_of_time.app import build_bilibili_client, build_session_factory, build_worker
@@ -12,10 +13,12 @@ from books_of_time.config import load_config
 from books_of_time.db.repositories import (
     CollectionCoverageRepository,
     CollectionTaskRepository,
+    RawPayloadRepository,
 )
 from books_of_time.db.schema import create_schema
 from books_of_time.domain.enums import TaskKind, TaskStatus
 from books_of_time.parsers.discovery import parse_user_video_list
+from books_of_time.storage.filesystem import RawPayloadFileStore
 from books_of_time.task_orchestrator.discovery import DiscoveryScheduler
 
 logger = get_logger(__name__)
@@ -47,6 +50,12 @@ def build_parser() -> argparse.ArgumentParser:
     coverage = subparsers.add_parser("coverage")
     coverage.add_argument("bvid")
     coverage.add_argument("--limit", type=int, default=20)
+
+    raw = subparsers.add_parser("raw")
+    raw_sub = raw.add_subparsers(dest="raw_command", required=True)
+    raw_inspect = raw_sub.add_parser("inspect")
+    raw_inspect.add_argument("raw_payload_id", type=int)
+    raw_inspect.add_argument("--preview-bytes", type=int, default=1200)
 
     worker = subparsers.add_parser("worker")
     worker_sub = worker.add_subparsers(dest="worker_command", required=True)
@@ -113,6 +122,10 @@ async def _run(args: argparse.Namespace) -> None:
 
     if args.command == "coverage":
         await _show_coverage(cfg, args.bvid, args.limit)
+        return
+
+    if args.command == "raw" and args.raw_command == "inspect":
+        await _inspect_raw_payload(cfg, args.raw_payload_id, args.preview_bytes)
         return
 
     if args.command == "worker" and args.worker_command == "run-once":
@@ -249,6 +262,41 @@ async def _show_coverage(cfg: dict, bvid: str, limit: int) -> None:
             row.truncated,
             row.corrupted,
         )
+
+
+async def _inspect_raw_payload(
+    cfg: dict,
+    raw_payload_id: int,
+    preview_bytes: int,
+) -> None:
+    session_factory = build_session_factory(cfg)
+    async with session_factory() as session:
+        raw = await RawPayloadRepository(session).get(raw_payload_id)
+
+    if raw is None:
+        logger.info("Raw payload not found: %s", raw_payload_id)
+        return
+
+    raw_dir = Path(cfg.get("storage", {}).get("raw_dir", "./data/raw"))
+    body = RawPayloadFileStore(raw_dir).read_uri(raw.storage_uri)
+    clamped_preview_bytes = min(max(preview_bytes, 0), 10000)
+    preview = body[:clamped_preview_bytes].decode("utf-8", errors="replace")
+
+    logger.info(
+        "raw id=%s request_type=%s captured_at=%s status_code=%s "
+        "storage_uri=%s compressed_size=%s uncompressed_size=%s "
+        "payload_hash=%s parser_version=%s",
+        raw.id,
+        raw.request_type,
+        raw.captured_at.isoformat(),
+        raw.status_code,
+        raw.storage_uri,
+        raw.compressed_size,
+        raw.uncompressed_size,
+        raw.payload_hash.hex(),
+        raw.parser_version,
+    )
+    logger.info("raw preview=%s", preview)
 
 
 async def _list_tasks(cfg: dict, status: str | None, limit: int) -> None:

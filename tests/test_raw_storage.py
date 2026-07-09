@@ -32,3 +32,16 @@ def test_raw_payload_store_writes_zstd_file_under_date_and_run_id(tmp_path) -> N
         tmp_path / "2026" / "07" / "08" / "run-123" / f"{expected_hash}.json.zst"
     ).read_bytes()
     assert zstandard.ZstdDecompressor().decompress(compressed) == body
+
+
+def test_raw_payload_file_store_reads_saved_uri(tmp_path) -> None:
+    store = RawPayloadFileStore(raw_dir=tmp_path)
+    body = b'{"hello":"world"}'
+    saved = store.save(
+        body=body,
+        captured_at=datetime(2099, 1, 1, tzinfo=UTC),
+        run_id="run-1",
+        suffix=".json",
+    )
+
+    assert store.read_uri(saved.storage_uri) == body

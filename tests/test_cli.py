@@ -10,8 +10,11 @@ from books_of_time.db.base import Base
 from books_of_time.db.repositories import (
     CollectionCoverageRepository,
     CollectionTaskRepository,
+    RawPayloadRepository,
 )
-from books_of_time.domain.enums import TaskKind, TaskStatus
+from books_of_time.domain.enums import BilibiliRequestType, TaskKind, TaskStatus
+from books_of_time.http.client import FetchResult
+from books_of_time.storage.filesystem import RawPayloadFileStore
 
 
 def test_collect_latest_comments_parser_defaults() -> None:
@@ -89,6 +92,15 @@ def test_task_list_and_retry_failed_parsers() -> None:
     assert retry_args.kind == "fetch_latest_comments"
 
 
+def test_raw_inspect_parser_accepts_payload_id() -> None:
+    args = build_parser().parse_args(["raw", "inspect", "123", "--preview-bytes", "20"])
+
+    assert args.command == "raw"
+    assert args.raw_command == "inspect"
+    assert args.raw_payload_id == 123
+    assert args.preview_bytes == 20
+
+
 @pytest.mark.asyncio
 async def test_show_coverage_lists_latest_rows(tmp_path, caplog) -> None:
     db_path = tmp_path / "coverage.sqlite3"
@@ -132,6 +144,53 @@ async def test_show_coverage_lists_latest_rows(tmp_path, caplog) -> None:
     assert "status=succeeded" in caplog.text
     assert "reason=frontier_reached" in caplog.text
     assert "pages=2/2" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_inspect_raw_payload_logs_metadata_and_preview(tmp_path, caplog) -> None:
+    db_path = tmp_path / "raw.sqlite3"
+    raw_dir = tmp_path / "raw"
+    cfg = {
+        "database": {"url": f"sqlite+aiosqlite:///{db_path}"},
+        "storage": {"raw_dir": str(raw_dir)},
+    }
+    engine = create_async_engine(cfg["database"]["url"])
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    body = b'{"message":"hello raw inspect"}'
+    captured_at = datetime(2099, 1, 1, tzinfo=UTC)
+    stored = RawPayloadFileStore(raw_dir).save(
+        body=body,
+        captured_at=captured_at,
+        run_id="run-1",
+        suffix=".json",
+    )
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        raw = await RawPayloadRepository(session).insert_from_fetch_result(
+            result=FetchResult(
+                request_type=BilibiliRequestType.VIDEO_STATS,
+                method="GET",
+                url="https://api.bilibili.com/x/web-interface/view",
+                params={"bvid": "BV1"},
+                status_code=200,
+                body=body,
+                captured_at=captured_at,
+                response_headers={},
+            ),
+            stored=stored,
+            parser_version="test",
+        )
+        raw_id = raw.id
+        await session.commit()
+    await engine.dispose()
+
+    await cli._inspect_raw_payload(cfg, raw_id, preview_bytes=30)
+
+    assert f"raw id={raw_id}" in caplog.text
+    assert "bilibili:video_stats" in caplog.text
+    assert "hello raw" in caplog.text
 
 
 @pytest.mark.asyncio

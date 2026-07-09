@@ -49,3 +49,11 @@ class RawPayloadFileStore:
             compressed_size=len(compressed),
             uncompressed_size=len(body),
         )
+
+    def read_uri(self, storage_uri: str) -> bytes:
+        if not storage_uri.startswith("file://"):
+            raise ValueError(f"Unsupported raw payload storage URI: {storage_uri}")
+
+        path = Path(storage_uri.removeprefix("file://"))
+        compressed = path.read_bytes()
+        return zstandard.ZstdDecompressor().decompress(compressed)

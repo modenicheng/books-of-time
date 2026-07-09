@@ -428,6 +428,9 @@ class RawPayloadRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
+    async def get(self, raw_payload_id: int) -> RawPayload | None:
+        return await self.session.get(RawPayload, raw_payload_id)
+
     async def insert_from_fetch_result(
         self,
         *,
