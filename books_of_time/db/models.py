@@ -7,6 +7,7 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     Enum,
+    Float,
     Index,
     Integer,
     LargeBinary,
@@ -239,6 +240,67 @@ class CommentObservationMedia(Base):
 Index("idx_comment_obs_media_rpid", CommentObservationMedia.rpid)
 Index("idx_comment_obs_media_asset", CommentObservationMedia.media_asset_id)
 Index("idx_comment_obs_media_source", CommentObservationMedia.media_source_id)
+
+
+class MediaSimilarityEdge(Base):
+    __tablename__ = "media_similarity_edges"
+    __table_args__ = (
+        UniqueConstraint(
+            "media_asset_id_a",
+            "media_asset_id_b",
+            "similarity_type",
+            "algorithm",
+            "algorithm_version",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(
+        bigint_pk_type, primary_key=True, autoincrement=True
+    )
+    media_asset_id_a: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    media_asset_id_b: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    similarity_type: Mapped[str] = mapped_column(Text, nullable=False)
+    distance: Mapped[float] = mapped_column(Float, nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    algorithm: Mapped[str] = mapped_column(Text, nullable=False)
+    algorithm_version: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+        server_default=func.now(),
+    )
+
+
+Index("idx_media_similarity_a", MediaSimilarityEdge.media_asset_id_a)
+Index("idx_media_similarity_b", MediaSimilarityEdge.media_asset_id_b)
+
+
+class MediaCluster(Base):
+    __tablename__ = "media_clusters"
+
+    id: Mapped[int] = mapped_column(
+        bigint_pk_type, primary_key=True, autoincrement=True
+    )
+    cluster_type: Mapped[str] = mapped_column(Text, nullable=False)
+    algorithm: Mapped[str] = mapped_column(Text, nullable=False)
+    algorithm_version: Mapped[str] = mapped_column(Text, nullable=False)
+    representative_asset_id: Mapped[int | None] = mapped_column(BigInteger)
+    created_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+        server_default=func.now(),
+    )
+
+
+class MediaClusterMember(Base):
+    __tablename__ = "media_cluster_members"
+
+    cluster_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    media_asset_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    distance_to_representative: Mapped[float | None] = mapped_column(Float)
+    confidence: Mapped[float | None] = mapped_column(Float)
 
 
 class VideoMetricSnapshot(Base):

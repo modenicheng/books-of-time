@@ -12,6 +12,7 @@ from books_of_time.domain.enums import TaskKind
 from books_of_time.http.client import RawHttpClient
 from books_of_time.http.rate_limiter import RateLimitRule, TokenBucketRateLimiter
 from books_of_time.media.downloader import MediaAssetCollector, MediaDownloader
+from books_of_time.media.similarity import MediaSimilarityCollector
 from books_of_time.media.storage import MediaStore
 from books_of_time.platforms.bilibili.client import BilibiliPlatformClient
 from books_of_time.storage.filesystem import RawPayloadFileStore
@@ -109,6 +110,7 @@ def build_worker(
                     run_id=run_id,
                 )
             ),
+            TaskKind.ANALYZE_SIMILAR_MEDIA: MediaSimilarityCollector(),
         },
         run_id=run_id,
         lease_owner=lease_owner,

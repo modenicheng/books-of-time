@@ -23,6 +23,7 @@ class TaskKind(StrEnum):
     FETCH_COMMENT_REPLIES = "fetch_comment_replies"
     FETCH_MEDIA_ASSET = "fetch_media_asset"
     DISCOVER_USER_VIDEOS = "discover_user_videos"
+    ANALYZE_SIMILAR_MEDIA = "analyze_similar_media"
 
 
 class TaskStatus(StrEnum):

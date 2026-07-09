@@ -81,7 +81,7 @@
 
 ## P0: Media Assets
 
-- [ ] 建立 `media` 子系统目录：downloader、hasher、storage、normalizer、similarity。
+- [x] 建立 `media` 子系统目录：downloader、hasher、storage、normalizer、similarity。
 - [x] 建立 `media_sources` ORM 表，记录评论中看到的图片 URL 引用。
 - [x] 建立 `media_assets` ORM 表，使用 `blob_sha256` 做完全一致去重。
 - [x] 建立 `comment_observation_media` ORM 表，支持单评论多图和同图多评论。
@@ -97,9 +97,9 @@
 - [x] 计算 `pixel_sha256`，作为像素完全一致候选依据。
 - [x] 预留并写入 `phash` / `dhash` / `ahash` 字段。
 - [x] 回填 `media_sources.media_asset_id` 和 `comment_observation_media.media_asset_id`。
-- [ ] 建立 `media_similarity_edges` ORM 表。
-- [ ] 建立 `media_clusters` 和 `media_cluster_members` ORM 表。
-- [ ] 实现离线相似图片分析任务，不阻塞采集链路。
+- [x] 建立 `media_similarity_edges` ORM 表。
+- [x] 建立 `media_clusters` 和 `media_cluster_members` ORM 表。
+- [x] 实现离线相似图片分析任务，不阻塞采集链路。
 - [ ] 图片参与评论状态指纹：`media_ordered_hash` / `media_set_hash`。
 - [ ] 评论状态事件支持 `MEDIA_CHANGED` / `MEDIA_ADDED` / `MEDIA_REMOVED` / `MEDIA_ORDER_CHANGED`。
 
