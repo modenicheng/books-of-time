@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
+from books_of_time.accounts.manager import AccountManager
 from books_of_time.accounts.provider import CurrentCookieProvider
 from books_of_time.accounts.storage import EncryptedFileCredentialStore
 from books_of_time.collectors.hot_comments import HotCommentCollector
@@ -97,6 +98,14 @@ def build_cookie_provider(
     if not bool(account_cfg.get("enabled", True)):
         return None
     return CurrentCookieProvider(
+        store=build_credential_store(cfg),
+        default_account_id=str(account_cfg.get("active_account_id", "default")),
+    )
+
+
+def build_account_manager(cfg: dict[str, Any]) -> AccountManager:
+    account_cfg = cfg.get("accounts", {})
+    return AccountManager(
         store=build_credential_store(cfg),
         default_account_id=str(account_cfg.get("active_account_id", "default")),
     )

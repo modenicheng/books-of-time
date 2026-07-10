@@ -12,7 +12,10 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from uuid import uuid4
 
+from books_of_time.accounts.models import AccountStatus, CredentialSnapshot
+from books_of_time.accounts.qr_login import QrLoginFlow
 from books_of_time.app import (
+    build_account_manager,
     build_bilibili_client,
     build_engine,
     build_service_coordinator,
@@ -130,6 +133,16 @@ def build_parser() -> argparse.ArgumentParser:
     service_status = service_sub.add_parser("status")
     service_status.add_argument("--limit", type=int, default=20)
 
+    login = subparsers.add_parser("login")
+    login_sub = login.add_subparsers(dest="login_command", required=True)
+    login_qr = login_sub.add_parser("qr")
+    login_qr.add_argument("--account", default="default")
+    login_qr.add_argument("--timeout-seconds", type=float, default=180)
+    login_status = login_sub.add_parser("status")
+    login_status.add_argument("--account", default="default")
+    login_logout = login_sub.add_parser("logout")
+    login_logout.add_argument("--account", default="default")
+
     event = subparsers.add_parser("event")
     event_sub = event.add_subparsers(dest="event_command", required=True)
     event_create = event_sub.add_parser("create")
@@ -195,6 +208,22 @@ async def _run(args: argparse.Namespace) -> None:
 
     if args.command == "service" and args.service_command == "status":
         await _show_service_status(cfg, limit=args.limit)
+        return
+
+    if args.command == "login" and args.login_command == "qr":
+        await _login_qr(
+            cfg,
+            account_id=args.account,
+            timeout_seconds=args.timeout_seconds,
+        )
+        return
+
+    if args.command == "login" and args.login_command == "status":
+        await _show_login_status(cfg, account_id=args.account)
+        return
+
+    if args.command == "login" and args.login_command == "logout":
+        await _logout_account(cfg, account_id=args.account)
         return
 
     if args.command == "event" and args.event_command == "create":
@@ -520,6 +549,56 @@ def _parse_event_datetime(value: str | None) -> datetime | None:
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         raise ValueError("Event datetime must include a timezone offset")
     return parsed.astimezone(UTC)
+
+
+async def _login_qr(
+    cfg: dict,
+    *,
+    account_id: str,
+    timeout_seconds: float,
+) -> CredentialSnapshot:
+    client = build_bilibili_client(cfg)
+    return await QrLoginFlow(
+        manager=build_account_manager(cfg),
+        http_client=client.http_client,
+        rate_limiter=client.rate_limiter,
+    ).run(
+        account_id=account_id,
+        timeout_seconds=timeout_seconds,
+    )
+
+
+async def _show_login_status(
+    cfg: dict,
+    *,
+    account_id: str,
+) -> AccountStatus | None:
+    status = build_account_manager(cfg).status(account_id)
+    if status is None:
+        logger.info("account=%s status=anonymous", account_id)
+        return None
+    logger.info(
+        "account=%s health=%s source=%s snapshot=%s created_at=%s last_checked_at=%s",
+        status.account_id,
+        status.health.value,
+        status.source,
+        status.snapshot_id,
+        status.created_at.isoformat(),
+        status.last_checked_at.isoformat()
+        if status.last_checked_at is not None
+        else None,
+    )
+    return status
+
+
+async def _logout_account(cfg: dict, *, account_id: str) -> bool:
+    removed = build_account_manager(cfg).logout(account_id)
+    logger.info(
+        "account=%s logout=%s",
+        account_id,
+        "completed" if removed else "already_anonymous",
+    )
+    return removed
 
 
 async def _create_event(

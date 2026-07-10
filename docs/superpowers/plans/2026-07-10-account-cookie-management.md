@@ -22,11 +22,11 @@
 
 ## Task 3: Independent QR Login CLI
 
-- [ ] Write QR state-machine and CLI parser/dispatch tests.
-- [ ] Implement `QrLoginFlow`, `bot login qr/status/logout`, timeout and safe output.
-- [ ] Ensure login uses unified rate limiting with managed Cookie injection disabled and no raw secret archive.
-- [ ] Update the existing QR example without printing credentials.
-- [ ] Commit `feat: add QR account login CLI`.
+- [x] Write QR state-machine and CLI parser/dispatch tests.
+- [x] Implement `QrLoginFlow`, `bot login qr/status/logout`, timeout and safe output.
+- [x] Ensure login uses unified rate limiting with managed Cookie injection disabled and no raw secret archive.
+- [x] Update the existing QR example without printing credentials.
+- [x] Commit `feat: add QR account login CLI`.
 
 ## Task 4: Automatic Cookie Refresh
 
