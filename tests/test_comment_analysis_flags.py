@@ -117,6 +117,10 @@ async def test_comment_flag_analyzer_persists_three_idempotent_flag_types() -> N
     )
     assert (same_user.subject_rpid, same_user.related_rpid) == (1001, 1002)
     assert same_user.evidence["author_mid"] == 11
+    assert same_user.evidence["author_name"] == "alice"
+    assert same_user.evidence["subject_content"] == "相同作者重复提交内容甲"
+    assert same_user.evidence["related_content"] == "相同作者重复提交内容甲"
+    assert same_user.evidence["subject_first_seen_at"] == start.isoformat()
     assert same_user.confidence == 1.0
     assert len({flag.stable_key for flag in stored}) == 4
     await engine.dispose()

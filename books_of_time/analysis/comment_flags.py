@@ -260,8 +260,13 @@ class CommentFlagAnalyzer:
                             algorithm_version="normalized-exact-v1",
                             evidence={
                                 "author_mid": author_mid,
+                                "author_name": left.author_name,
                                 "subject_bvid": left.bvid,
                                 "related_bvid": right.bvid,
+                                "subject_content": left.first_content,
+                                "related_content": right.first_content,
+                                "subject_first_seen_at": left.first_seen_at.isoformat(),
+                                "related_first_seen_at": right.first_seen_at.isoformat(),
                                 "subject_raw_payload_id": left.first_raw_payload_id,
                                 "related_raw_payload_id": right.first_raw_payload_id,
                                 "normalized_content_sha256": hashlib.sha256(
