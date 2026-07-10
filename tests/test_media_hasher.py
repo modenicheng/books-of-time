@@ -37,6 +37,6 @@ def test_media_hasher_computes_perceptual_hashes_for_decodable_images() -> None:
 
     metadata = hasher.inspect_image(data)
 
-    assert isinstance(metadata.ahash, int)
-    assert isinstance(metadata.dhash, int)
+    assert metadata.ahash is None
+    assert metadata.dhash is None
     assert isinstance(metadata.phash, int)

@@ -126,8 +126,6 @@ class MediaDownloader:
                 first_raw_page_id=source.first_raw_page_id,
                 download_raw_payload_id=raw_payload.id,
                 phash=image_metadata.phash,
-                dhash=image_metadata.dhash,
-                ahash=image_metadata.ahash,
             )
             session.add(asset)
             await session.flush()

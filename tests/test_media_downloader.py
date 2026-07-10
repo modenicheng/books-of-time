@@ -131,8 +131,8 @@ async def test_media_downloader_creates_asset_file_and_backfills_links(
         assert asset.height == 3
         assert asset.pixel_sha256 is not None
         assert asset.phash is not None
-        assert asset.dhash is not None
-        assert asset.ahash is not None
+        assert asset.dhash is None
+        assert asset.ahash is None
         assert asset.storage_uri.startswith(f"file://{tmp_path / 'media'}")
         assert saved_source is not None
         assert saved_source.fetch_status == "succeeded"

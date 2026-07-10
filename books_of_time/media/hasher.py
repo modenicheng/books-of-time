@@ -43,8 +43,8 @@ class MediaHasher:
                     size_bytes=len(data),
                     pixel_sha256=pixel_sha256,
                     phash=_phash(image),
-                    dhash=_dhash(image),
-                    ahash=_ahash(image),
+                    dhash=None,
+                    ahash=None,
                 )
         except (OSError, UnidentifiedImageError):
             return MediaImageMetadata(
