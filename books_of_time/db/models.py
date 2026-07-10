@@ -8,6 +8,7 @@ from sqlalchemy import (
     Boolean,
     Enum,
     Float,
+    ForeignKey,
     Index,
     Integer,
     LargeBinary,
@@ -726,6 +727,119 @@ Index(
     ScheduledJob.priority.desc(),
 )
 Index("idx_scheduled_jobs_lease", ScheduledJob.lease_until)
+
+
+class Event(TimestampMixin, Base):
+    __tablename__ = "events"
+
+    id: Mapped[int] = mapped_column(
+        bigint_pk_type, primary_key=True, autoincrement=True
+    )
+    slug: Mapped[str] = mapped_column(String(120), nullable=False, unique=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    game: Mapped[str | None] = mapped_column(String(255))
+    description: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
+    start_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    end_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    timezone: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="Asia/Shanghai"
+    )
+
+
+Index("idx_events_status_time", Event.status, Event.start_at)
+Index("idx_events_game", Event.game)
+
+
+class EventTarget(TimestampMixin, Base):
+    __tablename__ = "event_targets"
+    __table_args__ = (
+        UniqueConstraint(
+            "event_id",
+            "target_type",
+            "normalized_value",
+            name="uq_event_targets_stable_key",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(
+        bigint_pk_type, primary_key=True, autoincrement=True
+    )
+    event_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("events.id", ondelete="CASCADE"), nullable=False
+    )
+    target_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    target_value: Mapped[str] = mapped_column(Text, nullable=False)
+    normalized_value: Mapped[str] = mapped_column(Text, nullable=False)
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    first_seen_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    extra: Mapped[dict[str, Any]] = mapped_column(
+        json_dict_type, nullable=False, default=dict
+    )
+
+
+Index("idx_event_targets_event_active", EventTarget.event_id, EventTarget.active)
+Index(
+    "idx_event_targets_type_value",
+    EventTarget.target_type,
+    EventTarget.normalized_value,
+)
+
+
+class EventVideo(TimestampMixin, Base):
+    __tablename__ = "event_videos"
+
+    event_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("events.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    bvid: Mapped[str] = mapped_column(Text, primary_key=True)
+    source_target_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("event_targets.id", ondelete="SET NULL")
+    )
+    association_reason: Mapped[str] = mapped_column(String(64), nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    first_seen_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+
+
+Index("idx_event_videos_bvid", EventVideo.bvid)
+Index("idx_event_videos_event_active", EventVideo.event_id, EventVideo.active)
+
+
+class EventKeyword(TimestampMixin, Base):
+    __tablename__ = "event_keywords"
+    __table_args__ = (
+        UniqueConstraint(
+            "event_id",
+            "normalized_keyword",
+            "version",
+            name="uq_event_keywords_version",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(
+        bigint_pk_type, primary_key=True, autoincrement=True
+    )
+    event_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("events.id", ondelete="CASCADE"), nullable=False
+    )
+    keyword: Mapped[str] = mapped_column(Text, nullable=False)
+    normalized_keyword: Mapped[str] = mapped_column(Text, nullable=False)
+    category: Mapped[str] = mapped_column(String(64), nullable=False, default="topic")
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    source_target_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("event_targets.id", ondelete="SET NULL")
+    )
+
+
+Index("idx_event_keywords_event_active", EventKeyword.event_id, EventKeyword.active)
+Index("idx_event_keywords_normalized", EventKeyword.normalized_keyword)
 
 
 class KnownVideo(TimestampMixin, Base):
