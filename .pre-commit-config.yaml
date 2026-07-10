@@ -12,7 +12,7 @@ repos:
   # ── Ruff: linter + formatter ───────────────────────────────
   - repo: https://github.com/astral-sh/ruff-pre-commit
     # 请与 pyproject.toml 中的 ruff 版本保持一致
-    rev: v0.9.10
+    rev: v0.15.20
     hooks:
       # 先 lint，自动修复可修复的问题
       - id: ruff
