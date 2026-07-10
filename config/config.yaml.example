@@ -58,6 +58,13 @@ scheduler:
   core_stop_hour: 22
   timezone: Asia/Shanghai
 
+service:
+  roles: [worker]
+  worker_idle_sleep_seconds: 5
+  heartbeat_seconds: 10
+  heartbeat_timeout_seconds: 30
+  shutdown_grace_seconds: 60
+
 latest_comments:
   max_scan_seconds: 55
   page_retry_attempts: 3

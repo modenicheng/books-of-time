@@ -9,6 +9,8 @@
 
 from __future__ import annotations
 
+import os
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -20,7 +22,11 @@ import yaml
 _DEFAULT_CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "config.yaml"
 
 
-def load_config(path: str | Path | None = None) -> dict[str, Any]:
+def load_config(
+    path: str | Path | None = None,
+    *,
+    environ: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
     """加载 YAML 配置文件。
 
     Parameters
@@ -33,7 +39,15 @@ def load_config(path: str | Path | None = None) -> dict[str, Any]:
     dict[str, Any]
         解析后的配置字典。
     """
-    config_path = Path(path) if path else _DEFAULT_CONFIG_PATH
+    effective_environ = os.environ if environ is None else environ
+    environment_path = effective_environ.get("BOT_CONFIG")
+    config_path = (
+        Path(path)
+        if path is not None
+        else Path(environment_path)
+        if environment_path
+        else _DEFAULT_CONFIG_PATH
+    )
 
     if not config_path.exists():
         example_path = config_path.with_suffix(".yaml.example")
@@ -44,4 +58,33 @@ def load_config(path: str | Path | None = None) -> dict[str, Any]:
         raise FileNotFoundError(msg)
 
     with open(config_path, encoding="utf-8") as f:
-        return yaml.safe_load(f)
+        loaded = yaml.safe_load(f) or {}
+    if not isinstance(loaded, dict):
+        raise ValueError(f"配置文件根节点必须是映射: {config_path}")
+
+    cfg: dict[str, Any] = dict(loaded)
+    database = _mapping_section(cfg, "database")
+    storage = _mapping_section(cfg, "storage")
+    service = _mapping_section(cfg, "service")
+
+    if value := effective_environ.get("BOT_DATABASE_URL"):
+        database["url"] = value
+    if value := effective_environ.get("BOT_RAW_DIR"):
+        storage["raw_dir"] = value
+    if value := effective_environ.get("BOT_MEDIA_DIR"):
+        storage["media_dir"] = value
+    if value := effective_environ.get("BOT_INSTANCE_ID"):
+        service["instance_id"] = value
+    if value := effective_environ.get("BOT_SERVICE_ROLES"):
+        service["roles"] = [role.strip() for role in value.split(",") if role.strip()]
+    if value := effective_environ.get("BOT_SHUTDOWN_GRACE_SECONDS"):
+        service["shutdown_grace_seconds"] = float(value)
+
+    return cfg
+
+
+def _mapping_section(cfg: dict[str, Any], key: str) -> dict[str, Any]:
+    value = cfg.setdefault(key, {})
+    if not isinstance(value, dict):
+        raise ValueError(f"配置段 {key} 必须是映射")
+    return value
