@@ -1,0 +1,27 @@
+services:
+  books-of-time:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 70s
+    environment:
+      BOT_CONFIG: /app/config/config.yaml.example
+      BOT_DATABASE_URL: "${BOT_DATABASE_URL:?required}"
+      BOT_INSTANCE_ID: "${BOT_INSTANCE_ID:-books-of-time}"
+      BOT_SERVICE_ROLES: "${BOT_SERVICE_ROLES:-worker,scheduler}"
+      BOT_RAW_DIR: /var/lib/books-of-time/raw
+      BOT_MEDIA_DIR: /var/lib/books-of-time/media
+      BOT_SHUTDOWN_GRACE_SECONDS: "${BOT_SHUTDOWN_GRACE_SECONDS:-60}"
+    volumes:
+      - "${BOT_DATA_DIR:-./data}/raw:/var/lib/books-of-time/raw"
+      - "${BOT_DATA_DIR:-./data}/media:/var/lib/books-of-time/media"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "/app/.venv/bin/python", "main.py", "service", "health"]
+      interval: 30s
+      timeout: 15s
+      start_period: 30s
+      retries: 3

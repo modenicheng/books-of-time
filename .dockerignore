@@ -1,0 +1,14 @@
+.git
+.gitignore
+.venv
+.pytest_cache
+.ruff_cache
+.sisyphus
+.superpowers
+__pycache__
+*.pyc
+data
+config/config.yaml
+docs
+tests
+deploy/*.env
