@@ -105,6 +105,17 @@ class VideoSnapshotScheduler:
             tasks.append(task)
         return tasks
 
+    async def _is_video_available(self, session: AsyncSession, bvid: str) -> bool:
+        latest = await session.scalar(
+            select(VideoAvailabilitySnapshot)
+            .where(VideoAvailabilitySnapshot.bvid == bvid)
+            .order_by(VideoAvailabilitySnapshot.captured_at.desc())
+            .limit(1)
+        )
+        if latest is None:
+            return True
+        return latest.status == "visible"
+
 
 def _terminal_at_for_day(now: datetime, window: CoreWindow) -> tuple[datetime, str]:
     timezone = ZoneInfo(window.timezone_name)
@@ -116,15 +127,3 @@ def _terminal_at_for_day(now: datetime, window: CoreWindow) -> tuple[datetime, s
         microsecond=0,
     )
     return terminal_local.astimezone(now.tzinfo), terminal_local.date().isoformat()
-
-
-async def _is_video_available(session: AsyncSession, bvid: str) -> bool:
-    latest = await session.scalar(
-        select(VideoAvailabilitySnapshot)
-        .where(VideoAvailabilitySnapshot.bvid == bvid)
-        .order_by(VideoAvailabilitySnapshot.captured_at.desc())
-        .limit(1)
-    )
-    if latest is None:
-        return True
-    return latest.status == "visible"
