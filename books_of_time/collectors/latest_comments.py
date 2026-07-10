@@ -83,6 +83,7 @@ class LatestCommentCollector:
             else self.max_scan_seconds
         )
         bvid = str(task.payload.get("bvid") or task.target_id)
+        payload_cutoff = datetime.now(UTC)
         aid = await self._resolve_aid(task, session, bvid)
         now = datetime.now(UTC)
         frontier_repo = FrontierStateRepository(session)
@@ -97,7 +98,6 @@ class LatestCommentCollector:
             session,
             bvid=bvid,
         )
-        raw_payloads_before = await self._count_raw_payloads(session)
         if state.extra.get("baseline_status") == "baseline_complete":
             await self._run_incremental(
                 task,
@@ -134,13 +134,17 @@ class LatestCommentCollector:
             session,
             bvid=bvid,
         )
-        raw_payloads_after = await self._count_raw_payloads(session)
+        raw_payloads_after = await session.scalar(
+            select(func.count(RawPayload.id)).where(
+                RawPayload.created_at >= payload_cutoff,
+            )
+        )
         return self._build_coverage_draft(
             task,
             state,
             raw_pages_saved=raw_pages_after - raw_pages_before,
             comments_observed=comments_after - comments_before,
-            raw_payloads_saved=raw_payloads_after - raw_payloads_before,
+            raw_payloads_saved=int(raw_payloads_after or 0),
         )
 
     async def _count_latest_raw_pages(
@@ -170,10 +174,6 @@ class LatestCommentCollector:
                 CommentObservation.sort_mode == "latest",
             )
         )
-        return int(count or 0)
-
-    async def _count_raw_payloads(self, session: AsyncSession) -> int:
-        count = await session.scalar(select(func.count(RawPayload.id)))
         return int(count or 0)
 
     def _build_coverage_draft(
