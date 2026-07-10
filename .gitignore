@@ -18,7 +18,5 @@ wheels/
 # 本地采集 raw 归档和运行时数据，不提交
 /data/
 
-# Alembic 迁移脚本——不提交以避免协作冲突
-# 每个开发者独立在本地生成迁移
-alembic/versions/
-!alembic/versions/.gitignore
+# Alembic revision 是部署契约，必须提交；仅忽略解释器缓存。
+alembic/versions/__pycache__/

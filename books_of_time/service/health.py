@@ -7,6 +7,7 @@ from uuid import uuid4
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from books_of_time.db.migrations import get_current_schema_revision
 from books_of_time.db.models import (
     CollectionTask,
     RequestBackoffState,
@@ -30,14 +31,18 @@ class ServiceHealthChecker:
         raw_dir: str | Path,
         media_dir: str | Path,
         heartbeat_timeout_seconds: float = 30,
+        expected_schema_revision: str | None = None,
     ) -> None:
         self.session_factory = session_factory
         self.raw_dir = Path(raw_dir)
         self.media_dir = Path(media_dir)
         self.heartbeat_timeout_seconds = heartbeat_timeout_seconds
+        self.expected_schema_revision = expected_schema_revision
 
     async def doctor(self) -> ServiceHealthReport:
         checks = [await self._database_check()]
+        if self.expected_schema_revision is not None:
+            checks.append(await self._schema_revision_check())
         checks.append(self._storage_check("raw_storage", self.raw_dir))
         checks.append(self._storage_check("media_storage", self.media_dir))
         return ServiceHealthReport(tuple(checks))
@@ -129,6 +134,31 @@ class ServiceHealthChecker:
             )
         except Exception as exc:
             return self._failed_check("database", exc)
+
+    async def _schema_revision_check(self) -> ServiceCheck:
+        try:
+            async with self.session_factory() as session:
+                current = await get_current_schema_revision(session)
+            expected = self.expected_schema_revision
+            if current is None:
+                return ServiceCheck(
+                    name="schema_revision",
+                    ok=False,
+                    detail=f"schema revision missing; expected {expected}",
+                )
+            if current != expected:
+                return ServiceCheck(
+                    name="schema_revision",
+                    ok=False,
+                    detail=f"schema revision {current}; expected {expected}",
+                )
+            return ServiceCheck(
+                name="schema_revision",
+                ok=True,
+                detail=f"schema revision {current}",
+            )
+        except Exception as exc:
+            return self._failed_check("schema_revision", exc)
 
     def _storage_check(self, name: str, path: Path) -> ServiceCheck:
         probe_path: Path | None = None

@@ -21,6 +21,7 @@ from books_of_time.app import (
 )
 from books_of_time.common.logger import get_logger
 from books_of_time.config import load_config
+from books_of_time.db.migrations import get_expected_schema_revision
 from books_of_time.db.repositories import (
     CollectionCoverageRepository,
     CollectionTaskRepository,
@@ -399,6 +400,7 @@ def _build_service_health_checker(cfg: dict, session_factory) -> ServiceHealthCh
         heartbeat_timeout_seconds=float(
             service_cfg.get("heartbeat_timeout_seconds", 30)
         ),
+        expected_schema_revision=get_expected_schema_revision(),
     )
 
 

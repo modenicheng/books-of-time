@@ -1,18 +1,16 @@
-"""Alembic env -- async + YAML config.
-
-DB url is read from ``config/config.yaml`` instead of ``alembic.ini``.
-"""
+"""Alembic environment using the application configuration loader."""
 
 from __future__ import annotations
 
 import asyncio
+import os
 from logging.config import fileConfig
-from pathlib import Path
 
 from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from alembic import context
+from books_of_time.config import load_config
 
 # ---------------------------------------------------------------------------
 # Alembic Config + logging
@@ -22,26 +20,9 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# ---------------------------------------------------------------------------
-# read DB URL from YAML (highest priority)
-# ---------------------------------------------------------------------------
-_here = Path(__file__).resolve().parent.parent
-_config_yaml = _here / "config" / "config.yaml"
-_yaml_provided = False
-
-if _config_yaml.exists():
-    import yaml
-
-    with open(_config_yaml, encoding="utf-8") as f:
-        yaml_cfg = yaml.safe_load(f)
-    db_url = yaml_cfg.get("database", {}).get("url", "")
-    if db_url and "placeholder" not in db_url:
-        _yaml_provided = True
-        config.set_main_option("sqlalchemy.url", db_url)
-
-if not _yaml_provided:
-    # fallback to ini value (for offline mode only)
-    db_url = config.get_main_option("sqlalchemy.url", "")
+app_config = load_config()
+db_url = str(app_config["database"]["url"])
+config.set_main_option("sqlalchemy.url", db_url.replace("%", "%%"))
 
 # ---------------------------------------------------------------------------
 # target metadata -- autogenerate depends on this
@@ -83,10 +64,13 @@ async def run_async_migrations() -> None:
         "sqlalchemy.url": db_url,
         "sqlalchemy.echo": False,
     }
+    schema = os.environ.get("BOT_DATABASE_SCHEMA")
+    connect_args = {"server_settings": {"search_path": schema}} if schema else {}
     connectable = async_engine_from_config(
         cfg,
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
+        connect_args=connect_args,
     )
 
     async with connectable.connect() as connection:

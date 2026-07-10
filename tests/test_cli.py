@@ -2,7 +2,7 @@ import json
 from datetime import UTC, datetime
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from books_of_time import cli
@@ -120,6 +120,12 @@ async def test_run_service_finishes_finite_sqlite_smoke(tmp_path) -> None:
     engine = create_async_engine(cfg["database"]["url"])
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await conn.execute(
+            text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)")
+        )
+        await conn.execute(
+            text("INSERT INTO alembic_version (version_num) VALUES ('0001_initial')")
+        )
     await engine.dispose()
 
     await cli._run_service(cfg, max_worker_iterations=1)
