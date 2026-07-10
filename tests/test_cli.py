@@ -1,4 +1,5 @@
 import json
+import signal
 from datetime import UTC, datetime
 
 import pytest
@@ -24,6 +25,15 @@ from books_of_time.domain.enums import (
 )
 from books_of_time.http.client import FetchResult
 from books_of_time.storage.filesystem import RawPayloadFileStore
+
+
+def test_service_stop_signals_include_windows_break_when_available() -> None:
+    candidates = cli._service_stop_signals()
+
+    assert signal.SIGINT in candidates
+    assert signal.SIGTERM in candidates
+    if hasattr(signal, "SIGBREAK"):
+        assert signal.SIGBREAK in candidates
 
 
 def test_collect_latest_comments_parser_defaults() -> None:

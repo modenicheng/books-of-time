@@ -537,7 +537,7 @@ def _install_service_signal_handlers(host: ServiceHost) -> Callable[[], None]:
     def request_stop(signum=None, frame=None) -> None:
         loop.call_soon_threadsafe(host.request_stop)
 
-    for candidate in (signal.SIGINT, signal.SIGTERM):
+    for candidate in _service_stop_signals():
         try:
             loop.add_signal_handler(candidate, host.request_stop)
             loop_signals.append(candidate)
@@ -552,6 +552,14 @@ def _install_service_signal_handlers(host: ServiceHost) -> Callable[[], None]:
             signal.signal(candidate, previous)
 
     return cleanup
+
+
+def _service_stop_signals() -> tuple[signal.Signals, ...]:
+    candidates = [signal.SIGINT, signal.SIGTERM]
+    windows_break = getattr(signal, "SIGBREAK", None)
+    if windows_break is not None:
+        candidates.append(windows_break)
+    return tuple(candidates)
 
 
 def _parse_event_datetime(value: str | None) -> datetime | None:
