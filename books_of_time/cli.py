@@ -25,11 +25,13 @@ from books_of_time.db.migrations import get_expected_schema_revision
 from books_of_time.db.repositories import (
     CollectionCoverageRepository,
     CollectionTaskRepository,
+    EventRepository,
     RawPayloadRepository,
     VideoMetricSnapshotRepository,
 )
 from books_of_time.db.schema import create_schema
 from books_of_time.domain.enums import TaskKind, TaskStatus
+from books_of_time.domain.events import EVENT_STATUSES, EVENT_TARGET_TYPES
 from books_of_time.parsers.discovery import parse_user_video_list
 from books_of_time.service.health import ServiceHealthChecker
 from books_of_time.service.host import ServiceHost
@@ -127,6 +129,32 @@ def build_parser() -> argparse.ArgumentParser:
     service_status = service_sub.add_parser("status")
     service_status.add_argument("--limit", type=int, default=20)
 
+    event = subparsers.add_parser("event")
+    event_sub = event.add_subparsers(dest="event_command", required=True)
+    event_create = event_sub.add_parser("create")
+    event_create.add_argument("slug")
+    event_create.add_argument("--name", required=True)
+    event_create.add_argument("--game", default=None)
+    event_create.add_argument("--description", default=None)
+    event_create.add_argument(
+        "--status",
+        choices=sorted(EVENT_STATUSES),
+        default="active",
+    )
+    event_create.add_argument("--start-at", default=None)
+    event_create.add_argument("--end-at", default=None)
+    event_create.add_argument("--timezone", default="Asia/Shanghai")
+    event_list = event_sub.add_parser("list")
+    event_list.add_argument("--limit", type=int, default=100)
+    event_add_target = event_sub.add_parser("add-target")
+    event_add_target.add_argument("event_reference")
+    event_add_target.add_argument("target_type", choices=sorted(EVENT_TARGET_TYPES))
+    event_add_target.add_argument("target_value")
+    event_add_target.add_argument("--priority", type=int, default=0)
+    event_list_videos = event_sub.add_parser("list-videos")
+    event_list_videos.add_argument("event_reference")
+    event_list_videos.add_argument("--limit", type=int, default=1000)
+
     discover = subparsers.add_parser("discover-user")
     discover.add_argument("mid")
     discover.add_argument("--page", type=int, default=1)
@@ -164,6 +192,42 @@ async def _run(args: argparse.Namespace) -> None:
 
     if args.command == "service" and args.service_command == "status":
         await _show_service_status(cfg, limit=args.limit)
+        return
+
+    if args.command == "event" and args.event_command == "create":
+        await _create_event(
+            cfg,
+            slug=args.slug,
+            name=args.name,
+            game=args.game,
+            description=args.description,
+            status=args.status,
+            start_at=args.start_at,
+            end_at=args.end_at,
+            timezone=args.timezone,
+        )
+        return
+
+    if args.command == "event" and args.event_command == "list":
+        await _list_events(cfg, limit=args.limit)
+        return
+
+    if args.command == "event" and args.event_command == "add-target":
+        await _add_event_target(
+            cfg,
+            event_reference=args.event_reference,
+            target_type=args.target_type,
+            target_value=args.target_value,
+            priority=args.priority,
+        )
+        return
+
+    if args.command == "event" and args.event_command == "list-videos":
+        await _list_event_videos(
+            cfg,
+            event_reference=args.event_reference,
+            limit=args.limit,
+        )
         return
 
     if args.command == "monitor-video":
@@ -440,6 +504,126 @@ def _install_service_signal_handlers(host: ServiceHost) -> Callable[[], None]:
             signal.signal(candidate, previous)
 
     return cleanup
+
+
+def _parse_event_datetime(value: str | None) -> datetime | None:
+    if value is None:
+        return None
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError("Event datetime must include a timezone offset")
+    return parsed.astimezone(UTC)
+
+
+async def _create_event(
+    cfg: dict,
+    *,
+    slug: str,
+    name: str,
+    game: str | None,
+    description: str | None,
+    status: str,
+    start_at: str | None,
+    end_at: str | None,
+    timezone: str,
+):
+    session_factory = build_session_factory(cfg)
+    async with session_factory() as session:
+        event = await EventRepository(session).create_event(
+            slug=slug,
+            name=name,
+            game=game,
+            description=description,
+            status=status,
+            start_at=_parse_event_datetime(start_at),
+            end_at=_parse_event_datetime(end_at),
+            timezone=timezone,
+            now=datetime.now(UTC),
+        )
+        await session.commit()
+    logger.info(
+        "Created event id=%s slug=%s name=%s status=%s",
+        event.id,
+        event.slug,
+        event.name,
+        event.status,
+    )
+    return event
+
+
+async def _list_events(cfg: dict, *, limit: int) -> None:
+    session_factory = build_session_factory(cfg)
+    async with session_factory() as session:
+        events = await EventRepository(session).list_events(limit=limit)
+    if not events:
+        logger.info("No events found")
+        return
+    for event in events:
+        logger.info(
+            "event id=%s slug=%s name=%s game=%s status=%s start_at=%s end_at=%s",
+            event.id,
+            event.slug,
+            event.name,
+            event.game,
+            event.status,
+            event.start_at.isoformat() if event.start_at is not None else None,
+            event.end_at.isoformat() if event.end_at is not None else None,
+        )
+
+
+async def _add_event_target(
+    cfg: dict,
+    *,
+    event_reference: str,
+    target_type: str,
+    target_value: str,
+    priority: int,
+):
+    session_factory = build_session_factory(cfg)
+    async with session_factory() as session:
+        repository = EventRepository(session)
+        event = await repository.resolve_event(event_reference)
+        target = await repository.add_target(
+            event_id=event.id,
+            target_type=target_type,
+            target_value=target_value,
+            priority=priority,
+            now=datetime.now(UTC),
+        )
+        await session.commit()
+    logger.info(
+        "Registered event target event=%s type=%s value=%s priority=%s",
+        event.slug,
+        target.target_type,
+        target.target_value,
+        target.priority,
+    )
+    return target
+
+
+async def _list_event_videos(
+    cfg: dict,
+    *,
+    event_reference: str,
+    limit: int,
+) -> None:
+    session_factory = build_session_factory(cfg)
+    async with session_factory() as session:
+        repository = EventRepository(session)
+        event = await repository.resolve_event(event_reference)
+        videos = await repository.list_videos(event.id, limit=limit)
+    if not videos:
+        logger.info("No videos found for event id=%s slug=%s", event.id, event.slug)
+        return
+    for video in videos:
+        logger.info(
+            "event_video event=%s bvid=%s reason=%s confidence=%s first_seen_at=%s",
+            event.slug,
+            video.bvid,
+            video.association_reason,
+            video.confidence,
+            video.first_seen_at.isoformat(),
+        )
 
 
 async def _monitor_video(cfg: dict, bvid: str, priority: int) -> None:

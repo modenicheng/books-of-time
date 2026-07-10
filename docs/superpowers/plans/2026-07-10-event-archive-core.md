@@ -18,27 +18,27 @@
 
 ### Task 1: Event ORM And Normalization
 
-- [ ] Write model tests for constraints, relationships by IDs, target normalization, and duplicate stable keys.
-- [ ] Verify RED for missing event models/helpers.
-- [ ] Add `Event`, `EventTarget`, `EventVideo`, and `EventKeyword` plus indexes and uniqueness constraints.
-- [ ] Add `normalize_event_slug`, `normalize_event_target`, and validation for event windows, UID, BVID, keyword, and game values.
-- [ ] Verify focused tests and commit `feat: add event archive data model`.
+- [x] Write model tests for constraints, relationships by IDs, target normalization, and duplicate stable keys.
+- [x] Verify RED for missing event models/helpers.
+- [x] Add `Event`, `EventTarget`, `EventVideo`, and `EventKeyword` plus indexes and uniqueness constraints.
+- [x] Add `normalize_event_slug`, `normalize_event_target`, and validation for event windows, UID, BVID, keyword, and game values.
+- [x] Verify focused tests and commit `feat: add event archive data model`.
 
 ### Task 2: Event Repository Invariants
 
-- [ ] Write tests for create/resolve/list, idempotent target add, keyword synchronization, seed attachment/task enqueue, manual attachment, and video listing.
-- [ ] Verify RED for missing repository.
-- [ ] Implement `EventRepository` methods with explicit `LookupError`/`ValueError` failures and no partial writes.
-- [ ] Verify repository plus task queue tests and commit `feat: manage event archive records`.
+- [x] Write tests for create/resolve/list, idempotent target add, keyword synchronization, seed attachment/task enqueue, manual attachment, and video listing.
+- [x] Verify RED for missing repository.
+- [x] Implement `EventRepository` methods with explicit `LookupError`/`ValueError` failures and no partial writes.
+- [x] Verify repository plus task queue tests and commit `feat: manage event archive records`.
 
 ### Task 3: Event Management CLI And Migration
 
-- [ ] Write parser/dispatch and SQLite integration tests for `event create`, `event list`, `event add-target`, and `event list-videos`.
-- [ ] Verify RED for missing commands.
-- [ ] Implement CLI handlers with ISO timestamp parsing, stable IDs, target reasons, and bounded list limits.
-- [ ] Generate and review a static `0002_event_archive` revision; run SQLite and isolated PostgreSQL migration cycles.
-- [ ] Update TODO core Event Archive items and run full verification.
-- [ ] Commit `feat: add event archive management CLI`.
+- [x] Write parser/dispatch and SQLite integration tests for `event create`, `event list`, `event add-target`, and `event list-videos`.
+- [x] Verify RED for missing commands.
+- [x] Implement CLI handlers with ISO timestamp parsing, stable IDs, target reasons, and bounded list limits.
+- [x] Generate and review a static `0002_event_archive` revision; run SQLite and isolated PostgreSQL migration cycles.
+- [x] Update TODO core Event Archive items and run full verification.
+- [x] Commit `feat: add event archive management CLI`.
 
 ## Self-review
 

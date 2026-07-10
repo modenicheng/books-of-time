@@ -9,6 +9,7 @@ from books_of_time import cli
 from books_of_time.cli import _show_coverage, build_parser
 from books_of_time.coverage import CoverageDraft
 from books_of_time.db.base import Base
+from books_of_time.db.migrations import get_expected_schema_revision
 from books_of_time.db.models import ScheduledJob, ServiceInstance, VideoMetricSnapshot
 from books_of_time.db.repositories import (
     CollectionCoverageRepository,
@@ -124,7 +125,8 @@ async def test_run_service_finishes_finite_sqlite_smoke(tmp_path) -> None:
             text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)")
         )
         await conn.execute(
-            text("INSERT INTO alembic_version (version_num) VALUES ('0001_initial')")
+            text("INSERT INTO alembic_version (version_num) VALUES (:revision)"),
+            {"revision": get_expected_schema_revision()},
         )
     await engine.dispose()
 

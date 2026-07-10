@@ -198,13 +198,13 @@
 
 ## P2: Event Archive
 
-- [ ] 建立 `events` 表。
-- [ ] 建立 `event_targets` 表：UID、关键词、种子 BV、游戏。
-- [ ] 建立 `event_videos` 表。
-- [ ] 建立 `event_keywords` 表。
-- [ ] CLI 支持 `bot event create`。
-- [ ] CLI 支持 `bot event add-target`。
-- [ ] CLI 支持 `bot event list-videos`。
+- [x] 建立 `events` 表。
+- [x] 建立 `event_targets` 表：UID、关键词、种子 BV、游戏。
+- [x] 建立 `event_videos` 表。
+- [x] 建立 `event_keywords` 表。
+- [x] CLI 支持 `bot event create`。
+- [x] CLI 支持 `bot event add-target`。
+- [x] CLI 支持 `bot event list-videos`。
 - [ ] Scheduler 可按事件目标池发现新视频。
 - [ ] 事件级覆盖率汇总。
 - [ ] 事件基础时间线导出。
