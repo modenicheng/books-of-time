@@ -495,6 +495,10 @@ class LatestCommentCollector:
             not_before=datetime.now(UTC),
             budget_cost=task.budget_cost,
             max_retries=task.max_retries,
+            idempotency_key=(
+                f"{TaskKind.FETCH_LATEST_COMMENTS.value}:"
+                f"{task.target_type}:{task.target_id}:latest_followup"
+            ),
         )
 
     def _mark_paused(
