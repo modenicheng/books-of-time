@@ -3,11 +3,21 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
+import signal
+import socket
+from collections.abc import Callable
 from datetime import UTC, datetime
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from uuid import uuid4
 
-from books_of_time.app import build_bilibili_client, build_session_factory, build_worker
+from books_of_time.app import (
+    build_bilibili_client,
+    build_engine,
+    build_session_factory,
+    build_worker,
+)
 from books_of_time.common.logger import get_logger
 from books_of_time.config import load_config
 from books_of_time.db.repositories import (
@@ -19,6 +29,9 @@ from books_of_time.db.repositories import (
 from books_of_time.db.schema import create_schema
 from books_of_time.domain.enums import TaskKind, TaskStatus
 from books_of_time.parsers.discovery import parse_user_video_list
+from books_of_time.service.health import ServiceHealthChecker
+from books_of_time.service.host import ServiceHost
+from books_of_time.service.models import ServiceHealthReport
 from books_of_time.storage.filesystem import RawPayloadFileStore
 from books_of_time.task_orchestrator.discovery import DiscoveryScheduler
 from books_of_time.task_orchestrator.discovery_loop import (
@@ -100,6 +113,15 @@ def build_parser() -> argparse.ArgumentParser:
     discovery_loop.add_argument("--max-iterations", type=int, default=None)
     discovery_loop.add_argument("--stop-when-idle", action="store_true")
 
+    service = subparsers.add_parser("service")
+    service_sub = service.add_subparsers(dest="service_command", required=True)
+    service_run = service_sub.add_parser("run")
+    service_run.add_argument("--max-worker-iterations", type=int, default=None)
+    service_sub.add_parser("doctor")
+    service_sub.add_parser("health")
+    service_status = service_sub.add_parser("status")
+    service_status.add_argument("--limit", type=int, default=20)
+
     discover = subparsers.add_parser("discover-user")
     discover.add_argument("mid")
     discover.add_argument("--page", type=int, default=1)
@@ -119,6 +141,25 @@ async def _run(args: argparse.Namespace) -> None:
         return
 
     cfg = load_config(args.config)
+
+    if args.command == "service" and args.service_command == "run":
+        await _run_service(
+            cfg,
+            max_worker_iterations=args.max_worker_iterations,
+        )
+        return
+
+    if args.command == "service" and args.service_command == "doctor":
+        await _show_service_doctor(cfg)
+        return
+
+    if args.command == "service" and args.service_command == "health":
+        await _show_service_health(cfg)
+        return
+
+    if args.command == "service" and args.service_command == "status":
+        await _show_service_status(cfg, limit=args.limit)
+        return
 
     if args.command == "monitor-video":
         await _monitor_video(cfg, args.bvid, args.priority)
@@ -202,6 +243,188 @@ async def _run(args: argparse.Namespace) -> None:
         return
 
     raise ValueError(f"Unsupported command: {args.command}")
+
+
+async def _run_service(
+    cfg: dict,
+    *,
+    max_worker_iterations: int | None,
+) -> None:
+    engine = build_engine(cfg)
+    session_factory = build_session_factory(cfg, engine=engine)
+    checker = _build_service_health_checker(cfg, session_factory)
+    service_cfg = cfg.get("service", {})
+    roles = [str(role) for role in service_cfg.get("roles", ["worker"])]
+    if "worker" not in roles:
+        await engine.dispose()
+        raise ValueError("Service-1 requires the worker role")
+
+    doctor = await checker.doctor()
+    _log_health_report(doctor)
+    if not doctor.ok:
+        await engine.dispose()
+        raise RuntimeError("Service startup checks failed")
+
+    client = build_bilibili_client(cfg)
+    instance_prefix = str(service_cfg.get("instance_id") or socket.gethostname())
+    instance_id = f"{instance_prefix}-{os.getpid()}-{uuid4().hex[:8]}"
+    run_id = f"service-{datetime.now(UTC):%Y%m%dT%H%M%SZ}-{uuid4().hex[:8]}"
+    worker = build_worker(
+        cfg,
+        run_id=run_id,
+        lease_owner=instance_id,
+        session_factory=session_factory,
+        client=client,
+    )
+    host = ServiceHost(
+        session_factory=session_factory,
+        worker=worker,
+        instance_id=instance_id,
+        roles=roles,
+        hostname=socket.gethostname(),
+        pid=os.getpid(),
+        version=_application_version(),
+        heartbeat_seconds=float(service_cfg.get("heartbeat_seconds", 10)),
+        shutdown_grace_seconds=float(service_cfg.get("shutdown_grace_seconds", 60)),
+        worker_idle_sleep_seconds=float(
+            service_cfg.get("worker_idle_sleep_seconds", 5)
+        ),
+    )
+    cleanup_signals = _install_service_signal_handlers(host)
+    try:
+        executed = await host.run(max_worker_iterations=max_worker_iterations)
+        logger.info(
+            "Service stopped instance=%s executed_tasks=%s",
+            instance_id,
+            executed,
+        )
+    finally:
+        cleanup_signals()
+        await engine.dispose()
+
+
+async def _show_service_doctor(cfg: dict) -> None:
+    engine = build_engine(cfg)
+    try:
+        checker = _build_service_health_checker(
+            cfg,
+            build_session_factory(cfg, engine=engine),
+        )
+        report = await checker.doctor()
+        _log_health_report(report)
+    finally:
+        await engine.dispose()
+    if not report.ok:
+        raise SystemExit(1)
+
+
+async def _show_service_health(cfg: dict) -> None:
+    engine = build_engine(cfg)
+    try:
+        checker = _build_service_health_checker(
+            cfg,
+            build_session_factory(cfg, engine=engine),
+        )
+        report = await checker.health(now=datetime.now(UTC))
+        _log_health_report(report)
+    finally:
+        await engine.dispose()
+    if not report.ok:
+        raise SystemExit(1)
+
+
+async def _show_service_status(cfg: dict, *, limit: int) -> None:
+    engine = build_engine(cfg)
+    try:
+        checker = _build_service_health_checker(
+            cfg,
+            build_session_factory(cfg, engine=engine),
+        )
+        status = await checker.status(
+            now=datetime.now(UTC),
+            instance_limit=min(max(limit, 1), 200),
+        )
+    finally:
+        await engine.dispose()
+
+    logger.info(
+        "Service queue pending=%s running=%s failed=%s oldest_pending_at=%s "
+        "active_backoffs=%s",
+        status.pending_tasks,
+        status.running_tasks,
+        status.failed_tasks,
+        status.oldest_pending_at.isoformat()
+        if status.oldest_pending_at is not None
+        else None,
+        status.active_backoffs,
+    )
+    for instance in status.instances:
+        logger.info(
+            "Service instance=%s host=%s pid=%s roles=%s status=%s "
+            "started_at=%s heartbeat_at=%s stopped_at=%s error_type=%s",
+            instance.instance_id,
+            instance.hostname,
+            instance.pid,
+            ",".join(instance.roles),
+            instance.status,
+            instance.started_at.isoformat(),
+            instance.heartbeat_at.isoformat(),
+            instance.stopped_at.isoformat()
+            if instance.stopped_at is not None
+            else None,
+            instance.last_error_type,
+        )
+
+
+def _build_service_health_checker(cfg: dict, session_factory) -> ServiceHealthChecker:
+    storage_cfg = cfg.get("storage", {})
+    service_cfg = cfg.get("service", {})
+    return ServiceHealthChecker(
+        session_factory=session_factory,
+        raw_dir=storage_cfg.get("raw_dir", "./data/raw"),
+        media_dir=storage_cfg.get("media_dir", "./data/media"),
+        heartbeat_timeout_seconds=float(
+            service_cfg.get("heartbeat_timeout_seconds", 30)
+        ),
+    )
+
+
+def _log_health_report(report: ServiceHealthReport) -> None:
+    for check in report.checks:
+        log = logger.info if check.ok else logger.error
+        log("Service check %s ok=%s detail=%s", check.name, check.ok, check.detail)
+
+
+def _application_version() -> str:
+    try:
+        return version("books-of-time")
+    except PackageNotFoundError:
+        return "0.1.0"
+
+
+def _install_service_signal_handlers(host: ServiceHost) -> Callable[[], None]:
+    loop = asyncio.get_running_loop()
+    loop_signals: list[signal.Signals] = []
+    fallback_handlers: dict[signal.Signals, signal.Handlers] = {}
+
+    def request_stop(signum=None, frame=None) -> None:
+        loop.call_soon_threadsafe(host.request_stop)
+
+    for candidate in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(candidate, host.request_stop)
+            loop_signals.append(candidate)
+        except (NotImplementedError, RuntimeError):
+            fallback_handlers[candidate] = signal.getsignal(candidate)
+            signal.signal(candidate, request_stop)
+
+    def cleanup() -> None:
+        for candidate in loop_signals:
+            loop.remove_signal_handler(candidate)
+        for candidate, previous in fallback_handlers.items():
+            signal.signal(candidate, previous)
+
+    return cleanup
 
 
 async def _monitor_video(cfg: dict, bvid: str, priority: int) -> None:

@@ -2,13 +2,14 @@ import json
 from datetime import UTC, datetime
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from books_of_time import cli
 from books_of_time.cli import _show_coverage, build_parser
 from books_of_time.coverage import CoverageDraft
 from books_of_time.db.base import Base
-from books_of_time.db.models import VideoMetricSnapshot
+from books_of_time.db.models import ServiceInstance, VideoMetricSnapshot
 from books_of_time.db.repositories import (
     CollectionCoverageRepository,
     CollectionTaskRepository,
@@ -42,6 +43,95 @@ def test_collect_latest_comments_parser_accepts_overrides() -> None:
 
     assert args.priority == 90
     assert args.max_scan_seconds == 12
+
+
+def test_service_parser_supports_runtime_and_operations_commands() -> None:
+    run_args = build_parser().parse_args(
+        ["service", "run", "--max-worker-iterations", "1"]
+    )
+    assert run_args.service_command == "run"
+    assert run_args.max_worker_iterations == 1
+
+    doctor_args = build_parser().parse_args(["service", "doctor"])
+    assert doctor_args.service_command == "doctor"
+
+    health_args = build_parser().parse_args(["service", "health"])
+    assert health_args.service_command == "health"
+
+    status_args = build_parser().parse_args(["service", "status", "--limit", "5"])
+    assert status_args.service_command == "status"
+    assert status_args.limit == 5
+
+
+@pytest.mark.asyncio
+async def test_run_dispatches_service_commands(monkeypatch) -> None:
+    calls: list[tuple[str, object]] = []
+
+    async def fake_run_service(cfg, *, max_worker_iterations) -> None:
+        calls.append(("run", max_worker_iterations))
+
+    async def fake_doctor(cfg) -> None:
+        calls.append(("doctor", cfg))
+
+    async def fake_health(cfg) -> None:
+        calls.append(("health", cfg))
+
+    async def fake_status(cfg, *, limit) -> None:
+        calls.append(("status", limit))
+
+    cfg = {"database": {"url": "unused"}}
+    monkeypatch.setattr(cli, "load_config", lambda path: cfg)
+    monkeypatch.setattr(cli, "_run_service", fake_run_service)
+    monkeypatch.setattr(cli, "_show_service_doctor", fake_doctor)
+    monkeypatch.setattr(cli, "_show_service_health", fake_health)
+    monkeypatch.setattr(cli, "_show_service_status", fake_status)
+
+    await cli._run(
+        build_parser().parse_args(["service", "run", "--max-worker-iterations", "2"])
+    )
+    await cli._run(build_parser().parse_args(["service", "doctor"]))
+    await cli._run(build_parser().parse_args(["service", "health"]))
+    await cli._run(build_parser().parse_args(["service", "status", "--limit", "7"]))
+
+    assert calls == [
+        ("run", 2),
+        ("doctor", cfg),
+        ("health", cfg),
+        ("status", 7),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_run_service_finishes_finite_sqlite_smoke(tmp_path) -> None:
+    db_path = tmp_path / "service.sqlite3"
+    cfg = {
+        "database": {"url": f"sqlite+aiosqlite:///{db_path}"},
+        "storage": {
+            "raw_dir": str(tmp_path / "raw"),
+            "media_dir": str(tmp_path / "media"),
+        },
+        "service": {
+            "roles": ["worker"],
+            "worker_idle_sleep_seconds": 0,
+            "heartbeat_seconds": 0.01,
+            "shutdown_grace_seconds": 1,
+        },
+    }
+    engine = create_async_engine(cfg["database"]["url"])
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    await engine.dispose()
+
+    await cli._run_service(cfg, max_worker_iterations=1)
+
+    engine = create_async_engine(cfg["database"]["url"])
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        instances = list(await session.scalars(select(ServiceInstance)))
+    await engine.dispose()
+
+    assert len(instances) == 1
+    assert instances[0].status == "stopped"
 
 
 def test_coverage_parser_accepts_bvid() -> None:

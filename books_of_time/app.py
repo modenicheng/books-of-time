@@ -3,7 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 
 from books_of_time.collectors.hot_comments import HotCommentCollector
 from books_of_time.collectors.latest_comments import LatestCommentCollector
@@ -23,18 +28,24 @@ from books_of_time.task_orchestrator.video_snapshot_scheduler import (
 from books_of_time.worker import Worker
 
 
-def build_session_factory(
-    cfg: dict[str, Any],
-) -> async_sessionmaker[AsyncSession]:
+def build_engine(cfg: dict[str, Any]) -> AsyncEngine:
     db_cfg = cfg["database"]
-    engine = create_async_engine(
+    return create_async_engine(
         db_cfg["url"],
         pool_size=db_cfg.get("pool_size", 5),
         max_overflow=db_cfg.get("max_overflow", 10),
         pool_pre_ping=db_cfg.get("pool_pre_ping", True),
         echo=db_cfg.get("echo", False),
     )
-    return async_sessionmaker(engine, expire_on_commit=False)
+
+
+def build_session_factory(
+    cfg: dict[str, Any],
+    *,
+    engine: AsyncEngine | None = None,
+) -> async_sessionmaker[AsyncSession]:
+    effective_engine = engine or build_engine(cfg)
+    return async_sessionmaker(effective_engine, expire_on_commit=False)
 
 
 def build_rate_limiter(cfg: dict[str, Any]) -> TokenBucketRateLimiter:
@@ -63,9 +74,11 @@ def build_worker(
     *,
     run_id: str,
     lease_owner: str,
+    session_factory: async_sessionmaker[AsyncSession] | None = None,
+    client: BilibiliPlatformClient | None = None,
 ) -> Worker:
-    session_factory = build_session_factory(cfg)
-    client = build_bilibili_client(cfg)
+    effective_session_factory = session_factory or build_session_factory(cfg)
+    effective_client = client or build_bilibili_client(cfg)
     storage_cfg = cfg.get("storage", {})
     raw_dir = Path(storage_cfg.get("raw_dir", "./data/raw"))
     media_dir = Path(storage_cfg.get("media_dir", "./data/media"))
@@ -73,21 +86,21 @@ def build_worker(
     scheduler_cfg = cfg.get("scheduler", {})
     latest_comments_cfg = cfg.get("latest_comments", {})
     return Worker(
-        session_factory=session_factory,
+        session_factory=effective_session_factory,
         collectors={
             TaskKind.FETCH_VIDEO_STATS: VideoStatsCollector(
-                client=client,
+                client=effective_client,
                 raw_store=raw_store,
                 run_id=run_id,
                 snapshot_scheduler=VideoSnapshotScheduler(),
             ),
             TaskKind.FETCH_HOT_COMMENTS: HotCommentCollector(
-                client=client,
+                client=effective_client,
                 raw_store=raw_store,
                 run_id=run_id,
             ),
             TaskKind.FETCH_LATEST_COMMENTS: LatestCommentCollector(
-                client=client,
+                client=effective_client,
                 raw_store=raw_store,
                 run_id=run_id,
                 max_scan_seconds=float(latest_comments_cfg.get("max_scan_seconds", 55)),
@@ -103,14 +116,14 @@ def build_worker(
                 ],
             ),
             TaskKind.FETCH_COMMENT_REPLIES: ReplyCommentCollector(
-                client=client,
+                client=effective_client,
                 raw_store=raw_store,
                 run_id=run_id,
             ),
             TaskKind.FETCH_MEDIA_ASSET: MediaAssetCollector(
                 MediaDownloader(
-                    http_client=client.http_client,
-                    rate_limiter=client.rate_limiter,
+                    http_client=effective_client.http_client,
+                    rate_limiter=effective_client.rate_limiter,
                     media_store=MediaStore(media_dir),
                     raw_store=raw_store,
                     run_id=run_id,
