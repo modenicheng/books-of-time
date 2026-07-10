@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from books_of_time.analysis.keywords import KeywordTrendAnalyzer
 from books_of_time.db.base import Base
-from books_of_time.db.models import CommentObservation
+from books_of_time.db.models import CommentObservation, EventVideo
 from books_of_time.db.repositories import EventRepository
 
 
@@ -30,13 +30,16 @@ async def test_keyword_trends_count_distinct_comments_and_observations() -> None
             target_value="控评",
             now=start,
         )
-        for bvid in ("BV1xx411c7mD", "BV1Q541167Qg"):
+        for bvid in ("BV1xx411c7mD", "BV1Q541167Qg", "BV17x411w7KC"):
             await repository.attach_video(
                 event_id=event.id,
                 bvid=bvid,
                 association_reason="manual",
                 now=start,
             )
+        inactive_video = await session.get(EventVideo, (event.id, "BV17x411w7KC"))
+        assert inactive_video is not None
+        inactive_video.active = False
         session.add_all(
             [
                 _observation(1, "BV1xx411c7mD", 1001, start, "质疑控评"),
@@ -49,6 +52,7 @@ async def test_keyword_trends_count_distinct_comments_and_observations() -> None
                 ),
                 _observation(3, "BV1xx411c7mD", 1002, start, "普通评论"),
                 _observation(4, "BV1Q541167Qg", 1003, start, "控评了吗"),
+                _observation(5, "BV17x411w7KC", 1004, start, "失活视频也提到控评"),
             ]
         )
         await session.commit()

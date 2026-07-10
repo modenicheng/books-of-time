@@ -77,7 +77,10 @@ class KeywordTrendAnalyzer:
         event_videos = list(
             await self.session.scalars(
                 select(EventVideo)
-                .where(EventVideo.event_id == event.id)
+                .where(
+                    EventVideo.event_id == event.id,
+                    EventVideo.active.is_(True),
+                )
                 .order_by(EventVideo.bvid.asc())
             )
         )
