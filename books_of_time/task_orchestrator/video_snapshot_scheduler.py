@@ -6,7 +6,11 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from books_of_time.db.models import CollectionTask, KnownVideo
+from books_of_time.db.models import (
+    CollectionTask,
+    KnownVideo,
+    VideoAvailabilitySnapshot,
+)
 from books_of_time.db.repositories import CollectionTaskRepository
 from books_of_time.domain.enums import TaskKind
 from books_of_time.task_orchestrator.snapshot_policy import CoreWindow
@@ -25,6 +29,9 @@ class VideoSnapshotScheduler:
     ) -> CollectionTask | None:
         known = await session.scalar(select(KnownVideo).where(KnownVideo.bvid == bvid))
         if known is None:
+            return None
+
+        if not await self._is_video_available(session, bvid):
             return None
 
         next_at = await get_next_video_snapshot_at(
@@ -77,6 +84,8 @@ class VideoSnapshotScheduler:
         repo = CollectionTaskRepository(session)
         tasks: list[CollectionTask] = []
         for video in videos:
+            if not await self._is_video_available(session, video.bvid):
+                continue
             task = await repo.enqueue(
                 kind=TaskKind.FETCH_VIDEO_STATS,
                 target_type="video",
@@ -107,3 +116,15 @@ def _terminal_at_for_day(now: datetime, window: CoreWindow) -> tuple[datetime, s
         microsecond=0,
     )
     return terminal_local.astimezone(now.tzinfo), terminal_local.date().isoformat()
+
+
+async def _is_video_available(session: AsyncSession, bvid: str) -> bool:
+    latest = await session.scalar(
+        select(VideoAvailabilitySnapshot)
+        .where(VideoAvailabilitySnapshot.bvid == bvid)
+        .order_by(VideoAvailabilitySnapshot.captured_at.desc())
+        .limit(1)
+    )
+    if latest is None:
+        return True
+    return latest.status == "visible"
