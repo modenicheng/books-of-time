@@ -9,7 +9,7 @@ from books_of_time import cli
 from books_of_time.cli import _show_coverage, build_parser
 from books_of_time.coverage import CoverageDraft
 from books_of_time.db.base import Base
-from books_of_time.db.models import ServiceInstance, VideoMetricSnapshot
+from books_of_time.db.models import ScheduledJob, ServiceInstance, VideoMetricSnapshot
 from books_of_time.db.repositories import (
     CollectionCoverageRepository,
     CollectionTaskRepository,
@@ -111,7 +111,7 @@ async def test_run_service_finishes_finite_sqlite_smoke(tmp_path) -> None:
             "media_dir": str(tmp_path / "media"),
         },
         "service": {
-            "roles": ["worker"],
+            "roles": ["worker", "scheduler"],
             "worker_idle_sleep_seconds": 0,
             "heartbeat_seconds": 0.01,
             "shutdown_grace_seconds": 1,
@@ -128,10 +128,12 @@ async def test_run_service_finishes_finite_sqlite_smoke(tmp_path) -> None:
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
         instances = list(await session.scalars(select(ServiceInstance)))
+        scheduled_jobs = list(await session.scalars(select(ScheduledJob)))
     await engine.dispose()
 
     assert len(instances) == 1
     assert instances[0].status == "stopped"
+    assert len(scheduled_jobs) == 3
 
 
 def test_coverage_parser_accepts_bvid() -> None:

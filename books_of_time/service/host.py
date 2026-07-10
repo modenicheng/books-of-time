@@ -19,12 +19,22 @@ class ServiceWorker(Protocol):
     ) -> int: ...
 
 
+class ServiceCoordinator(Protocol):
+    async def run_loop(
+        self,
+        *,
+        stop_event: asyncio.Event,
+        max_iterations: int | None = None,
+    ) -> int: ...
+
+
 class ServiceHost:
     def __init__(
         self,
         *,
         session_factory: async_sessionmaker[AsyncSession],
         worker: ServiceWorker,
+        coordinator: ServiceCoordinator | None = None,
         instance_id: str,
         roles: list[str],
         hostname: str,
@@ -36,6 +46,7 @@ class ServiceHost:
     ) -> None:
         self.session_factory = session_factory
         self.worker = worker
+        self.coordinator = coordinator
         self.instance_id = instance_id
         self.roles = list(roles)
         self.hostname = hostname
@@ -69,7 +80,19 @@ class ServiceHost:
             self.stop_event.wait(),
             name=f"{self.instance_id}:stop",
         )
-        tasks = (worker_task, heartbeat_task, stop_task)
+        coordinator_task = (
+            asyncio.create_task(
+                self.coordinator.run_loop(stop_event=self.stop_event),
+                name=f"{self.instance_id}:coordinator",
+            )
+            if self.coordinator is not None
+            else None
+        )
+        tasks = tuple(
+            task
+            for task in (worker_task, heartbeat_task, stop_task, coordinator_task)
+            if task is not None
+        )
 
         try:
             done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
@@ -77,15 +100,21 @@ class ServiceHost:
                 result = await worker_task
             elif stop_task in done:
                 result = await self._finish_worker(worker_task)
-            else:
+            elif heartbeat_task in done:
                 await heartbeat_task
                 raise RuntimeError("Heartbeat loop stopped unexpectedly")
+            else:
+                assert coordinator_task is not None
+                await coordinator_task
+                raise RuntimeError("Coordinator loop stopped unexpectedly")
 
             await self._mark_stopping()
             self.stop_event.set()
             if not worker_task.done():
                 result = await self._finish_worker(worker_task)
             await heartbeat_task
+            if coordinator_task is not None:
+                await coordinator_task
             await self._mark_stopped()
             return result
         except BaseException as exc:

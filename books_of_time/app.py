@@ -22,6 +22,8 @@ from books_of_time.media.downloader import MediaAssetCollector, MediaDownloader
 from books_of_time.media.similarity import MediaSimilarityCollector
 from books_of_time.media.storage import MediaStore
 from books_of_time.platforms.bilibili.client import BilibiliPlatformClient
+from books_of_time.service.coordinator import ScheduledJobCoordinator
+from books_of_time.service.scheduled_jobs import build_default_scheduled_jobs
 from books_of_time.storage.filesystem import RawPayloadFileStore
 from books_of_time.task_orchestrator.video_snapshot_scheduler import (
     VideoSnapshotScheduler,
@@ -142,4 +144,24 @@ def build_worker(
         lease_owner=lease_owner,
         lease_seconds=int(scheduler_cfg.get("lease_seconds", 120)),
         retry_delay_seconds=int(scheduler_cfg.get("default_retry_delay_seconds", 300)),
+    )
+
+
+def build_service_coordinator(
+    cfg: dict[str, Any],
+    *,
+    session_factory: async_sessionmaker[AsyncSession],
+    instance_id: str,
+) -> ScheduledJobCoordinator:
+    definitions, handlers = build_default_scheduled_jobs(cfg)
+    scheduler_cfg = cfg.get("scheduler", {})
+    service_cfg = cfg.get("service", {})
+    return ScheduledJobCoordinator(
+        session_factory=session_factory,
+        definitions=definitions,
+        handlers=handlers,
+        lease_owner=instance_id,
+        lease_seconds=int(service_cfg.get("scheduler_lease_seconds", 60)),
+        retry_delay_seconds=int(scheduler_cfg.get("default_retry_delay_seconds", 300)),
+        idle_sleep_seconds=float(service_cfg.get("scheduler_idle_sleep_seconds", 1)),
     )

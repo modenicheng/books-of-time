@@ -12,7 +12,7 @@ from books_of_time.db.models import (
     VideoMetricSnapshot,
 )
 from books_of_time.db.repositories import ScheduledJobRepository
-from books_of_time.domain.enums import ScheduledJobKind, TaskKind
+from books_of_time.domain.enums import ScheduledJobKind, TaskKind, TaskStatus
 from books_of_time.service.scheduled_jobs import (
     TerminalSnapshotScheduleHandler,
     UidDiscoveryScheduleHandler,
@@ -96,11 +96,22 @@ async def test_terminal_handler_schedules_without_uid_sources() -> None:
         )
         await session.commit()
 
-    async with session_factory() as session:
         task = await session.scalar(select(CollectionTask))
-    assert task is not None
-    assert task.target_id == "BV-TERMINAL"
-    assert task.payload["reason"] == "daily_terminal_snapshot"
+        assert task is not None
+        task.status = TaskStatus.SUCCEEDED
+        job.next_run_at = terminal_at + timedelta(minutes=1)
+        await TerminalSnapshotScheduleHandler().handle(
+            job,
+            session,
+            now=terminal_at + timedelta(minutes=1),
+        )
+        await session.commit()
+
+    async with session_factory() as session:
+        tasks = list(await session.scalars(select(CollectionTask)))
+    assert len(tasks) == 1
+    assert tasks[0].target_id == "BV-TERMINAL"
+    assert tasks[0].payload["reason"] == "daily_terminal_snapshot"
     await engine.dispose()
 
 

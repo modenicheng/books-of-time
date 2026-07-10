@@ -84,12 +84,47 @@ class HangingWorker:
             raise
 
 
+class WaitingCoordinator:
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.stop_event: asyncio.Event | None = None
+        self.saw_stop = False
+
+    async def run_loop(
+        self,
+        *,
+        stop_event: asyncio.Event,
+        max_iterations: int | None = None,
+    ) -> int:
+        self.stop_event = stop_event
+        self.started.set()
+        await stop_event.wait()
+        self.saw_stop = True
+        return 0
+
+
+class FailingCoordinator:
+    async def run_loop(
+        self,
+        *,
+        stop_event: asyncio.Event,
+        max_iterations: int | None = None,
+    ) -> int:
+        raise RuntimeError("coordinator exploded")
+
+
 def _host(
-    session_factory, worker, instance_id: str, *, grace: float = 1
+    session_factory,
+    worker,
+    instance_id: str,
+    *,
+    grace: float = 1,
+    coordinator=None,
 ) -> ServiceHost:
     return ServiceHost(
         session_factory=session_factory,
         worker=worker,
+        coordinator=coordinator,
         instance_id=instance_id,
         roles=["worker"],
         hostname="collector-host",
@@ -174,4 +209,48 @@ async def test_service_host_cancels_worker_after_shutdown_grace() -> None:
     assert worker.cancelled.is_set()
     assert instance is not None
     assert instance.status == "stopped"
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_service_host_stops_coordinator_with_finite_worker() -> None:
+    engine, session_factory = await _session_factory()
+    worker = FiniteWorker(result=1)
+    coordinator = WaitingCoordinator()
+    host = _host(
+        session_factory,
+        worker,
+        "service-coordinator-stop",
+        coordinator=coordinator,
+    )
+
+    result = await host.run(max_worker_iterations=1)
+
+    assert result == 1
+    assert coordinator.saw_stop is True
+    assert coordinator.stop_event is worker.stop_event
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_service_host_records_coordinator_failure_and_reraises() -> None:
+    engine, session_factory = await _session_factory()
+    host = _host(
+        session_factory,
+        WaitingWorker(),
+        "service-coordinator-failure",
+        coordinator=FailingCoordinator(),
+    )
+
+    with pytest.raises(RuntimeError, match="coordinator exploded"):
+        await host.run()
+
+    async with session_factory() as session:
+        instance = await ServiceInstanceRepository(session).get(
+            "service-coordinator-failure"
+        )
+    assert instance is not None
+    assert instance.status == "failed"
+    assert instance.last_error_type == "RuntimeError"
+    assert instance.last_error_message == "coordinator exploded"
     await engine.dispose()

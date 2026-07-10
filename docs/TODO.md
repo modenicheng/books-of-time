@@ -61,10 +61,10 @@
 - [x] 实现 `bot service health`，供 Docker `HEALTHCHECK` 和运维探针调用。
 - [x] 实现 `bot service status`，展示实例心跳、队列积压、最老待处理任务和请求退避。
 - [x] 实现 `bot service doctor`，只执行部署前检查而不启动循环。
-- [ ] 建立 `scheduled_jobs` 表及持久化 job lease、失败重试和重启补跑。
-- [ ] 将 UID 发现改为 `FETCH_USER_VIDEOS` 任务，统一经过 worker、限流、退避、raw archive 和 coverage。
-- [ ] 将视频快照 sweep 从采集结果回调补全为独立持久化调度作业。
-- [ ] 将每日终结快照改为独立持久化调度作业，不依赖 UID discovery 是否执行。
+- [x] 建立 `scheduled_jobs` 表及持久化 job lease、失败重试和重启补跑。
+- [x] 将 UID 发现改为 `DISCOVER_USER_VIDEOS` 任务，统一经过 worker、限流、退避、raw archive 和 coverage。
+- [x] 将视频快照 sweep 从采集结果回调补全为独立持久化调度作业。
+- [x] 将每日终结快照改为独立持久化调度作业，不依赖 UID discovery 是否执行。
 - [x] 增加 YAML 的 `service` 配置和 `BOT_*` 部署环境变量覆盖。
 - [x] 初始 worker concurrency 固定为 1，跨进程全局限流完成前不启动多个 HTTP worker。
 - [ ] 提交可复现的 Alembic revision，并停止忽略 `alembic/versions/*.py`。
@@ -72,7 +72,7 @@
 - [ ] Docker 支持连接宿主机或局域网已有 PostgreSQL，并挂载本地 raw/media 持久目录。
 - [ ] 增加 Linux systemd unit 和部署说明，连接已有 PostgreSQL。
 - [~] 保留 Windows 下 `uv run python main.py service run` 开发入口和 Ctrl+C 停止行为（入口和 Windows signal fallback 已实现，交互式 Ctrl+C smoke 待执行）。
-- [~] 服务运行、重启恢复、健康检查和外部 PostgreSQL 连接具备自动化验收或 smoke test（SQLite 有限运行和健康检查已覆盖；重启恢复与外部 PostgreSQL smoke 待 Service-2/3）。
+- [~] 服务运行、重启恢复、健康检查和外部 PostgreSQL 连接具备自动化验收或 smoke test（SQLite 有限运行、调度租约恢复和健康检查已覆盖；外部 PostgreSQL smoke 待 Service-3 migration）。
 
 ## P0: Video Discovery And Snapshot
 

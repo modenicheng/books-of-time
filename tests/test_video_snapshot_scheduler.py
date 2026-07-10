@@ -151,7 +151,7 @@ async def test_video_snapshot_scheduler_enqueues_daily_terminal_snapshot_once() 
         ).all()
 
         assert len(first_result) == 2
-        assert len(second_result) == 2
+        assert len(second_result) == 0
         assert len(tasks) == 2
         assert [task.target_id for task in tasks] == ["BV1", "BV2"]
         assert [task.not_before for task in tasks] == [terminal_at, terminal_at]

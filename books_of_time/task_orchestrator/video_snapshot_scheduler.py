@@ -145,6 +145,17 @@ class VideoSnapshotScheduler:
         for video in videos:
             if not await self._is_video_available(session, video.bvid):
                 continue
+            idempotency_key = (
+                f"{TaskKind.FETCH_VIDEO_STATS.value}:video:{video.bvid}:"
+                f"terminal:{terminal_date}"
+            )
+            existing_task_id = await session.scalar(
+                select(CollectionTask.id)
+                .where(CollectionTask.idempotency_key == idempotency_key)
+                .limit(1)
+            )
+            if existing_task_id is not None:
+                continue
             task = await repo.enqueue(
                 kind=TaskKind.FETCH_VIDEO_STATS,
                 target_type="video",
@@ -156,10 +167,7 @@ class VideoSnapshotScheduler:
                     "terminal_date": terminal_date,
                 },
                 not_before=terminal_at,
-                idempotency_key=(
-                    f"{TaskKind.FETCH_VIDEO_STATS.value}:video:{video.bvid}:"
-                    f"terminal:{terminal_date}"
-                ),
+                idempotency_key=idempotency_key,
             )
             tasks.append(task)
         return tasks

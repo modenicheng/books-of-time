@@ -59,8 +59,10 @@ scheduler:
   timezone: Asia/Shanghai
 
 service:
-  roles: [worker]
+  roles: [worker, scheduler]
   worker_idle_sleep_seconds: 5
+  scheduler_idle_sleep_seconds: 1
+  scheduler_lease_seconds: 60
   heartbeat_seconds: 10
   heartbeat_timeout_seconds: 30
   shutdown_grace_seconds: 60

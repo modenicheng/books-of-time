@@ -15,6 +15,7 @@ from uuid import uuid4
 from books_of_time.app import (
     build_bilibili_client,
     build_engine,
+    build_service_coordinator,
     build_session_factory,
     build_worker,
 )
@@ -257,7 +258,7 @@ async def _run_service(
     session_factory = build_session_factory(cfg, engine=engine)
     checker = _build_service_health_checker(cfg, session_factory)
     service_cfg = cfg.get("service", {})
-    roles = [str(role) for role in service_cfg.get("roles", ["worker"])]
+    roles = [str(role) for role in service_cfg.get("roles", ["worker", "scheduler"])]
     if "worker" not in roles:
         await engine.dispose()
         raise ValueError("Service-1 requires the worker role")
@@ -279,9 +280,18 @@ async def _run_service(
         session_factory=session_factory,
         client=client,
     )
+    coordinator = None
+    if "scheduler" in roles:
+        coordinator = build_service_coordinator(
+            cfg,
+            session_factory=session_factory,
+            instance_id=instance_id,
+        )
+        await coordinator.bootstrap(now=datetime.now(UTC))
     host = ServiceHost(
         session_factory=session_factory,
         worker=worker,
+        coordinator=coordinator,
         instance_id=instance_id,
         roles=roles,
         hostname=socket.gethostname(),
