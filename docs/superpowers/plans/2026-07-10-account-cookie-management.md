@@ -38,8 +38,8 @@
 
 ## Task 5: Operations And Documentation
 
-- [ ] Add account paths/interval/environment overrides to example and deployment configs.
-- [ ] Write concise `docs/LOGIN.md` for Windows, Linux and Docker usage and permissions.
-- [ ] Mark P1 TODO acceptance items complete only after full test, Ruff and service smoke verification.
-- [ ] Run full SQLite tests and isolated PostgreSQL migration/schema checks.
-- [ ] Commit `docs: add account login operations guide`.
+- [x] Add account paths/interval/environment overrides to example and deployment configs.
+- [x] Write concise `docs/LOGIN.md` for Windows, Linux and Docker usage and permissions.
+- [x] Mark P1 TODO acceptance items complete only after full test, Ruff and service smoke verification.
+- [x] Run full SQLite tests and isolated PostgreSQL migration/schema checks.
+- [x] Commit `docs: add account login operations guide`.

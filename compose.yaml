@@ -13,10 +13,17 @@ services:
       BOT_SERVICE_ROLES: "${BOT_SERVICE_ROLES:-worker,scheduler}"
       BOT_RAW_DIR: /var/lib/books-of-time/raw
       BOT_MEDIA_DIR: /var/lib/books-of-time/media
+      BOT_ACCOUNT_ENABLED: "${BOT_ACCOUNT_ENABLED:-true}"
+      BOT_ACCOUNT_ID: "${BOT_ACCOUNT_ID:-default}"
+      BOT_ACCOUNT_CREDENTIALS_PATH: /var/lib/books-of-time/accounts/credentials.enc
+      BOT_ACCOUNT_KEY_PATH: /var/lib/books-of-time/accounts/master.key
+      BOT_ACCOUNT_AUTO_REFRESH: "${BOT_ACCOUNT_AUTO_REFRESH:-true}"
+      BOT_ACCOUNT_REFRESH_SECONDS: "${BOT_ACCOUNT_REFRESH_SECONDS:-21600}"
       BOT_SHUTDOWN_GRACE_SECONDS: "${BOT_SHUTDOWN_GRACE_SECONDS:-60}"
     volumes:
       - "${BOT_DATA_DIR:-./data}/raw:/var/lib/books-of-time/raw"
       - "${BOT_DATA_DIR:-./data}/media:/var/lib/books-of-time/media"
+      - "${BOT_DATA_DIR:-./data}/accounts:/var/lib/books-of-time/accounts"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:

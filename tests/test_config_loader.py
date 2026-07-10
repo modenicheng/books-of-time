@@ -22,6 +22,13 @@ storage:
 service:
   roles: [worker]
   shutdown_grace_seconds: 60
+accounts:
+  enabled: true
+  active_account_id: default
+  credentials_path: ./data/accounts/credentials.enc
+  key_path: ./data/accounts/master.key
+  auto_refresh: true
+  refresh_check_seconds: 21600
 """.lstrip(),
         encoding="utf-8",
     )
@@ -35,6 +42,12 @@ service:
             "BOT_INSTANCE_ID": "collector-a",
             "BOT_SERVICE_ROLES": "worker, scheduler,",
             "BOT_SHUTDOWN_GRACE_SECONDS": "45.5",
+            "BOT_ACCOUNT_ENABLED": "false",
+            "BOT_ACCOUNT_ID": "researcher",
+            "BOT_ACCOUNT_CREDENTIALS_PATH": "/archive/accounts/credentials.enc",
+            "BOT_ACCOUNT_KEY_PATH": "/archive/accounts/master.key",
+            "BOT_ACCOUNT_AUTO_REFRESH": "true",
+            "BOT_ACCOUNT_REFRESH_SECONDS": "3600",
         },
     )
 
@@ -44,6 +57,26 @@ service:
     assert cfg["service"]["instance_id"] == "collector-a"
     assert cfg["service"]["roles"] == ["worker", "scheduler"]
     assert cfg["service"]["shutdown_grace_seconds"] == 45.5
+    assert cfg["accounts"] == {
+        "enabled": False,
+        "active_account_id": "researcher",
+        "credentials_path": "/archive/accounts/credentials.enc",
+        "key_path": "/archive/accounts/master.key",
+        "auto_refresh": True,
+        "refresh_check_seconds": 3600,
+    }
+
+
+def test_load_config_rejects_invalid_account_boolean_override(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("database: {url: 'sqlite+aiosqlite:///test.db'}\n")
+
+    try:
+        load_config(config_path, environ={"BOT_ACCOUNT_ENABLED": "sometimes"})
+    except ValueError as exc:
+        assert "BOT_ACCOUNT_ENABLED" in str(exc)
+    else:
+        raise AssertionError("Invalid boolean override should fail")
 
 
 def test_explicit_config_path_takes_precedence_over_bot_config(tmp_path: Path) -> None:

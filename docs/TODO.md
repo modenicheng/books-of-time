@@ -174,18 +174,18 @@
 
 ## P1: Account And Cookie Management
 
-- [ ] 建立独立 `accounts` 子系统，不依赖 PostgreSQL 或有效 Cookie 才能初始化采集服务。
-- [ ] 使用本地加密凭据文件保存 Cookie 快照；密钥和密文均限制为当前系统用户可读，禁止日志输出秘密字段。
-- [ ] 当前只启用单个 `default` 账号，同时在存储格式和 provider 接口保留 `account_id` 扩展点。
-- [ ] 明确上述 `account_id` 是避免未来重写持久化格式的兼容边界，不实现账号池、并发多账号调度或风控规避。
-- [ ] 实现独立二维码登录 CLI：`bot login qr`，登录成功后原子切换到新 Cookie 快照。
-- [ ] 实现 `bot login status` 和 `bot login logout`，输出不得包含 Cookie、refresh token 或 CSRF 值。
-- [ ] 统一 HTTP 层在每次请求前读取当前有效 Cookie，自动热加载其他进程写入的最新快照。
-- [ ] 托管 Cookie 覆盖 bilibili-api-python 传入的空值或旧值；登录和刷新握手可显式禁用自动注入。
-- [ ] 实现服务内定时 Cookie 有效性/刷新检查，刷新成功后保存新版本并自动轮换。
-- [ ] Cookie 缺失或确认失效时自动退回匿名请求，不阻止 service、worker 或 scheduler 启动。
-- [ ] 增加 Linux、Docker、Windows 共用的配置、权限说明和 `docs/LOGIN.md` 使用文档。
-- [ ] 覆盖加密存储、原子更新、热加载、请求注入、匿名降级、QR 登录和自动刷新测试。
+- [x] 建立独立 `accounts` 子系统，不依赖 PostgreSQL 或有效 Cookie 才能初始化采集服务。
+- [x] 使用本地加密凭据文件保存 Cookie 快照；密钥和密文均限制为当前系统用户可读，禁止日志输出秘密字段。
+- [x] 当前只启用单个 `default` 账号，同时在存储格式和 provider 接口保留 `account_id` 扩展点。
+- [x] 明确上述 `account_id` 是避免未来重写持久化格式的兼容边界，不实现账号池、并发多账号调度或风控规避。
+- [x] 实现独立二维码登录 CLI：`bot login qr`，登录成功后原子切换到新 Cookie 快照。
+- [x] 实现 `bot login status` 和 `bot login logout`，输出不得包含 Cookie、refresh token 或 CSRF 值。
+- [x] 统一 HTTP 层在每次请求前读取当前有效 Cookie，自动热加载其他进程写入的最新快照。
+- [x] 托管 Cookie 覆盖 bilibili-api-python 传入的空值或旧值；登录和刷新握手可显式禁用自动注入。
+- [x] 实现服务内定时 Cookie 有效性/刷新检查，刷新成功后保存新版本并自动轮换。
+- [x] Cookie 缺失或确认失效时自动退回匿名请求，不阻止 service、worker 或 scheduler 启动。
+- [x] 增加 Linux、Docker、Windows 共用的配置、权限说明和 `docs/LOGIN.md` 使用文档。
+- [x] 覆盖加密存储、原子更新、热加载、请求注入、匿名降级、QR 登录和自动刷新测试。
 
 ## P2: Comment State Events
 

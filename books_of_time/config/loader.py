@@ -66,6 +66,7 @@ def load_config(
     database = _mapping_section(cfg, "database")
     storage = _mapping_section(cfg, "storage")
     service = _mapping_section(cfg, "service")
+    accounts = _mapping_section(cfg, "accounts")
 
     if value := effective_environ.get("BOT_DATABASE_URL"):
         database["url"] = value
@@ -79,6 +80,24 @@ def load_config(
         service["roles"] = [role.strip() for role in value.split(",") if role.strip()]
     if value := effective_environ.get("BOT_SHUTDOWN_GRACE_SECONDS"):
         service["shutdown_grace_seconds"] = float(value)
+    if value := effective_environ.get("BOT_ACCOUNT_ID"):
+        accounts["active_account_id"] = value
+    if value := effective_environ.get("BOT_ACCOUNT_CREDENTIALS_PATH"):
+        accounts["credentials_path"] = value
+    if value := effective_environ.get("BOT_ACCOUNT_KEY_PATH"):
+        accounts["key_path"] = value
+    if value := effective_environ.get("BOT_ACCOUNT_REFRESH_SECONDS"):
+        accounts["refresh_check_seconds"] = int(value)
+    if "BOT_ACCOUNT_ENABLED" in effective_environ:
+        accounts["enabled"] = _parse_bool_override(
+            "BOT_ACCOUNT_ENABLED",
+            effective_environ["BOT_ACCOUNT_ENABLED"],
+        )
+    if "BOT_ACCOUNT_AUTO_REFRESH" in effective_environ:
+        accounts["auto_refresh"] = _parse_bool_override(
+            "BOT_ACCOUNT_AUTO_REFRESH",
+            effective_environ["BOT_ACCOUNT_AUTO_REFRESH"],
+        )
 
     return cfg
 
@@ -88,3 +107,12 @@ def _mapping_section(cfg: dict[str, Any], key: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError(f"配置段 {key} 必须是映射")
     return value
+
+
+def _parse_bool_override(name: str, value: str) -> bool:
+    normalized = value.strip().casefold()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} must be one of true/false, 1/0, yes/no, or on/off")

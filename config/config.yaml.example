@@ -19,6 +19,15 @@ storage:
   raw_dir: ./data/raw
   media_dir: ./data/media
 
+accounts:
+  enabled: true
+  active_account_id: default
+  credentials_path: ./data/accounts/credentials.enc
+  key_path: ./data/accounts/master.key
+  history_limit: 5
+  auto_refresh: true
+  refresh_check_seconds: 21600
+
 http:
   timeout_seconds: 10
   user_agent: "BooksOfTime/0.1 research collector"

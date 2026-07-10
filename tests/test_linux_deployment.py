@@ -31,6 +31,13 @@ def test_linux_environment_example_uses_external_database_and_local_storage() ->
     assert "BOT_DATABASE_URL=postgresql+asyncpg://" in environment
     assert "BOT_RAW_DIR=/var/lib/books-of-time/raw" in environment
     assert "BOT_MEDIA_DIR=/var/lib/books-of-time/media" in environment
+    assert (
+        "BOT_ACCOUNT_CREDENTIALS_PATH=/var/lib/books-of-time/accounts/credentials.enc"
+        in environment
+    )
+    assert (
+        "BOT_ACCOUNT_KEY_PATH=/var/lib/books-of-time/accounts/master.key" in environment
+    )
     assert "BOT_SERVICE_ROLES=worker,scheduler" in environment
     assert "CHANGE_ME" in environment
 
@@ -50,6 +57,7 @@ def test_deployment_guide_covers_supported_runtime_paths() -> None:
         "service status",
         "备份",
         "回滚",
+        "docs/LOGIN.md",
     ):
         assert required in guide
 
@@ -58,3 +66,4 @@ def test_readme_links_deployment_guide() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
 
     assert "[DEPLOYMENT](docs/DEPLOYMENT.md)" in readme
+    assert "[LOGIN](docs/LOGIN.md)" in readme

@@ -14,12 +14,12 @@ COPY . /app
 
 RUN groupadd --system books-of-time \
     && useradd --system --gid books-of-time --home-dir /app books-of-time \
-    && mkdir -p /var/lib/books-of-time/raw /var/lib/books-of-time/media \
+    && mkdir -p /var/lib/books-of-time/raw /var/lib/books-of-time/media /var/lib/books-of-time/accounts \
     && chown -R books-of-time:books-of-time /app /var/lib/books-of-time
 
 USER books-of-time
 
-VOLUME ["/var/lib/books-of-time/raw", "/var/lib/books-of-time/media"]
+VOLUME ["/var/lib/books-of-time/raw", "/var/lib/books-of-time/media", "/var/lib/books-of-time/accounts"]
 
 HEALTHCHECK --interval=30s --timeout=15s --start-period=30s --retries=3 \
     CMD ["/app/.venv/bin/python", "main.py", "service", "health"]
