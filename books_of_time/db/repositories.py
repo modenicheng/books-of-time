@@ -24,6 +24,7 @@ from books_of_time.db.models import (
     RawPageObservation,
     RawPayload,
     RequestBackoffState,
+    ServiceInstance,
     VideoAvailabilitySnapshot,
     VideoInfoSnapshot,
     VideoMetricSnapshot,
@@ -447,6 +448,140 @@ class RequestBackoffRepository:
             state.backoff_until = now
             state.updated_at = now
         await self.session.flush()
+
+
+class ServiceInstanceRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def register(
+        self,
+        *,
+        instance_id: str,
+        hostname: str,
+        pid: int,
+        version: str,
+        roles: list[str],
+        now: datetime,
+    ) -> ServiceInstance:
+        instance = ServiceInstance(
+            instance_id=instance_id,
+            hostname=hostname,
+            pid=pid,
+            version=version,
+            roles=list(roles),
+            status="starting",
+            started_at=now,
+            heartbeat_at=now,
+            stopped_at=None,
+            last_error_type=None,
+            last_error_message=None,
+        )
+        self.session.add(instance)
+        await self.session.flush()
+        return instance
+
+    async def get(self, instance_id: str) -> ServiceInstance | None:
+        return await self.session.get(ServiceInstance, instance_id)
+
+    async def list_recent(self, *, limit: int = 20) -> list[ServiceInstance]:
+        return list(
+            await self.session.scalars(
+                select(ServiceInstance)
+                .order_by(ServiceInstance.started_at.desc())
+                .limit(min(max(limit, 1), 200))
+            )
+        )
+
+    async def mark_running(
+        self,
+        instance_id: str,
+        *,
+        now: datetime,
+    ) -> ServiceInstance:
+        return await self._transition(instance_id, status="running", now=now)
+
+    async def heartbeat(
+        self,
+        instance_id: str,
+        *,
+        now: datetime,
+    ) -> ServiceInstance:
+        instance = await self._get_required(instance_id)
+        instance.heartbeat_at = now
+        await self.session.flush()
+        return instance
+
+    async def mark_stopping(
+        self,
+        instance_id: str,
+        *,
+        now: datetime,
+    ) -> ServiceInstance:
+        return await self._transition(instance_id, status="stopping", now=now)
+
+    async def mark_stopped(
+        self,
+        instance_id: str,
+        *,
+        now: datetime,
+    ) -> ServiceInstance:
+        instance = await self._transition(instance_id, status="stopped", now=now)
+        instance.stopped_at = now
+        await self.session.flush()
+        return instance
+
+    async def mark_failed(
+        self,
+        instance_id: str,
+        *,
+        now: datetime,
+        error_type: str,
+        error_message: str,
+    ) -> ServiceInstance:
+        instance = await self._transition(instance_id, status="failed", now=now)
+        instance.stopped_at = now
+        instance.last_error_type = error_type[:120]
+        instance.last_error_message = error_message[:2000]
+        await self.session.flush()
+        return instance
+
+    async def has_fresh_running_instance(
+        self,
+        *,
+        now: datetime,
+        timeout_seconds: float,
+    ) -> bool:
+        cutoff = now - timedelta(seconds=max(timeout_seconds, 0))
+        instance_id = await self.session.scalar(
+            select(ServiceInstance.instance_id)
+            .where(
+                ServiceInstance.status == "running",
+                ServiceInstance.heartbeat_at >= cutoff,
+            )
+            .order_by(ServiceInstance.heartbeat_at.desc())
+            .limit(1)
+        )
+        return instance_id is not None
+
+    async def _transition(
+        self,
+        instance_id: str,
+        *,
+        status: str,
+        now: datetime,
+    ) -> ServiceInstance:
+        instance = await self._get_required(instance_id)
+        instance.status = status
+        instance.heartbeat_at = now
+        await self.session.flush()
+        return instance
+
+    async def _get_required(self, instance_id: str) -> ServiceInstance:
+        instance = await self.get(instance_id)
+        if instance is None:
+            raise LookupError(f"Unknown service instance: {instance_id}")
+        return instance
 
 
 class VideoMetricSnapshotRepository:

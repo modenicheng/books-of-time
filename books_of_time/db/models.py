@@ -651,6 +651,34 @@ Index(
 )
 
 
+class ServiceInstance(TimestampMixin, Base):
+    __tablename__ = "service_instances"
+
+    instance_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    hostname: Mapped[str] = mapped_column(String(255), nullable=False)
+    pid: Mapped[int] = mapped_column(Integer, nullable=False)
+    version: Mapped[str] = mapped_column(String(64), nullable=False)
+    roles: Mapped[list[str]] = mapped_column(
+        json_dict_type,
+        nullable=False,
+        default=list,
+    )
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    started_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    heartbeat_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    stopped_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    last_error_type: Mapped[str | None] = mapped_column(String(120))
+    last_error_message: Mapped[str | None] = mapped_column(String(2000))
+
+
+Index(
+    "idx_service_instances_status_heartbeat",
+    ServiceInstance.status,
+    ServiceInstance.heartbeat_at.desc(),
+)
+Index("idx_service_instances_started_at", ServiceInstance.started_at.desc())
+
+
 class KnownVideo(TimestampMixin, Base):
     __tablename__ = "known_videos"
 
