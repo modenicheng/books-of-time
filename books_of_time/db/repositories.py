@@ -654,29 +654,29 @@ class EventRepository:
             slug = normalize_event_slug(str(reference))
             event = await self.session.scalar(select(Event).where(Event.slug == slug))
         if event is None:
-            raise LookupError(f"Unknown event: {reference}")
+            raise LookupError(f"Event not found: {reference}")
         return event
 
     async def list_events(self, *, limit: int = 100) -> list[Event]:
+        _validate_limit(limit)
         rows = await self.session.scalars(
             select(Event)
             .order_by(Event.start_at.desc(), Event.created_at.desc(), Event.id.desc())
-            .limit(min(max(limit, 1), 1000))
+            .limit(limit)
         )
         return list(rows)
 
     async def add_target(
         self,
         *,
-        event_id: int,
+        event_id: int | str,
         target_type: str,
         target_value: str,
         now: datetime,
         priority: int = 0,
         extra: dict[str, Any] | None = None,
     ) -> EventTarget:
-        if await self.session.get(Event, event_id) is None:
-            raise LookupError(f"Unknown event: {event_id}")
+        event = await self.resolve_event(event_id)
         normalized_value = normalize_event_target(target_type, target_value)
         display_value = (
             normalized_value
@@ -685,7 +685,7 @@ class EventRepository:
         )
         target = await self.session.scalar(
             select(EventTarget).where(
-                EventTarget.event_id == event_id,
+                EventTarget.event_id == event.id,
                 EventTarget.target_type == target_type,
                 EventTarget.normalized_value == normalized_value,
             )
@@ -693,7 +693,7 @@ class EventRepository:
         created = target is None
         if target is None:
             target = EventTarget(
-                event_id=event_id,
+                event_id=event.id,
                 target_type=target_type,
                 target_value=display_value,
                 normalized_value=normalized_value,
@@ -721,7 +721,7 @@ class EventRepository:
             await self._synchronize_keyword(target=target, now=now)
         elif target_type == "seed_bvid":
             await self.attach_video(
-                event_id=event_id,
+                event_id=event.id,
                 bvid=normalized_value,
                 source_target_id=target.id,
                 association_reason="seed_bvid",
@@ -736,14 +736,14 @@ class EventRepository:
                     priority=priority,
                     payload={
                         "bvid": normalized_value,
-                        "event_id": event_id,
+                        "event_id": event.id,
                         "source_target_id": target.id,
                         "reason": "event_seed",
                     },
                     not_before=now,
                     idempotency_key=(
                         f"{TaskKind.FETCH_VIDEO_STATS.value}:video:"
-                        f"{normalized_value}:event:{event_id}"
+                        f"{normalized_value}:event:{event.id}"
                     ),
                 )
         return target
@@ -751,21 +751,27 @@ class EventRepository:
     async def attach_video(
         self,
         *,
-        event_id: int,
+        event_id: int | str,
         bvid: str,
         association_reason: str,
         now: datetime,
         source_target_id: int | None = None,
         confidence: float = 1.0,
     ) -> EventVideo:
+        if not 0 <= confidence <= 1:
+            raise ValueError("Video association confidence must be between 0 and 1")
+        reason = association_reason.strip()
+        if not reason:
+            raise ValueError("Video association reason cannot be empty")
+        event = await self.resolve_event(event_id)
         normalized_bvid = normalize_event_target("seed_bvid", bvid)
-        video = await self.session.get(EventVideo, (event_id, normalized_bvid))
+        video = await self.session.get(EventVideo, (event.id, normalized_bvid))
         if video is None:
             video = EventVideo(
-                event_id=event_id,
+                event_id=event.id,
                 bvid=normalized_bvid,
                 source_target_id=source_target_id,
-                association_reason=association_reason,
+                association_reason=reason,
                 confidence=confidence,
                 active=True,
                 first_seen_at=now,
@@ -776,7 +782,7 @@ class EventRepository:
             self.session.add(video)
         else:
             video.source_target_id = source_target_id or video.source_target_id
-            video.association_reason = association_reason
+            video.association_reason = reason
             video.confidence = confidence
             video.active = True
             video.last_seen_at = now
@@ -786,17 +792,19 @@ class EventRepository:
 
     async def list_videos(
         self,
-        event_id: int,
+        event_id: int | str,
         *,
         active_only: bool = True,
         limit: int = 1000,
     ) -> list[EventVideo]:
-        stmt = select(EventVideo).where(EventVideo.event_id == event_id)
+        _validate_limit(limit)
+        event = await self.resolve_event(event_id)
+        stmt = select(EventVideo).where(EventVideo.event_id == event.id)
         if active_only:
             stmt = stmt.where(EventVideo.active.is_(True))
         rows = await self.session.scalars(
-            stmt.order_by(EventVideo.first_seen_at.asc(), EventVideo.bvid.asc()).limit(
-                min(max(limit, 1), 10_000)
+            stmt.order_by(EventVideo.first_seen_at.desc(), EventVideo.bvid.asc()).limit(
+                limit
             )
         )
         return list(rows)
@@ -1595,6 +1603,11 @@ def _hash_params(params: dict[str, Any] | None) -> bytes | None:
         return None
     canonical = json.dumps(params, ensure_ascii=False, sort_keys=True).encode()
     return hashlib.sha256(canonical).digest()
+
+
+def _validate_limit(limit: int) -> None:
+    if limit < 1 or limit > 1000:
+        raise ValueError("limit must be between 1 and 1000")
 
 
 def _like_bucket(count: int | None) -> str:

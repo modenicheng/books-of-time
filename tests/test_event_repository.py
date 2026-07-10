@@ -137,3 +137,76 @@ async def test_seed_bvid_attaches_video_and_enqueues_one_initial_snapshot() -> N
         ]
 
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_manual_video_attachment_is_idempotent_and_list_is_bounded() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    now = datetime(2026, 7, 10, tzinfo=UTC)
+
+    async with session_factory() as session:
+        repository = EventRepository(session)
+        event = await repository.create_event(
+            slug="ghost-picture-war",
+            name="鬼图战争",
+            now=now,
+        )
+        first = await repository.attach_video(
+            event_id="ghost-picture-war",
+            bvid="BV1xx411c7mD",
+            association_reason="manual",
+            confidence=0.8,
+            now=now,
+        )
+        second = await repository.attach_video(
+            event_id=event.id,
+            bvid="BV1xx411c7mD",
+            association_reason="manual-review",
+            confidence=0.95,
+            now=now + timedelta(minutes=1),
+        )
+        await repository.attach_video(
+            event_id=event.id,
+            bvid="BV1Q541167Qg",
+            association_reason="manual",
+            now=now,
+        )
+        await session.commit()
+
+        assert first is second
+        assert second.association_reason == "manual-review"
+        assert second.confidence == 0.95
+        assert second.last_seen_at == now + timedelta(minutes=1)
+        assert [
+            item.bvid for item in await repository.list_videos(event.id, limit=1)
+        ] == ["BV1Q541167Qg"]
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_event_repository_rejects_missing_event_and_invalid_limit() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with session_factory() as session:
+        repository = EventRepository(session)
+        with pytest.raises(LookupError, match="Event"):
+            await repository.resolve_event("missing-event")
+        with pytest.raises(ValueError, match="limit"):
+            await repository.list_events(limit=0)
+        with pytest.raises(ValueError, match="confidence"):
+            await repository.attach_video(
+                event_id=1,
+                bvid="BV1xx411c7mD",
+                association_reason="manual",
+                confidence=1.1,
+                now=datetime(2026, 7, 10, tzinfo=UTC),
+            )
+
+    await engine.dispose()
