@@ -68,6 +68,24 @@ def test_event_parser_supports_archive_management_commands() -> None:
     assert export.event_command == "export-timeline"
     assert export.output == "timeline.jsonl"
 
+    trends = cli.build_parser().parse_args(
+        [
+            "event",
+            "keyword-trends",
+            "ghost-picture-war",
+            "--since",
+            "2026-07-10T00:00:00Z",
+            "--until",
+            "2026-07-10T02:00:00Z",
+            "--bucket-minutes",
+            "60",
+            "--output",
+            "trends.jsonl",
+        ]
+    )
+    assert trends.event_command == "keyword-trends"
+    assert trends.bucket_minutes == 60
+
 
 @pytest.mark.asyncio
 async def test_event_cli_helpers_create_event_and_seed_video(tmp_path) -> None:
@@ -96,6 +114,13 @@ async def test_event_cli_helpers_create_event_and_seed_video(tmp_path) -> None:
         target_value="BV1xx411c7mD",
         priority=90,
     )
+    await cli._add_event_target(
+        cfg,
+        event_reference="ghost-picture-war",
+        target_type="keyword",
+        target_value="控评",
+        priority=50,
+    )
     await cli._list_events(cfg, limit=10)
     await cli._list_event_videos(cfg, event_reference=str(event.id), limit=10)
     coverage = await cli._show_event_coverage(
@@ -107,6 +132,16 @@ async def test_event_cli_helpers_create_event_and_seed_video(tmp_path) -> None:
         cfg,
         event_reference="ghost-picture-war",
         output_path=output_path,
+    )
+    trend_path = tmp_path / "exports" / "trends.jsonl"
+    trend_count = await cli._export_keyword_trends(
+        cfg,
+        event_reference="ghost-picture-war",
+        since="2026-07-10T00:00:00Z",
+        until="2026-07-10T02:00:00Z",
+        bucket_minutes=60,
+        bvid=None,
+        output_path=trend_path,
     )
 
     engine = create_async_engine(database_url)
@@ -123,7 +158,7 @@ async def test_event_cli_helpers_create_event_and_seed_video(tmp_path) -> None:
     assert target.event_id == event.id
     assert video is not None
     assert task_count == 1
-    assert target_count == 1
+    assert target_count == 2
     assert coverage.active_video_count == 1
     assert coverage.videos_with_coverage == 0
     assert exported == 1
@@ -133,6 +168,12 @@ async def test_event_cli_helpers_create_event_and_seed_video(tmp_path) -> None:
     ]
     assert exported_rows[0]["record_type"] == "event_video_associated"
     assert exported_rows[0]["bvid"] == "BV1xx411c7mD"
+    assert trend_count == 2
+    trend_rows = [
+        json.loads(line) for line in trend_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert [row["distinct_comment_count"] for row in trend_rows] == [0, 0]
+    assert all(row["keyword"] == "控评" for row in trend_rows)
 
 
 def test_parse_event_datetime_requires_timezone() -> None:

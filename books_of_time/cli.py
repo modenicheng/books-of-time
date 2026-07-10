@@ -14,6 +14,7 @@ from uuid import uuid4
 
 from books_of_time.accounts.models import AccountStatus, CredentialSnapshot
 from books_of_time.accounts.qr_login import QrLoginFlow
+from books_of_time.analysis.keywords import KeywordTrendAnalyzer
 from books_of_time.app import (
     build_account_manager,
     build_bilibili_client,
@@ -173,6 +174,13 @@ def build_parser() -> argparse.ArgumentParser:
     event_export = event_sub.add_parser("export-timeline")
     event_export.add_argument("event_reference")
     event_export.add_argument("--output", required=True)
+    event_trends = event_sub.add_parser("keyword-trends")
+    event_trends.add_argument("event_reference")
+    event_trends.add_argument("--since", required=True)
+    event_trends.add_argument("--until", required=True)
+    event_trends.add_argument("--bucket-minutes", type=int, default=60)
+    event_trends.add_argument("--bvid", default=None)
+    event_trends.add_argument("--output", required=True)
 
     discover = subparsers.add_parser("discover-user")
     discover.add_argument("mid")
@@ -273,6 +281,18 @@ async def _run(args: argparse.Namespace) -> None:
         await _export_event_timeline(
             cfg,
             event_reference=args.event_reference,
+            output_path=Path(args.output),
+        )
+        return
+
+    if args.command == "event" and args.event_command == "keyword-trends":
+        await _export_keyword_trends(
+            cfg,
+            event_reference=args.event_reference,
+            since=args.since,
+            until=args.until,
+            bucket_minutes=args.bucket_minutes,
+            bvid=args.bvid,
             output_path=Path(args.output),
         )
         return
@@ -790,14 +810,60 @@ async def _export_event_timeline(
     async with session_factory() as session:
         rows = await EventRepository(session).build_timeline(event_reference)
 
+    _write_jsonl_atomic(output_path, [row.as_dict() for row in rows])
+    logger.info(
+        "Exported event timeline event=%s rows=%s output=%s",
+        event_reference,
+        len(rows),
+        output_path,
+    )
+    return len(rows)
+
+
+async def _export_keyword_trends(
+    cfg: dict,
+    *,
+    event_reference: str,
+    since: str,
+    until: str,
+    bucket_minutes: int,
+    bvid: str | None,
+    output_path: Path,
+) -> int:
+    since_at = _parse_event_datetime(since)
+    until_at = _parse_event_datetime(until)
+    if since_at is None or until_at is None:
+        raise ValueError("Keyword trend window requires since and until")
+    session_factory = build_session_factory(cfg)
+    async with session_factory() as session:
+        points = await KeywordTrendAnalyzer(session).analyze(
+            event_reference=event_reference,
+            since=since_at,
+            until=until_at,
+            bucket_seconds=bucket_minutes * 60,
+            bvid=bvid,
+        )
+
+    _write_jsonl_atomic(output_path, [point.as_dict() for point in points])
+    logger.info(
+        "Exported keyword trends event=%s bvid=%s points=%s output=%s",
+        event_reference,
+        bvid,
+        len(points),
+        output_path,
+    )
+    return len(points)
+
+
+def _write_jsonl_atomic(output_path: Path, records: list[dict]) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     temporary_path = output_path.with_name(f".{output_path.name}.{uuid4().hex}.tmp")
     try:
         with temporary_path.open("w", encoding="utf-8", newline="\n") as output:
-            for row in rows:
+            for record in records:
                 output.write(
                     json.dumps(
-                        row.as_dict(),
+                        record,
                         ensure_ascii=False,
                         sort_keys=True,
                         separators=(",", ":"),
@@ -807,14 +873,6 @@ async def _export_event_timeline(
         temporary_path.replace(output_path)
     finally:
         temporary_path.unlink(missing_ok=True)
-
-    logger.info(
-        "Exported event timeline event=%s rows=%s output=%s",
-        event_reference,
-        len(rows),
-        output_path,
-    )
-    return len(rows)
 
 
 async def _monitor_video(cfg: dict, bvid: str, priority: int) -> None:
