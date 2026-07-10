@@ -71,7 +71,7 @@
 - [x] 增加只运行 Books of Time 的 Dockerfile 和 Compose 示例，不捆绑 PostgreSQL。
 - [x] Docker 支持连接宿主机或局域网已有 PostgreSQL，并挂载本地 raw/media 持久目录。
 - [x] 增加 Linux systemd unit 和部署说明，连接已有 PostgreSQL。
-- [~] 保留 Windows 下 `uv run python main.py service run` 开发入口和 Ctrl+C 停止行为（入口和 Windows signal fallback 已实现，交互式 Ctrl+C smoke 待执行）。
+- [x] 保留 Windows 下 `uv run python main.py service run` 开发入口，并通过新进程组 `CTRL_BREAK_EVENT` 烟测确认协作式停止和 `stopped` 状态落库。
 - [~] 服务运行、重启恢复、健康检查和外部 PostgreSQL 连接具备自动化验收或 smoke test（SQLite 服务、调度租约恢复、health、Compose config 与 PostgreSQL migration cycle 已覆盖；Docker daemon build 和 PostgreSQL service run 待环境验收）。
 
 ## P0: Video Discovery And Snapshot
