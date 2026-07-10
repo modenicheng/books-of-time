@@ -17,6 +17,8 @@ from books_of_time.analysis.propagation import (
     PropagationNodeScore,
 )
 from books_of_time.analysis.replay import (
+    CommentVisibilityReplayAnalyzer,
+    CommentVisibilityReplayEvent,
     HotCommentReplayAnalyzer,
     HotCommentReplaySnapshot,
     VideoMetricReplayAnalyzer,
@@ -39,6 +41,8 @@ from books_of_time.analysis.turning_points import (
 __all__ = [
     "CommentFlagAnalyzer",
     "CommentFlagRefreshSummary",
+    "CommentVisibilityReplayAnalyzer",
+    "CommentVisibilityReplayEvent",
     "HotCommentReplayAnalyzer",
     "HotCommentReplaySnapshot",
     "HotCommentTurnoverAnalyzer",

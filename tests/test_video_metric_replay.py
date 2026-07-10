@@ -4,6 +4,7 @@ import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from books_of_time.analysis.replay import (
+    CommentVisibilityReplayAnalyzer,
     HotCommentReplayAnalyzer,
     VideoMetricReplayAnalyzer,
 )
@@ -11,6 +12,7 @@ from books_of_time.db.base import Base
 from books_of_time.db.models import (
     CommentObservation,
     CommentObservationMedia,
+    CommentVisibilityEvent,
     RawPageObservation,
     VideoMetricSnapshot,
 )
@@ -49,6 +51,72 @@ async def test_video_metric_replay_uses_pre_window_baseline_and_raw_evidence() -
     assert rows[1].deltas["view_count"] == -5
     assert rows[1].deltas["like_count"] == 3
     assert rows[1].as_dict()["schema_version"] == "video-metric-replay-v1"
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_comment_visibility_replay_expands_before_and_after_evidence() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    start = datetime(2026, 7, 10, 10, 0, tzinfo=UTC)
+    bvid = "BV1xx411c7mD"
+    previous = _hot_comment(401, 4001, bvid, start, 501, 1)
+    current = _hot_comment(
+        402,
+        4001,
+        bvid,
+        start + timedelta(minutes=20),
+        502,
+        1,
+    )
+    async with factory() as session:
+        session.add_all(
+            [
+                previous,
+                current,
+                CommentVisibilityEvent(
+                    id=1,
+                    rpid=4001,
+                    bvid=bvid,
+                    previous_comment_observation_id=401,
+                    current_comment_observation_id=None,
+                    event_type="disappeared",
+                    old_visibility="visible",
+                    new_visibility="missing",
+                    missing_reason="missing_after_seen",
+                    created_at=start + timedelta(minutes=10),
+                ),
+                CommentVisibilityEvent(
+                    id=2,
+                    rpid=4001,
+                    bvid=bvid,
+                    previous_comment_observation_id=401,
+                    current_comment_observation_id=402,
+                    event_type="reappeared",
+                    old_visibility="missing",
+                    new_visibility="visible",
+                    missing_reason="missing_after_seen",
+                    created_at=start + timedelta(minutes=20),
+                ),
+            ]
+        )
+        await session.commit()
+
+        rows = await CommentVisibilityReplayAnalyzer(session).analyze(
+            bvid=bvid,
+            since=start,
+            until=start + timedelta(hours=1),
+        )
+
+    assert [row.event_type for row in rows] == ["disappeared", "reappeared"]
+    assert rows[0].previous_observation["content"] == "comment-4001"
+    assert rows[0].current_observation is None
+    assert rows[0].missing_reason == "missing_after_seen"
+    assert rows[1].current_observation["comment_observation_id"] == 402
+    assert rows[1].current_observation["raw_page_observation_id"] == 502
+    assert rows[1].as_dict()["schema_version"] == "comment-visibility-replay-v1"
     await engine.dispose()
 
 

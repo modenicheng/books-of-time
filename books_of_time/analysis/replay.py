@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from books_of_time.db.models import (
     CommentObservation,
     CommentObservationMedia,
+    CommentVisibilityEvent,
     RawPageObservation,
     VideoMetricSnapshot,
 )
@@ -291,6 +292,144 @@ class HotCommentReplayAnalyzer:
             )
             for page in pages
         ]
+
+
+@dataclass(frozen=True, slots=True)
+class CommentVisibilityReplayEvent:
+    event_id: int
+    bvid: str
+    rpid: int
+    event_type: str
+    occurred_at: datetime
+    old_visibility: str | None
+    new_visibility: str | None
+    missing_reason: str | None
+    previous_observation: dict[str, Any] | None
+    current_observation: dict[str, Any] | None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": "comment-visibility-replay-v1",
+            "event_id": self.event_id,
+            "bvid": self.bvid,
+            "rpid": self.rpid,
+            "event_type": self.event_type,
+            "occurred_at": self.occurred_at.isoformat(),
+            "old_visibility": self.old_visibility,
+            "new_visibility": self.new_visibility,
+            "missing_reason": self.missing_reason,
+            "previous_observation": self.previous_observation,
+            "current_observation": self.current_observation,
+            "interpretation_limit": (
+                "recorded_visibility_transition_not_platform_deletion_proof"
+            ),
+        }
+
+
+class CommentVisibilityReplayAnalyzer:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def analyze(
+        self,
+        *,
+        bvid: str,
+        since: datetime,
+        until: datetime,
+        max_events: int = 100_000,
+    ) -> list[CommentVisibilityReplayEvent]:
+        since_utc = _aware_utc(since, "since")
+        until_utc = _aware_utc(until, "until")
+        if until_utc <= since_utc:
+            raise ValueError("until must be after since")
+        if not 1 <= max_events <= 1_000_000:
+            raise ValueError("max_events must be between 1 and 1000000")
+        events = list(
+            await self.session.scalars(
+                select(CommentVisibilityEvent)
+                .where(
+                    CommentVisibilityEvent.bvid == bvid,
+                    CommentVisibilityEvent.created_at >= since_utc,
+                    CommentVisibilityEvent.created_at < until_utc,
+                )
+                .order_by(
+                    CommentVisibilityEvent.created_at.asc(),
+                    CommentVisibilityEvent.id.asc(),
+                )
+                .limit(max_events + 1)
+            )
+        )
+        if len(events) > max_events:
+            raise ValueError(
+                f"Visibility replay exceeds max_events={max_events}; narrow the window"
+            )
+        observation_ids = {
+            observation_id
+            for event in events
+            for observation_id in (
+                event.previous_comment_observation_id,
+                event.current_comment_observation_id,
+            )
+            if observation_id is not None
+        }
+        observations: dict[int, CommentObservation] = {}
+        if observation_ids:
+            rows = await self.session.scalars(
+                select(CommentObservation).where(
+                    CommentObservation.id.in_(observation_ids)
+                )
+            )
+            observations = {row.id: row for row in rows}
+        return [
+            CommentVisibilityReplayEvent(
+                event_id=event.id,
+                bvid=event.bvid,
+                rpid=event.rpid,
+                event_type=event.event_type,
+                occurred_at=event.created_at,
+                old_visibility=event.old_visibility,
+                new_visibility=event.new_visibility,
+                missing_reason=event.missing_reason,
+                previous_observation=_observation_evidence(
+                    observations.get(event.previous_comment_observation_id)
+                ),
+                current_observation=_observation_evidence(
+                    observations.get(event.current_comment_observation_id)
+                ),
+            )
+            for event in events
+        ]
+
+
+def _observation_evidence(
+    observation: CommentObservation | None,
+) -> dict[str, Any] | None:
+    if observation is None:
+        return None
+    return {
+        "comment_observation_id": observation.id,
+        "captured_at": observation.captured_at.isoformat(),
+        "content": observation.content,
+        "content_hash": observation.content_hash.hex(),
+        "author_mid": observation.author_mid,
+        "author_name": observation.author_name,
+        "visibility": observation.visibility,
+        "is_deleted": observation.is_deleted,
+        "like_count": observation.like_count,
+        "reply_count": observation.reply_count,
+        "raw_payload_id": observation.raw_payload_id,
+        "raw_page_observation_id": observation.raw_page_observation_id,
+        "media_ordered_hash": (
+            observation.media_ordered_hash.hex()
+            if observation.media_ordered_hash is not None
+            else None
+        ),
+        "media_set_hash": (
+            observation.media_set_hash.hex()
+            if observation.media_set_hash is not None
+            else None
+        ),
+    }
 
 
 def _aware_utc(value: datetime, name: str) -> datetime:

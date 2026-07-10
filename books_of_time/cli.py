@@ -25,6 +25,7 @@ from books_of_time.analysis.keywords import (
 )
 from books_of_time.analysis.propagation import PropagationNodeAnalyzer
 from books_of_time.analysis.replay import (
+    CommentVisibilityReplayAnalyzer,
     HotCommentReplayAnalyzer,
     VideoMetricReplayAnalyzer,
 )
@@ -112,6 +113,12 @@ def build_parser() -> argparse.ArgumentParser:
     hot_replay.add_argument("--top-n", type=int, default=20)
     hot_replay.add_argument("--max-snapshots", type=int, default=10_000)
     hot_replay.add_argument("--output", required=True)
+    visibility_replay = video_sub.add_parser("replay-visibility")
+    visibility_replay.add_argument("bvid")
+    visibility_replay.add_argument("--since", required=True)
+    visibility_replay.add_argument("--until", required=True)
+    visibility_replay.add_argument("--max-events", type=int, default=100_000)
+    visibility_replay.add_argument("--output", required=True)
 
     latest_comments = subparsers.add_parser("collect-latest-comments")
     latest_comments.add_argument("bvid")
@@ -519,6 +526,17 @@ async def _run(args: argparse.Namespace) -> None:
             until=args.until,
             top_n=args.top_n,
             max_snapshots=args.max_snapshots,
+            output_path=Path(args.output),
+        )
+        return
+
+    if args.command == "video" and args.video_command == "replay-visibility":
+        await _export_comment_visibility_replay(
+            cfg,
+            bvid=args.bvid,
+            since=args.since,
+            until=args.until,
+            max_events=args.max_events,
             output_path=Path(args.output),
         )
         return
@@ -1410,6 +1428,37 @@ async def _export_hot_comment_replay(
         output_path,
     )
     return len(snapshots)
+
+
+async def _export_comment_visibility_replay(
+    cfg: dict,
+    *,
+    bvid: str,
+    since: str,
+    until: str,
+    max_events: int,
+    output_path: Path,
+) -> int:
+    since_at = _parse_event_datetime(since)
+    until_at = _parse_event_datetime(until)
+    if since_at is None or until_at is None:
+        raise ValueError("Comment visibility replay window requires since and until")
+    session_factory = build_session_factory(cfg)
+    async with session_factory() as session:
+        events = await CommentVisibilityReplayAnalyzer(session).analyze(
+            bvid=bvid,
+            since=since_at,
+            until=until_at,
+            max_events=max_events,
+        )
+    _write_jsonl_atomic(output_path, [event.as_dict() for event in events])
+    logger.info(
+        "Exported comment visibility replay bvid=%s events=%s output=%s",
+        bvid,
+        len(events),
+        output_path,
+    )
+    return len(events)
 
 
 async def _monitor_video(cfg: dict, bvid: str, priority: int) -> None:

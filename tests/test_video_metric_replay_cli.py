@@ -44,6 +44,21 @@ def test_video_metric_replay_parser_accepts_window_and_limit() -> None:
     assert hot.video_command == "replay-hot-comments"
     assert hot.top_n == 10
 
+    visibility = cli.build_parser().parse_args(
+        [
+            "video",
+            "replay-visibility",
+            "BV1xx411c7mD",
+            "--since",
+            "2026-07-10T00:00:00Z",
+            "--until",
+            "2026-07-10T02:00:00Z",
+            "--output",
+            "visibility.jsonl",
+        ]
+    )
+    assert visibility.video_command == "replay-visibility"
+
 
 @pytest.mark.asyncio
 async def test_video_metric_replay_export_writes_empty_jsonl(tmp_path: Path) -> None:
@@ -77,3 +92,15 @@ async def test_video_metric_replay_export_writes_empty_jsonl(tmp_path: Path) -> 
     )
     assert hot_count == 0
     assert hot_output.read_text(encoding="utf-8") == ""
+
+    visibility_output = tmp_path / "out" / "visibility.jsonl"
+    visibility_count = await cli._export_comment_visibility_replay(
+        {"database": {"url": url}},
+        bvid="BV1xx411c7mD",
+        since="2026-07-10T00:00:00Z",
+        until="2026-07-10T02:00:00Z",
+        max_events=5000,
+        output_path=visibility_output,
+    )
+    assert visibility_count == 0
+    assert visibility_output.read_text(encoding="utf-8") == ""
