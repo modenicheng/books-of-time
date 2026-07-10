@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from curl_cffi.requests import AsyncSession
+from curl_cffi.requests.session import HttpMethod
 
 from books_of_time.domain.enums import BilibiliRequestType
 from books_of_time.http.errors import (
@@ -40,7 +41,7 @@ class RawHttpClient:
     async def request(
         self,
         *,
-        method: str,
+        method: HttpMethod,
         url: str,
         request_type: BilibiliRequestType,
         params: dict[str, Any] | None = None,
