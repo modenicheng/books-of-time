@@ -25,6 +25,10 @@ from books_of_time.analysis.templates import (
     TemplateCandidate,
     TemplateCandidateAnalyzer,
 )
+from books_of_time.analysis.turning_points import (
+    TurningPointAnalyzer,
+    TurningPointSignal,
+)
 
 __all__ = [
     "CommentFlagAnalyzer",
@@ -42,4 +46,6 @@ __all__ = [
     "StanceLexicon",
     "TemplateCandidate",
     "TemplateCandidateAnalyzer",
+    "TurningPointAnalyzer",
+    "TurningPointSignal",
 ]

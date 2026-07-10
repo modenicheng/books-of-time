@@ -26,6 +26,7 @@ from books_of_time.analysis.keywords import (
 from books_of_time.analysis.propagation import PropagationNodeAnalyzer
 from books_of_time.analysis.stance import StanceEvidenceAnalyzer, StanceLexicon
 from books_of_time.analysis.templates import TemplateCandidateAnalyzer
+from books_of_time.analysis.turning_points import TurningPointAnalyzer
 from books_of_time.app import (
     build_account_manager,
     build_bilibili_client,
@@ -184,7 +185,11 @@ def build_parser() -> argparse.ArgumentParser:
     event_add_target.add_argument("target_type", choices=sorted(EVENT_TARGET_TYPES))
     event_add_target.add_argument("target_value")
     event_add_target.add_argument("--priority", type=int, default=0)
-    event_add_target.add_argument("--role", choices=["official"], default=None)
+    event_add_target.add_argument(
+        "--role",
+        choices=["official", "major_creator"],
+        default=None,
+    )
     event_list_videos = event_sub.add_parser("list-videos")
     event_list_videos.add_argument("event_reference")
     event_list_videos.add_argument("--limit", type=int, default=1000)
@@ -238,6 +243,17 @@ def build_parser() -> argparse.ArgumentParser:
     event_nodes.add_argument("--until", required=True)
     event_nodes.add_argument("--max-comments", type=int, default=50_000)
     event_nodes.add_argument("--output", required=True)
+    event_turning = event_sub.add_parser("turning-points")
+    event_turning.add_argument("event_reference")
+    event_turning.add_argument("--since", required=True)
+    event_turning.add_argument("--until", required=True)
+    event_turning.add_argument("--bucket-minutes", type=int, default=60)
+    event_turning.add_argument("--spike-multiplier", type=float, default=3.0)
+    event_turning.add_argument("--min-count", type=int, default=5)
+    event_turning.add_argument("--turnover-threshold", type=float, default=0.5)
+    event_turning.add_argument("--top-n", type=int, default=20)
+    event_turning.add_argument("--max-records", type=int, default=200_000)
+    event_turning.add_argument("--output", required=True)
 
     discover = subparsers.add_parser("discover-user")
     discover.add_argument("mid")
@@ -417,6 +433,22 @@ async def _run(args: argparse.Namespace) -> None:
             since=args.since,
             until=args.until,
             max_comments=args.max_comments,
+            output_path=Path(args.output),
+        )
+        return
+
+    if args.command == "event" and args.event_command == "turning-points":
+        await _export_turning_points(
+            cfg,
+            event_reference=args.event_reference,
+            since=args.since,
+            until=args.until,
+            bucket_minutes=args.bucket_minutes,
+            spike_multiplier=args.spike_multiplier,
+            min_count=args.min_count,
+            turnover_threshold=args.turnover_threshold,
+            top_n=args.top_n,
+            max_records=args.max_records,
             output_path=Path(args.output),
         )
         return
@@ -1175,6 +1207,48 @@ async def _export_propagation_nodes(
     _write_jsonl_atomic(output_path, [row.as_dict() for row in rows])
     logger.info(
         "Exported propagation nodes event=%s rows=%s output=%s",
+        event_reference,
+        len(rows),
+        output_path,
+    )
+    return len(rows)
+
+
+async def _export_turning_points(
+    cfg: dict,
+    *,
+    event_reference: str,
+    since: str,
+    until: str,
+    bucket_minutes: int,
+    spike_multiplier: float,
+    min_count: int,
+    turnover_threshold: float,
+    top_n: int,
+    output_path: Path,
+    max_records: int = 200_000,
+) -> int:
+    since_at = _parse_event_datetime(since)
+    until_at = _parse_event_datetime(until)
+    if since_at is None or until_at is None:
+        raise ValueError("Turning point window requires since and until")
+    session_factory = build_session_factory(cfg)
+    async with session_factory() as session:
+        rows = await TurningPointAnalyzer(session).analyze(
+            event_reference=event_reference,
+            since=since_at,
+            until=until_at,
+            bucket_seconds=bucket_minutes * 60,
+            spike_multiplier=spike_multiplier,
+            min_count=min_count,
+            turnover_threshold=turnover_threshold,
+            top_n=top_n,
+            max_records=max_records,
+        )
+
+    _write_jsonl_atomic(output_path, [row.as_dict() for row in rows])
+    logger.info(
+        "Exported turning points event=%s signals=%s output=%s",
         event_reference,
         len(rows),
         output_path,

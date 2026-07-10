@@ -236,7 +236,7 @@
 - [x] 重复评论 flag：same user duplicate submission，按公开 author_mid 和首见文本 hash 生成幂等关联。
 - [x] 重复评论 flag：template-like comment，持久化跨视频模板候选及算法、阈值与 raw 证据。
 - [x] 传播节点初版评分：按事件窗口输出 originator、amplifier、bridge、responder、official 候选分数、公开账号和可解释证据；不作为用户身份标签。
-- [ ] 事件转折点检测：关键词突增、评论突增、热门换血、大 UP 介入。
+- [x] 事件转折点检测：输出关键词/评论相邻时间桶突增、热门 Top N 换血和显式 `major_creator` UID 介入的可回溯启发式信号。
 
 ## P4: Replay And Reports
 
