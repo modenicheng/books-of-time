@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from alembic.config import Config
-from alembic.script import ScriptDirectory
 from sqlalchemy import inspect, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,6 +9,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 def get_expected_schema_revision(
     alembic_ini_path: str | Path | None = None,
 ) -> str:
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
     path = (
         Path(alembic_ini_path)
         if alembic_ini_path is not None

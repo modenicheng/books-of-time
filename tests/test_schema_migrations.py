@@ -1,3 +1,5 @@
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -99,3 +101,20 @@ def test_initial_revision_is_static() -> None:
     assert "Base.metadata" not in source
     assert "def upgrade()" in source
     assert "def downgrade()" in source
+
+
+def test_importing_migration_helpers_does_not_load_autogenerate_plugins() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; import books_of_time.db.migrations; "
+            "print(any(name.startswith('alembic.autogenerate') "
+            "for name in sys.modules))",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.stdout.strip() == "False"
