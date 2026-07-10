@@ -13,6 +13,10 @@ from books_of_time.analysis.stance import (
     StanceEvidenceSummary,
     StanceLexicon,
 )
+from books_of_time.analysis.templates import (
+    TemplateCandidate,
+    TemplateCandidateAnalyzer,
+)
 
 __all__ = [
     "HotCommentTurnoverAnalyzer",
@@ -24,4 +28,6 @@ __all__ = [
     "StanceEvidenceAnalyzer",
     "StanceEvidenceSummary",
     "StanceLexicon",
+    "TemplateCandidate",
+    "TemplateCandidateAnalyzer",
 ]

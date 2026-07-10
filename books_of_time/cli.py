@@ -20,6 +20,7 @@ from books_of_time.analysis.keywords import (
     KeywordTrendAnalyzer,
 )
 from books_of_time.analysis.stance import StanceEvidenceAnalyzer, StanceLexicon
+from books_of_time.analysis.templates import TemplateCandidateAnalyzer
 from books_of_time.app import (
     build_account_manager,
     build_bilibili_client,
@@ -204,6 +205,16 @@ def build_parser() -> argparse.ArgumentParser:
     event_stance.add_argument("--until", required=True)
     event_stance.add_argument("--bvid", default=None)
     event_stance.add_argument("--output", required=True)
+    event_templates = event_sub.add_parser("template-candidates")
+    event_templates.add_argument("event_reference")
+    event_templates.add_argument("--since", required=True)
+    event_templates.add_argument("--until", required=True)
+    event_templates.add_argument("--window-minutes", type=int, default=60)
+    event_templates.add_argument("--min-similarity", type=float, default=0.85)
+    event_templates.add_argument("--min-text-chars", type=int, default=8)
+    event_templates.add_argument("--max-comments", type=int, default=5000)
+    event_templates.add_argument("--max-comparisons", type=int, default=100_000)
+    event_templates.add_argument("--output", required=True)
 
     discover = subparsers.add_parser("discover-user")
     discover.add_argument("mid")
@@ -338,6 +349,21 @@ async def _run(args: argparse.Namespace) -> None:
             since=args.since,
             until=args.until,
             bvid=args.bvid,
+            output_path=Path(args.output),
+        )
+        return
+
+    if args.command == "event" and args.event_command == "template-candidates":
+        await _export_template_candidates(
+            cfg,
+            event_reference=args.event_reference,
+            since=args.since,
+            until=args.until,
+            window_minutes=args.window_minutes,
+            min_similarity=args.min_similarity,
+            min_text_chars=args.min_text_chars,
+            max_comments=args.max_comments,
+            max_comparisons=args.max_comparisons,
             output_path=Path(args.output),
         )
         return
@@ -977,6 +1003,46 @@ async def _export_stance_evidence(
         event_reference,
         bvid,
         lexicon.version,
+        len(rows),
+        output_path,
+    )
+    return len(rows)
+
+
+async def _export_template_candidates(
+    cfg: dict,
+    *,
+    event_reference: str,
+    since: str,
+    until: str,
+    window_minutes: int,
+    min_similarity: float,
+    min_text_chars: int,
+    max_comments: int,
+    max_comparisons: int,
+    output_path: Path,
+) -> int:
+    since_at = _parse_event_datetime(since)
+    until_at = _parse_event_datetime(until)
+    if since_at is None or until_at is None:
+        raise ValueError("Template candidate window requires since and until")
+    session_factory = build_session_factory(cfg)
+    async with session_factory() as session:
+        rows = await TemplateCandidateAnalyzer(session).analyze(
+            event_reference=event_reference,
+            since=since_at,
+            until=until_at,
+            window_seconds=window_minutes * 60,
+            min_similarity=min_similarity,
+            min_text_chars=min_text_chars,
+            max_comments=max_comments,
+            max_comparisons=max_comparisons,
+        )
+
+    _write_jsonl_atomic(output_path, [row.as_dict() for row in rows])
+    logger.info(
+        "Exported template candidates event=%s candidates=%s output=%s",
+        event_reference,
         len(rows),
         output_path,
     )
