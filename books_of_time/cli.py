@@ -23,6 +23,7 @@ from books_of_time.analysis.keywords import (
     KeywordCooccurrenceAnalyzer,
     KeywordTrendAnalyzer,
 )
+from books_of_time.analysis.propagation import PropagationNodeAnalyzer
 from books_of_time.analysis.stance import StanceEvidenceAnalyzer, StanceLexicon
 from books_of_time.analysis.templates import TemplateCandidateAnalyzer
 from books_of_time.app import (
@@ -183,6 +184,7 @@ def build_parser() -> argparse.ArgumentParser:
     event_add_target.add_argument("target_type", choices=sorted(EVENT_TARGET_TYPES))
     event_add_target.add_argument("target_value")
     event_add_target.add_argument("--priority", type=int, default=0)
+    event_add_target.add_argument("--role", choices=["official"], default=None)
     event_list_videos = event_sub.add_parser("list-videos")
     event_list_videos.add_argument("event_reference")
     event_list_videos.add_argument("--limit", type=int, default=1000)
@@ -230,6 +232,12 @@ def build_parser() -> argparse.ArgumentParser:
     event_flags.add_argument("--max-comments", type=int, default=5000)
     event_flags.add_argument("--max-comparisons", type=int, default=100_000)
     event_flags.add_argument("--output", required=True)
+    event_nodes = event_sub.add_parser("propagation-nodes")
+    event_nodes.add_argument("event_reference")
+    event_nodes.add_argument("--since", required=True)
+    event_nodes.add_argument("--until", required=True)
+    event_nodes.add_argument("--max-comments", type=int, default=50_000)
+    event_nodes.add_argument("--output", required=True)
 
     discover = subparsers.add_parser("discover-user")
     discover.add_argument("mid")
@@ -314,6 +322,7 @@ async def _run(args: argparse.Namespace) -> None:
             target_type=args.target_type,
             target_value=args.target_value,
             priority=args.priority,
+            role=args.role,
         )
         return
 
@@ -397,6 +406,17 @@ async def _run(args: argparse.Namespace) -> None:
             template_min_text_chars=args.template_min_text_chars,
             max_comments=args.max_comments,
             max_comparisons=args.max_comparisons,
+            output_path=Path(args.output),
+        )
+        return
+
+    if args.command == "event" and args.event_command == "propagation-nodes":
+        await _export_propagation_nodes(
+            cfg,
+            event_reference=args.event_reference,
+            since=args.since,
+            until=args.until,
+            max_comments=args.max_comments,
             output_path=Path(args.output),
         )
         return
@@ -819,7 +839,10 @@ async def _add_event_target(
     target_type: str,
     target_value: str,
     priority: int,
+    role: str | None = None,
 ):
+    if role is not None and target_type != "uid":
+        raise ValueError("Event target roles are only supported for uid targets")
     session_factory = build_session_factory(cfg)
     async with session_factory() as session:
         repository = EventRepository(session)
@@ -829,15 +852,17 @@ async def _add_event_target(
             target_type=target_type,
             target_value=target_value,
             priority=priority,
+            extra={"role": role} if role is not None else None,
             now=datetime.now(UTC),
         )
         await session.commit()
     logger.info(
-        "Registered event target event=%s type=%s value=%s priority=%s",
+        "Registered event target event=%s type=%s value=%s priority=%s role=%s",
         event.slug,
         target.target_type,
         target.target_value,
         target.priority,
+        target.extra.get("role"),
     )
     return target
 
@@ -1123,6 +1148,38 @@ async def _refresh_comment_flags(
         output_path,
     )
     return summary
+
+
+async def _export_propagation_nodes(
+    cfg: dict,
+    *,
+    event_reference: str,
+    since: str,
+    until: str,
+    max_comments: int,
+    output_path: Path,
+) -> int:
+    since_at = _parse_event_datetime(since)
+    until_at = _parse_event_datetime(until)
+    if since_at is None or until_at is None:
+        raise ValueError("Propagation node window requires since and until")
+    session_factory = build_session_factory(cfg)
+    async with session_factory() as session:
+        rows = await PropagationNodeAnalyzer(session).analyze(
+            event_reference=event_reference,
+            since=since_at,
+            until=until_at,
+            max_comments=max_comments,
+        )
+
+    _write_jsonl_atomic(output_path, [row.as_dict() for row in rows])
+    logger.info(
+        "Exported propagation nodes event=%s rows=%s output=%s",
+        event_reference,
+        len(rows),
+        output_path,
+    )
+    return len(rows)
 
 
 def _write_jsonl_atomic(output_path: Path, records: list[dict]) -> None:

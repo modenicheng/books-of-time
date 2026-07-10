@@ -42,6 +42,19 @@ def test_event_parser_supports_archive_management_commands() -> None:
     assert add_target.event_command == "add-target"
     assert add_target.priority == 90
 
+    official_target = cli.build_parser().parse_args(
+        [
+            "event",
+            "add-target",
+            "ghost-picture-war",
+            "uid",
+            "12345",
+            "--role",
+            "official",
+        ]
+    )
+    assert official_target.role == "official"
+
     listing = cli.build_parser().parse_args(["event", "list", "--limit", "5"])
     assert listing.event_command == "list"
     assert listing.limit == 5
@@ -161,6 +174,14 @@ async def test_event_cli_helpers_create_event_and_seed_video(tmp_path) -> None:
         target_value="控评",
         priority=50,
     )
+    official_target = await cli._add_event_target(
+        cfg,
+        event_reference="ghost-picture-war",
+        target_type="uid",
+        target_value="12345",
+        priority=100,
+        role="official",
+    )
     await cli._add_event_target(
         cfg,
         event_reference="ghost-picture-war",
@@ -223,7 +244,8 @@ async def test_event_cli_helpers_create_event_and_seed_video(tmp_path) -> None:
     assert target.event_id == event.id
     assert video is not None
     assert task_count == 1
-    assert target_count == 3
+    assert target_count == 4
+    assert official_target.extra == {"role": "official"}
     assert coverage.active_video_count == 1
     assert coverage.videos_with_coverage == 0
     assert exported == 1

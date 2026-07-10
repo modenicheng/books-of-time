@@ -12,6 +12,10 @@ from books_of_time.analysis.keywords import (
     KeywordTrendAnalyzer,
     KeywordTrendPoint,
 )
+from books_of_time.analysis.propagation import (
+    PropagationNodeAnalyzer,
+    PropagationNodeScore,
+)
 from books_of_time.analysis.stance import (
     StanceEvidenceAnalyzer,
     StanceEvidenceSummary,
@@ -31,6 +35,8 @@ __all__ = [
     "KeywordCooccurrenceEdge",
     "KeywordTrendAnalyzer",
     "KeywordTrendPoint",
+    "PropagationNodeAnalyzer",
+    "PropagationNodeScore",
     "StanceEvidenceAnalyzer",
     "StanceEvidenceSummary",
     "StanceLexicon",
