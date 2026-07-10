@@ -14,6 +14,10 @@ from uuid import uuid4
 
 from books_of_time.accounts.models import AccountStatus, CredentialSnapshot
 from books_of_time.accounts.qr_login import QrLoginFlow
+from books_of_time.analysis.comment_flags import (
+    CommentFlagAnalyzer,
+    CommentFlagRefreshSummary,
+)
 from books_of_time.analysis.hot_turnover import HotCommentTurnoverAnalyzer
 from books_of_time.analysis.keywords import (
     KeywordCooccurrenceAnalyzer,
@@ -215,6 +219,16 @@ def build_parser() -> argparse.ArgumentParser:
     event_templates.add_argument("--max-comments", type=int, default=5000)
     event_templates.add_argument("--max-comparisons", type=int, default=100_000)
     event_templates.add_argument("--output", required=True)
+    event_flags = event_sub.add_parser("refresh-comment-flags")
+    event_flags.add_argument("event_reference")
+    event_flags.add_argument("--since", required=True)
+    event_flags.add_argument("--until", required=True)
+    event_flags.add_argument("--template-window-minutes", type=int, default=60)
+    event_flags.add_argument("--template-min-similarity", type=float, default=0.85)
+    event_flags.add_argument("--template-min-text-chars", type=int, default=8)
+    event_flags.add_argument("--max-comments", type=int, default=5000)
+    event_flags.add_argument("--max-comparisons", type=int, default=100_000)
+    event_flags.add_argument("--output", required=True)
 
     discover = subparsers.add_parser("discover-user")
     discover.add_argument("mid")
@@ -362,6 +376,21 @@ async def _run(args: argparse.Namespace) -> None:
             window_minutes=args.window_minutes,
             min_similarity=args.min_similarity,
             min_text_chars=args.min_text_chars,
+            max_comments=args.max_comments,
+            max_comparisons=args.max_comparisons,
+            output_path=Path(args.output),
+        )
+        return
+
+    if args.command == "event" and args.event_command == "refresh-comment-flags":
+        await _refresh_comment_flags(
+            cfg,
+            event_reference=args.event_reference,
+            since=args.since,
+            until=args.until,
+            template_window_minutes=args.template_window_minutes,
+            template_min_similarity=args.template_min_similarity,
+            template_min_text_chars=args.template_min_text_chars,
             max_comments=args.max_comments,
             max_comparisons=args.max_comparisons,
             output_path=Path(args.output),
@@ -1047,6 +1076,49 @@ async def _export_template_candidates(
         output_path,
     )
     return len(rows)
+
+
+async def _refresh_comment_flags(
+    cfg: dict,
+    *,
+    event_reference: str,
+    since: str,
+    until: str,
+    template_window_minutes: int,
+    template_min_similarity: float,
+    template_min_text_chars: int,
+    max_comments: int,
+    max_comparisons: int,
+    output_path: Path,
+) -> CommentFlagRefreshSummary:
+    since_at = _parse_event_datetime(since)
+    until_at = _parse_event_datetime(until)
+    if since_at is None or until_at is None:
+        raise ValueError("Comment flag window requires since and until")
+    session_factory = build_session_factory(cfg)
+    async with session_factory() as session:
+        summary = await CommentFlagAnalyzer(session).refresh(
+            event_reference=event_reference,
+            since=since_at,
+            until=until_at,
+            detected_at=datetime.now(UTC),
+            template_window_seconds=template_window_minutes * 60,
+            template_min_similarity=template_min_similarity,
+            template_min_text_chars=template_min_text_chars,
+            max_comments=max_comments,
+            max_comparisons=max_comparisons,
+        )
+        await session.commit()
+
+    _write_jsonl_atomic(output_path, [summary.as_dict()])
+    logger.info(
+        "Refreshed comment flags event=%s matched=%s created=%s output=%s",
+        event_reference,
+        summary.matched_count,
+        summary.created_count,
+        output_path,
+    )
+    return summary
 
 
 def _write_jsonl_atomic(output_path: Path, records: list[dict]) -> None:

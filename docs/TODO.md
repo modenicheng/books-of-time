@@ -231,9 +231,9 @@
 - [x] 热门评论 Top N 换血率：按成功热门第一页快照比较进入、退出、保留评论和替换率。
 - [x] 支持/批评/中性词表的初版配置：版本化词表、跨类别歧义校验和可解释 JSONL 命中统计，不对评论或用户强制贴标签。
 - [x] 模板化评论候选检测：基于首见评论的相似文本、短时间、跨视频证据对，保留公开作者与 raw 引用供核验，不直接定性为组织行为。
-- [ ] 重复评论 flag：same rpid duplicate display。
-- [ ] 重复评论 flag：same user duplicate submission。
-- [ ] 重复评论 flag：template-like comment。
+- [x] 重复评论 flag：same rpid duplicate display，按同一 raw page 内 rpid 重复展示持久化证据。
+- [x] 重复评论 flag：same user duplicate submission，按公开 author_mid 和首见文本 hash 生成幂等关联。
+- [x] 重复评论 flag：template-like comment，持久化跨视频模板候选及算法、阈值与 raw 证据。
 - [ ] 传播节点初版评分：originator、amplifier、bridge、responder、official。
 - [ ] 事件转折点检测：关键词突增、评论突增、热门换血、大 UP 介入。
 

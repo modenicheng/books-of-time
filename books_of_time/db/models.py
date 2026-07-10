@@ -842,6 +842,51 @@ Index("idx_event_keywords_event_active", EventKeyword.event_id, EventKeyword.act
 Index("idx_event_keywords_normalized", EventKeyword.normalized_keyword)
 
 
+class CommentAnalysisFlag(Base):
+    __tablename__ = "comment_analysis_flags"
+
+    id: Mapped[int] = mapped_column(
+        bigint_pk_type, primary_key=True, autoincrement=True
+    )
+    stable_key: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    event_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("events.id", ondelete="CASCADE"), nullable=False
+    )
+    flag_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    subject_rpid: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("comment_entities.rpid", ondelete="CASCADE"),
+        nullable=False,
+    )
+    related_rpid: Mapped[int | None] = mapped_column(
+        BigInteger,
+        ForeignKey("comment_entities.rpid", ondelete="CASCADE"),
+    )
+    confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    algorithm: Mapped[str] = mapped_column(String(64), nullable=False)
+    algorithm_version: Mapped[str] = mapped_column(String(160), nullable=False)
+    evidence: Mapped[dict[str, Any]] = mapped_column(
+        json_dict_type, nullable=False, default=dict
+    )
+    detected_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+        server_default=func.now(),
+    )
+
+
+Index(
+    "idx_comment_analysis_flags_event_type",
+    CommentAnalysisFlag.event_id,
+    CommentAnalysisFlag.flag_type,
+    CommentAnalysisFlag.detected_at.desc(),
+)
+Index("idx_comment_analysis_flags_subject", CommentAnalysisFlag.subject_rpid)
+Index("idx_comment_analysis_flags_related", CommentAnalysisFlag.related_rpid)
+
+
 class KnownVideo(TimestampMixin, Base):
     __tablename__ = "known_videos"
 

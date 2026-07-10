@@ -1,3 +1,7 @@
+from books_of_time.analysis.comment_flags import (
+    CommentFlagAnalyzer,
+    CommentFlagRefreshSummary,
+)
 from books_of_time.analysis.hot_turnover import (
     HotCommentTurnoverAnalyzer,
     HotCommentTurnoverPoint,
@@ -19,6 +23,8 @@ from books_of_time.analysis.templates import (
 )
 
 __all__ = [
+    "CommentFlagAnalyzer",
+    "CommentFlagRefreshSummary",
     "HotCommentTurnoverAnalyzer",
     "HotCommentTurnoverPoint",
     "KeywordCooccurrenceAnalyzer",
