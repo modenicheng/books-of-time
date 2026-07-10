@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -123,5 +124,71 @@ async def test_worker_recovers_expired_lease_before_leasing() -> None:
         assert task.status == TaskStatus.SUCCEEDED
         assert task.lease_owner is None
         assert task.lease_until is None
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_worker_loop_does_not_lease_when_stop_is_already_requested() -> None:
+    engine, session_factory = await _create_session_factory()
+    now = datetime.now(UTC)
+    try:
+        async with session_factory() as session:
+            await CollectionTaskRepository(session).enqueue(
+                kind=TaskKind.FETCH_VIDEO_STATS,
+                target_type="video",
+                target_id="BVSTOP",
+                priority=100,
+                payload={"bvid": "BVSTOP"},
+                not_before=now - timedelta(seconds=1),
+            )
+            await session.commit()
+
+        worker = Worker(
+            session_factory=session_factory,
+            collectors={TaskKind.FETCH_VIDEO_STATS: SuccessfulCollector()},
+            run_id="run-stop-test",
+            lease_owner="worker-1",
+        )
+        stop_event = asyncio.Event()
+        stop_event.set()
+
+        executed = await worker.run_loop(stop_event=stop_event)
+
+        async with session_factory() as session:
+            task = await session.scalar(select(CollectionTask))
+        assert executed == 0
+        assert task is not None
+        assert task.status == TaskStatus.PENDING
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_worker_loop_stops_after_idle_sleep_requests_stop() -> None:
+    engine, session_factory = await _create_session_factory()
+    stop_event = asyncio.Event()
+    slept: list[float] = []
+
+    async def stop_during_sleep(seconds: float) -> None:
+        slept.append(seconds)
+        stop_event.set()
+
+    try:
+        worker = Worker(
+            session_factory=session_factory,
+            collectors={},
+            run_id="run-idle-stop-test",
+            lease_owner="worker-1",
+        )
+
+        executed = await worker.run_loop(
+            idle_sleep_seconds=0.25,
+            sleep=stop_during_sleep,
+            stop_event=stop_event,
+        )
+
+        assert executed == 0
+        assert slept == [0.25]
     finally:
         await engine.dispose()

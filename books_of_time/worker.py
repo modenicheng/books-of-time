@@ -176,12 +176,15 @@ class Worker:
         max_iterations: int | None = None,
         stop_when_idle: bool = False,
         sleep: Callable[[float], Awaitable[None] | None] | None = None,
+        stop_event: asyncio.Event | None = None,
     ) -> int:
         sleep_func = sleep or asyncio.sleep
         iterations = 0
         executed_count = 0
 
-        while max_iterations is None or iterations < max_iterations:
+        while (max_iterations is None or iterations < max_iterations) and not (
+            stop_event is not None and stop_event.is_set()
+        ):
             iterations += 1
             executed = await self.run_once()
             if executed:
