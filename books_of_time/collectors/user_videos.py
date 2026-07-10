@@ -16,7 +16,10 @@ from books_of_time.parsers.discovery import (
     parse_user_video_list,
 )
 from books_of_time.storage.filesystem import RawPayloadFileStore
-from books_of_time.task_orchestrator.discovery import DiscoveryScheduler
+from books_of_time.task_orchestrator.discovery import (
+    DiscoveryScheduler,
+    EventDiscoveryLink,
+)
 
 
 class UserVideosClient(Protocol):
@@ -88,6 +91,7 @@ class UserVideosCollector:
                 "source_pool_type": task.payload.get("source_pool_type"),
                 "source_pool_id": task.payload.get("source_pool_id"),
                 "reason": task.payload.get("reason"),
+                "event_links": task.payload.get("event_links", []),
             },
         )
         session.add(raw_page)
@@ -95,6 +99,13 @@ class UserVideosCollector:
         created = await self.scheduler.handle_discovered_videos(
             session=session,
             videos=videos,
+            event_links=[
+                EventDiscoveryLink(
+                    event_id=int(item["event_id"]),
+                    target_id=int(item["target_id"]),
+                )
+                for item in task.payload.get("event_links", [])
+            ],
             now=result.captured_at,
         )
         return CoverageDraft(

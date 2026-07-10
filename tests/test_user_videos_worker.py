@@ -12,12 +12,13 @@ from books_of_time.db.base import Base
 from books_of_time.db.models import (
     CollectionCoverageStat,
     CollectionTask,
+    EventVideo,
     KnownVideo,
     RawPageObservation,
     RawPayload,
     RequestBackoffState,
 )
-from books_of_time.db.repositories import CollectionTaskRepository
+from books_of_time.db.repositories import CollectionTaskRepository, EventRepository
 from books_of_time.domain.enums import BilibiliRequestType, TaskKind, TaskStatus
 from books_of_time.http.client import FetchResult
 
@@ -174,4 +175,85 @@ async def test_user_videos_worker_preserves_raw_on_parse_failure(tmp_path) -> No
     assert discovery_task is not None
     assert discovery_task.status == TaskStatus.PENDING
     assert discovery_task.retry_count == 1
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_user_videos_worker_attaches_discovered_video_to_event(tmp_path) -> None:
+    now = datetime(2026, 7, 10, 6, 0, tzinfo=UTC)
+    body = json.dumps(
+        {
+            "data": {
+                "list": {
+                    "vlist": [
+                        {
+                            "bvid": "BV1xx411c7mD",
+                            "created": int(now.timestamp()),
+                        }
+                    ]
+                }
+            }
+        }
+    ).encode()
+    engine, session_factory, worker = await _runtime(
+        tmp_path,
+        FakeUserVideosClient(body, now),
+    )
+
+    async with session_factory() as session:
+        event_repository = EventRepository(session)
+        event = await event_repository.create_event(
+            slug="event-a",
+            name="事件 A",
+            now=now,
+        )
+        target = await event_repository.add_target(
+            event_id=event.id,
+            target_type="uid",
+            target_value="123",
+            now=now,
+        )
+        await CollectionTaskRepository(session).enqueue(
+            kind=TaskKind.DISCOVER_USER_VIDEOS,
+            target_type="user",
+            target_id="123",
+            priority=110,
+            payload={
+                "mid": "123",
+                "page": 1,
+                "source_pool_type": "event",
+                "source_pool_id": None,
+                "event_links": [{"event_id": event.id, "target_id": target.id}],
+            },
+            not_before=now,
+            idempotency_key="discover-user-videos:123:event-test",
+        )
+        await session.commit()
+
+    assert await worker.run_once(now=now) is True
+
+    async with session_factory() as session:
+        event_video = await session.get(
+            EventVideo,
+            (event.id, "BV1xx411c7mD"),
+        )
+        stats_task = await session.scalar(
+            select(CollectionTask).where(
+                CollectionTask.kind == TaskKind.FETCH_VIDEO_STATS
+            )
+        )
+
+    assert event_video is not None
+    assert event_video.source_target_id == target.id
+    assert event_video.association_reason == "uid_target"
+    assert stats_task is not None
+    assert stats_task.payload["event_links"] == [
+        {"event_id": event.id, "target_id": target.id}
+    ]
+    async with session_factory() as session:
+        raw_page = await session.scalar(select(RawPageObservation))
+    assert raw_page is not None
+    assert raw_page.extra["event_links"] == [
+        {"event_id": event.id, "target_id": target.id}
+    ]
     await engine.dispose()

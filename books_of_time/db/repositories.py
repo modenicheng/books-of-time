@@ -809,6 +809,46 @@ class EventRepository:
         )
         return list(rows)
 
+    async def list_active_uid_targets(
+        self,
+        *,
+        now: datetime,
+    ) -> list[EventTarget]:
+        rows = await self.session.scalars(
+            select(EventTarget)
+            .join(Event, Event.id == EventTarget.event_id)
+            .where(
+                EventTarget.target_type == "uid",
+                EventTarget.active.is_(True),
+                Event.status == "active",
+                or_(Event.start_at.is_(None), Event.start_at <= now),
+                or_(Event.end_at.is_(None), Event.end_at >= now),
+            )
+            .order_by(EventTarget.normalized_value.asc(), EventTarget.id.asc())
+        )
+        return list(rows)
+
+    async def resolve_active_uid_target(
+        self,
+        *,
+        event_id: int,
+        target_id: int,
+        now: datetime,
+    ) -> EventTarget | None:
+        return await self.session.scalar(
+            select(EventTarget)
+            .join(Event, Event.id == EventTarget.event_id)
+            .where(
+                EventTarget.id == target_id,
+                EventTarget.event_id == event_id,
+                EventTarget.target_type == "uid",
+                EventTarget.active.is_(True),
+                Event.status == "active",
+                or_(Event.start_at.is_(None), Event.start_at <= now),
+                or_(Event.end_at.is_(None), Event.end_at >= now),
+            )
+        )
+
     async def _synchronize_keyword(
         self,
         *,

@@ -11,7 +11,7 @@ from books_of_time.db.models import (
     ScheduledJob,
     VideoMetricSnapshot,
 )
-from books_of_time.db.repositories import ScheduledJobRepository
+from books_of_time.db.repositories import EventRepository, ScheduledJobRepository
 from books_of_time.domain.enums import ScheduledJobKind, TaskKind, TaskStatus
 from books_of_time.service.scheduled_jobs import (
     TerminalSnapshotScheduleHandler,
@@ -68,6 +68,68 @@ async def test_uid_discovery_handler_enqueues_each_source_once_per_slot() -> Non
     assert tasks[1].payload["source_pool_type"] == "event"
     assert tasks[1].payload["source_pool_id"] == "event-a"
     assert all(now.isoformat() in (task.idempotency_key or "") for task in tasks)
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_uid_discovery_handler_merges_active_event_targets_by_uid() -> None:
+    engine, session_factory = await _session_factory()
+    now = datetime(2026, 7, 10, 7, 0, tzinfo=UTC)
+    async with session_factory() as session:
+        repository = EventRepository(session)
+        first_event = await repository.create_event(
+            slug="event-a",
+            name="事件 A",
+            start_at=now - timedelta(days=1),
+            now=now,
+        )
+        second_event = await repository.create_event(
+            slug="event-b",
+            name="事件 B",
+            now=now,
+        )
+        expired_event = await repository.create_event(
+            slug="expired-event",
+            name="已结束事件",
+            start_at=now - timedelta(days=2),
+            end_at=now - timedelta(days=1),
+            now=now,
+        )
+        first_target = await repository.add_target(
+            event_id=first_event.id,
+            target_type="uid",
+            target_value="100",
+            now=now,
+        )
+        second_target = await repository.add_target(
+            event_id=second_event.id,
+            target_type="uid",
+            target_value="100",
+            now=now,
+        )
+        await repository.add_target(
+            event_id=expired_event.id,
+            target_type="uid",
+            target_value="300",
+            now=now,
+        )
+        job = await _job(session, kind=ScheduledJobKind.UID_DISCOVERY, now=now)
+        handler = UidDiscoveryScheduleHandler(
+            [DiscoveryUidSource(mid="100", pool_type="matrix")]
+        )
+        await handler.handle(job, session, now=now)
+        await session.commit()
+
+    async with session_factory() as session:
+        tasks = list(await session.scalars(select(CollectionTask)))
+
+    assert len(tasks) == 1
+    assert tasks[0].target_id == "100"
+    assert tasks[0].payload["source_pool_type"] == "matrix"
+    assert tasks[0].payload["event_links"] == [
+        {"event_id": first_event.id, "target_id": first_target.id},
+        {"event_id": second_event.id, "target_id": second_target.id},
+    ]
     await engine.dispose()
 
 

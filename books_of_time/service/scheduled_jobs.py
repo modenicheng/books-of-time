@@ -5,7 +5,7 @@ from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from books_of_time.db.models import ScheduledJob
-from books_of_time.db.repositories import CollectionTaskRepository
+from books_of_time.db.repositories import CollectionTaskRepository, EventRepository
 from books_of_time.domain.enums import ScheduledJobKind, TaskKind
 from books_of_time.service.coordinator import (
     ScheduledJobDefinition,
@@ -33,7 +33,21 @@ class UidDiscoveryScheduleHandler:
     ) -> None:
         repo = CollectionTaskRepository(session)
         scheduled_for = job.next_run_at.isoformat()
+        sources_by_mid: dict[str, DiscoveryUidSource] = {}
         for source in self.sources:
+            sources_by_mid.setdefault(source.mid, source)
+        event_links_by_mid: dict[str, list[dict[str, int]]] = {}
+        event_targets = await EventRepository(session).list_active_uid_targets(now=now)
+        for target in event_targets:
+            sources_by_mid.setdefault(
+                target.normalized_value,
+                DiscoveryUidSource(mid=target.normalized_value, pool_type="event"),
+            )
+            event_links_by_mid.setdefault(target.normalized_value, []).append(
+                {"event_id": target.event_id, "target_id": target.id}
+            )
+
+        for source in sources_by_mid.values():
             await repo.enqueue(
                 kind=TaskKind.DISCOVER_USER_VIDEOS,
                 target_type="user",
@@ -46,6 +60,7 @@ class UidDiscoveryScheduleHandler:
                     "source_pool_id": source.pool_id,
                     "reason": "scheduled_discovery",
                     "scheduled_for": scheduled_for,
+                    "event_links": event_links_by_mid.get(source.mid, []),
                 },
                 not_before=now,
                 idempotency_key=(
