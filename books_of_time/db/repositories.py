@@ -19,6 +19,10 @@ from books_of_time.db.models import (
     CommentObservation,
     CommentStateEvent,
     CommentVisibilityEvent,
+    Event,
+    EventKeyword,
+    EventTarget,
+    EventVideo,
     FrontierState,
     ImportantCommentWatchlist,
     RawPageObservation,
@@ -35,6 +39,12 @@ from books_of_time.domain.enums import (
     ScheduledJobKind,
     TaskKind,
     TaskStatus,
+)
+from books_of_time.domain.events import (
+    normalize_event_slug,
+    normalize_event_target,
+    validate_event_status,
+    validate_event_window,
 )
 from books_of_time.http.client import FetchResult
 from books_of_time.http.errors import RequestFailure
@@ -588,6 +598,242 @@ class ServiceInstanceRepository:
         if instance is None:
             raise LookupError(f"Unknown service instance: {instance_id}")
         return instance
+
+
+class EventRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def create_event(
+        self,
+        *,
+        slug: str,
+        name: str,
+        now: datetime,
+        game: str | None = None,
+        description: str | None = None,
+        status: str = "active",
+        start_at: datetime | None = None,
+        end_at: datetime | None = None,
+        timezone: str = "Asia/Shanghai",
+    ) -> Event:
+        normalized_slug = normalize_event_slug(slug)
+        normalized_name = name.strip()
+        if not normalized_name:
+            raise ValueError("Event name cannot be empty")
+        validate_event_window(start_at, end_at)
+        validate_event_status(status)
+        if await self.session.scalar(
+            select(Event.id).where(Event.slug == normalized_slug)
+        ):
+            raise ValueError(f"Event slug already exists: {normalized_slug}")
+
+        event = Event(
+            slug=normalized_slug,
+            name=normalized_name,
+            game=game.strip() if game and game.strip() else None,
+            description=description.strip()
+            if description and description.strip()
+            else None,
+            status=status,
+            start_at=start_at,
+            end_at=end_at,
+            timezone=timezone.strip() or "Asia/Shanghai",
+            created_at=now,
+            updated_at=now,
+        )
+        self.session.add(event)
+        await self.session.flush()
+        return event
+
+    async def resolve_event(self, reference: int | str) -> Event:
+        event: Event | None
+        if isinstance(reference, int) or str(reference).isdecimal():
+            event = await self.session.get(Event, int(reference))
+        else:
+            slug = normalize_event_slug(str(reference))
+            event = await self.session.scalar(select(Event).where(Event.slug == slug))
+        if event is None:
+            raise LookupError(f"Unknown event: {reference}")
+        return event
+
+    async def list_events(self, *, limit: int = 100) -> list[Event]:
+        rows = await self.session.scalars(
+            select(Event)
+            .order_by(Event.start_at.desc(), Event.created_at.desc(), Event.id.desc())
+            .limit(min(max(limit, 1), 1000))
+        )
+        return list(rows)
+
+    async def add_target(
+        self,
+        *,
+        event_id: int,
+        target_type: str,
+        target_value: str,
+        now: datetime,
+        priority: int = 0,
+        extra: dict[str, Any] | None = None,
+    ) -> EventTarget:
+        if await self.session.get(Event, event_id) is None:
+            raise LookupError(f"Unknown event: {event_id}")
+        normalized_value = normalize_event_target(target_type, target_value)
+        display_value = (
+            normalized_value
+            if target_type in {"uid", "seed_bvid"}
+            else " ".join(target_value.strip().split())
+        )
+        target = await self.session.scalar(
+            select(EventTarget).where(
+                EventTarget.event_id == event_id,
+                EventTarget.target_type == target_type,
+                EventTarget.normalized_value == normalized_value,
+            )
+        )
+        created = target is None
+        if target is None:
+            target = EventTarget(
+                event_id=event_id,
+                target_type=target_type,
+                target_value=display_value,
+                normalized_value=normalized_value,
+                priority=priority,
+                active=True,
+                first_seen_at=now,
+                last_seen_at=now,
+                extra=dict(extra or {}),
+                created_at=now,
+                updated_at=now,
+            )
+            self.session.add(target)
+            await self.session.flush()
+        else:
+            target.target_value = display_value
+            target.priority = max(target.priority, priority)
+            target.active = True
+            target.last_seen_at = now
+            target.extra.update(extra or {})
+            flag_modified(target, "extra")
+            target.updated_at = now
+            await self.session.flush()
+
+        if target_type == "keyword":
+            await self._synchronize_keyword(target=target, now=now)
+        elif target_type == "seed_bvid":
+            await self.attach_video(
+                event_id=event_id,
+                bvid=normalized_value,
+                source_target_id=target.id,
+                association_reason="seed_bvid",
+                confidence=1.0,
+                now=now,
+            )
+            if created:
+                await CollectionTaskRepository(self.session).enqueue(
+                    kind=TaskKind.FETCH_VIDEO_STATS,
+                    target_type="video",
+                    target_id=normalized_value,
+                    priority=priority,
+                    payload={
+                        "bvid": normalized_value,
+                        "event_id": event_id,
+                        "source_target_id": target.id,
+                        "reason": "event_seed",
+                    },
+                    not_before=now,
+                    idempotency_key=(
+                        f"{TaskKind.FETCH_VIDEO_STATS.value}:video:"
+                        f"{normalized_value}:event:{event_id}"
+                    ),
+                )
+        return target
+
+    async def attach_video(
+        self,
+        *,
+        event_id: int,
+        bvid: str,
+        association_reason: str,
+        now: datetime,
+        source_target_id: int | None = None,
+        confidence: float = 1.0,
+    ) -> EventVideo:
+        normalized_bvid = normalize_event_target("seed_bvid", bvid)
+        video = await self.session.get(EventVideo, (event_id, normalized_bvid))
+        if video is None:
+            video = EventVideo(
+                event_id=event_id,
+                bvid=normalized_bvid,
+                source_target_id=source_target_id,
+                association_reason=association_reason,
+                confidence=confidence,
+                active=True,
+                first_seen_at=now,
+                last_seen_at=now,
+                created_at=now,
+                updated_at=now,
+            )
+            self.session.add(video)
+        else:
+            video.source_target_id = source_target_id or video.source_target_id
+            video.association_reason = association_reason
+            video.confidence = confidence
+            video.active = True
+            video.last_seen_at = now
+            video.updated_at = now
+        await self.session.flush()
+        return video
+
+    async def list_videos(
+        self,
+        event_id: int,
+        *,
+        active_only: bool = True,
+        limit: int = 1000,
+    ) -> list[EventVideo]:
+        stmt = select(EventVideo).where(EventVideo.event_id == event_id)
+        if active_only:
+            stmt = stmt.where(EventVideo.active.is_(True))
+        rows = await self.session.scalars(
+            stmt.order_by(EventVideo.first_seen_at.asc(), EventVideo.bvid.asc()).limit(
+                min(max(limit, 1), 10_000)
+            )
+        )
+        return list(rows)
+
+    async def _synchronize_keyword(
+        self,
+        *,
+        target: EventTarget,
+        now: datetime,
+    ) -> EventKeyword:
+        keyword = await self.session.scalar(
+            select(EventKeyword).where(
+                EventKeyword.event_id == target.event_id,
+                EventKeyword.normalized_keyword == target.normalized_value,
+                EventKeyword.version == 1,
+            )
+        )
+        if keyword is None:
+            keyword = EventKeyword(
+                event_id=target.event_id,
+                keyword=target.target_value,
+                normalized_keyword=target.normalized_value,
+                category="topic",
+                version=1,
+                active=True,
+                source_target_id=target.id,
+                created_at=now,
+                updated_at=now,
+            )
+            self.session.add(keyword)
+        else:
+            keyword.keyword = target.target_value
+            keyword.active = True
+            keyword.source_target_id = target.id
+            keyword.updated_at = now
+        await self.session.flush()
+        return keyword
 
 
 class ScheduledJobRepository:
