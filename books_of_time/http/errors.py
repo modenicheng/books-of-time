@@ -83,6 +83,10 @@ def classify_failed_fetch(result: FetchResult) -> RequestFailure | None:
 
 
 def _classify_kind(status_code: int, body: bytes) -> RequestErrorKind | None:
+    text = body.decode("utf-8", errors="ignore").lower()
+    if "captcha" in text or "\u9a8c\u8bc1\u7801" in text or "\u98ce\u63a7" in text:
+        return RequestErrorKind.CAPTCHA
+
     if status_code == 403:
         return RequestErrorKind.FORBIDDEN
     if status_code == 429:
@@ -92,7 +96,4 @@ def _classify_kind(status_code: int, body: bytes) -> RequestErrorKind | None:
     if 500 <= status_code <= 599:
         return RequestErrorKind.SERVER_ERROR
 
-    text = body.decode("utf-8", errors="ignore").lower()
-    if "captcha" in text or "验证码" in text or "风控" in text:
-        return RequestErrorKind.CAPTCHA
     return None
