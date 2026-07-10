@@ -8,12 +8,16 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from books_of_time.db.models import (
+    CommentAnalysisFlag,
+    CommentEntity,
     CommentObservation,
     CommentObservationMedia,
     CommentVisibilityEvent,
+    EventVideo,
     RawPageObservation,
     VideoMetricSnapshot,
 )
+from books_of_time.db.repositories import EventRepository
 from books_of_time.domain.enums import BilibiliRequestType
 
 _METRIC_FIELDS: Final[tuple[str, ...]] = (
@@ -429,6 +433,191 @@ def _observation_evidence(
             if observation.media_set_hash is not None
             else None
         ),
+    }
+
+
+@dataclass(frozen=True, slots=True)
+class EventPropagationReplayRecord:
+    event_id: int
+    event_slug: str
+    record_type: str
+    occurred_at: datetime
+    source: dict[str, Any]
+    target: dict[str, Any]
+    evidence: dict[str, Any]
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": "event-propagation-replay-v1",
+            "event_id": self.event_id,
+            "event_slug": self.event_slug,
+            "record_type": self.record_type,
+            "occurred_at": self.occurred_at.isoformat(),
+            "source": self.source,
+            "target": self.target,
+            "evidence": self.evidence,
+            "interpretation_limit": ("evidenced_edges_only_not_complete_causal_graph"),
+        }
+
+
+class EventPropagationReplayAnalyzer:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def analyze(
+        self,
+        *,
+        event_reference: int | str,
+        since: datetime,
+        until: datetime,
+        max_records: int = 100_000,
+    ) -> list[EventPropagationReplayRecord]:
+        since_utc = _aware_utc(since, "since")
+        until_utc = _aware_utc(until, "until")
+        if until_utc <= since_utc:
+            raise ValueError("until must be after since")
+        if not 1 <= max_records <= 1_000_000:
+            raise ValueError("max_records must be between 1 and 1000000")
+        event = await EventRepository(self.session).resolve_event(event_reference)
+        event_videos = list(
+            await self.session.scalars(
+                select(EventVideo)
+                .where(EventVideo.event_id == event.id)
+                .order_by(EventVideo.first_seen_at.asc(), EventVideo.bvid.asc())
+            )
+        )
+        bvids = [video.bvid for video in event_videos]
+        records = [
+            EventPropagationReplayRecord(
+                event_id=event.id,
+                event_slug=event.slug,
+                record_type="video_associated",
+                occurred_at=video.first_seen_at,
+                source={"event_id": event.id, "event_slug": event.slug},
+                target={"bvid": video.bvid},
+                evidence={
+                    "association_reason": video.association_reason,
+                    "source_target_id": video.source_target_id,
+                    "confidence": video.confidence,
+                },
+            )
+            for video in event_videos
+            if since_utc <= video.first_seen_at < until_utc
+        ]
+        if not bvids:
+            return records
+
+        replies = list(
+            await self.session.scalars(
+                select(CommentEntity)
+                .where(
+                    CommentEntity.bvid.in_(bvids),
+                    CommentEntity.first_seen_at >= since_utc,
+                    CommentEntity.first_seen_at < until_utc,
+                    CommentEntity.root_rpid.is_not(None),
+                )
+                .order_by(CommentEntity.first_seen_at.asc(), CommentEntity.rpid.asc())
+                .limit(max_records + 1)
+            )
+        )
+        flags = list(
+            await self.session.scalars(
+                select(CommentAnalysisFlag)
+                .where(
+                    CommentAnalysisFlag.event_id == event.id,
+                    CommentAnalysisFlag.flag_type == "template_like_comment",
+                )
+                .order_by(CommentAnalysisFlag.id.asc())
+                .limit(max_records + 1)
+            )
+        )
+        entity_ids = {
+            rpid
+            for reply in replies
+            for rpid in (reply.rpid, reply.root_rpid)
+            if rpid is not None
+        } | {
+            rpid
+            for flag in flags
+            for rpid in (flag.subject_rpid, flag.related_rpid)
+            if rpid is not None
+        }
+        entities: dict[int, CommentEntity] = {}
+        if entity_ids:
+            rows = await self.session.scalars(
+                select(CommentEntity).where(CommentEntity.rpid.in_(entity_ids))
+            )
+            entities = {row.rpid: row for row in rows}
+
+        for reply in replies:
+            root = entities.get(reply.root_rpid)
+            if root is None:
+                continue
+            records.append(
+                EventPropagationReplayRecord(
+                    event_id=event.id,
+                    event_slug=event.slug,
+                    record_type="comment_reply",
+                    occurred_at=reply.first_seen_at,
+                    source=_comment_node(root),
+                    target=_comment_node(reply),
+                    evidence={
+                        "root_rpid": reply.root_rpid,
+                        "parent_rpid": reply.parent_rpid,
+                        "source_raw_payload_id": root.first_raw_payload_id,
+                        "target_raw_payload_id": reply.first_raw_payload_id,
+                    },
+                )
+            )
+        for flag in flags:
+            source = entities.get(flag.subject_rpid)
+            target = entities.get(flag.related_rpid)
+            if source is None or target is None:
+                continue
+            if not since_utc <= target.first_seen_at < until_utc:
+                continue
+            records.append(
+                EventPropagationReplayRecord(
+                    event_id=event.id,
+                    event_slug=event.slug,
+                    record_type="template_propagation",
+                    occurred_at=target.first_seen_at,
+                    source=_comment_node(source),
+                    target=_comment_node(target),
+                    evidence={
+                        "comment_analysis_flag_id": flag.id,
+                        "confidence": flag.confidence,
+                        "algorithm": flag.algorithm,
+                        "algorithm_version": flag.algorithm_version,
+                        "flag_evidence": flag.evidence,
+                        "source_raw_payload_id": source.first_raw_payload_id,
+                        "target_raw_payload_id": target.first_raw_payload_id,
+                    },
+                )
+            )
+        if len(replies) > max_records or len(flags) > max_records:
+            raise ValueError(
+                f"Propagation replay exceeds max_records={max_records}; "
+                "narrow the window"
+            )
+        if len(records) > max_records:
+            raise ValueError(
+                f"Propagation replay produces more than max_records={max_records}"
+            )
+        return sorted(
+            records,
+            key=lambda row: (row.occurred_at, row.record_type, str(row.target)),
+        )
+
+
+def _comment_node(entity: CommentEntity) -> dict[str, Any]:
+    return {
+        "rpid": entity.rpid,
+        "bvid": entity.bvid,
+        "author_mid": entity.author_mid,
+        "author_name": entity.author_name,
+        "content": entity.first_content,
+        "first_seen_at": entity.first_seen_at.isoformat(),
     }
 
 

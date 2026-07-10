@@ -26,6 +26,7 @@ from books_of_time.analysis.keywords import (
 from books_of_time.analysis.propagation import PropagationNodeAnalyzer
 from books_of_time.analysis.replay import (
     CommentVisibilityReplayAnalyzer,
+    EventPropagationReplayAnalyzer,
     HotCommentReplayAnalyzer,
     VideoMetricReplayAnalyzer,
 )
@@ -278,6 +279,12 @@ def build_parser() -> argparse.ArgumentParser:
     event_turning.add_argument("--top-n", type=int, default=20)
     event_turning.add_argument("--max-records", type=int, default=200_000)
     event_turning.add_argument("--output", required=True)
+    event_replay = event_sub.add_parser("replay-propagation")
+    event_replay.add_argument("event_reference")
+    event_replay.add_argument("--since", required=True)
+    event_replay.add_argument("--until", required=True)
+    event_replay.add_argument("--max-records", type=int, default=100_000)
+    event_replay.add_argument("--output", required=True)
 
     discover = subparsers.add_parser("discover-user")
     discover.add_argument("mid")
@@ -472,6 +479,17 @@ async def _run(args: argparse.Namespace) -> None:
             min_count=args.min_count,
             turnover_threshold=args.turnover_threshold,
             top_n=args.top_n,
+            max_records=args.max_records,
+            output_path=Path(args.output),
+        )
+        return
+
+    if args.command == "event" and args.event_command == "replay-propagation":
+        await _export_propagation_replay(
+            cfg,
+            event_reference=args.event_reference,
+            since=args.since,
+            until=args.until,
             max_records=args.max_records,
             output_path=Path(args.output),
         )
@@ -1307,6 +1325,37 @@ async def _export_turning_points(
     _write_jsonl_atomic(output_path, [row.as_dict() for row in rows])
     logger.info(
         "Exported turning points event=%s signals=%s output=%s",
+        event_reference,
+        len(rows),
+        output_path,
+    )
+    return len(rows)
+
+
+async def _export_propagation_replay(
+    cfg: dict,
+    *,
+    event_reference: str,
+    since: str,
+    until: str,
+    max_records: int,
+    output_path: Path,
+) -> int:
+    since_at = _parse_event_datetime(since)
+    until_at = _parse_event_datetime(until)
+    if since_at is None or until_at is None:
+        raise ValueError("Propagation replay window requires since and until")
+    session_factory = build_session_factory(cfg)
+    async with session_factory() as session:
+        rows = await EventPropagationReplayAnalyzer(session).analyze(
+            event_reference=event_reference,
+            since=since_at,
+            until=until_at,
+            max_records=max_records,
+        )
+    _write_jsonl_atomic(output_path, [row.as_dict() for row in rows])
+    logger.info(
+        "Exported propagation replay event=%s records=%s output=%s",
         event_reference,
         len(rows),
         output_path,

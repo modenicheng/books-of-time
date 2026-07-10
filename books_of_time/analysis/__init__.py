@@ -19,6 +19,8 @@ from books_of_time.analysis.propagation import (
 from books_of_time.analysis.replay import (
     CommentVisibilityReplayAnalyzer,
     CommentVisibilityReplayEvent,
+    EventPropagationReplayAnalyzer,
+    EventPropagationReplayRecord,
     HotCommentReplayAnalyzer,
     HotCommentReplaySnapshot,
     VideoMetricReplayAnalyzer,
@@ -43,6 +45,8 @@ __all__ = [
     "CommentFlagRefreshSummary",
     "CommentVisibilityReplayAnalyzer",
     "CommentVisibilityReplayEvent",
+    "EventPropagationReplayAnalyzer",
+    "EventPropagationReplayRecord",
     "HotCommentReplayAnalyzer",
     "HotCommentReplaySnapshot",
     "HotCommentTurnoverAnalyzer",
