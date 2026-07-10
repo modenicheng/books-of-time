@@ -101,11 +101,36 @@ def test_event_parser_supports_archive_management_commands() -> None:
     )
     assert cooccurrence.event_command == "keyword-cooccurrence"
 
+    stance = cli.build_parser().parse_args(
+        [
+            "event",
+            "stance-evidence",
+            "ghost-picture-war",
+            "--since",
+            "2026-07-10T00:00:00Z",
+            "--until",
+            "2026-07-10T02:00:00Z",
+            "--output",
+            "stance.jsonl",
+        ]
+    )
+    assert stance.event_command == "stance-evidence"
+
 
 @pytest.mark.asyncio
 async def test_event_cli_helpers_create_event_and_seed_video(tmp_path) -> None:
     database_url = f"sqlite+aiosqlite:///{tmp_path / 'events.sqlite3'}"
-    cfg = {"database": {"url": database_url}}
+    cfg = {
+        "database": {"url": database_url},
+        "analysis": {
+            "stance_lexicon": {
+                "version": "test-v1",
+                "support": ["赞同"],
+                "criticism": ["质疑"],
+                "neutral": ["观望"],
+            }
+        },
+    }
     engine = create_async_engine(database_url)
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
@@ -174,6 +199,15 @@ async def test_event_cli_helpers_create_event_and_seed_video(tmp_path) -> None:
         bvid=None,
         output_path=cooccurrence_path,
     )
+    stance_path = tmp_path / "exports" / "stance.jsonl"
+    stance_count = await cli._export_stance_evidence(
+        cfg,
+        event_reference="ghost-picture-war",
+        since="2026-07-10T00:00:00Z",
+        until="2026-07-10T02:00:00Z",
+        bvid=None,
+        output_path=stance_path,
+    )
 
     engine = create_async_engine(database_url)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -207,6 +241,17 @@ async def test_event_cli_helpers_create_event_and_seed_video(tmp_path) -> None:
     assert {row["keyword"] for row in trend_rows} == {"控评", "删评"}
     assert cooccurrence_count == 0
     assert cooccurrence_path.read_text(encoding="utf-8") == ""
+    assert stance_count == 3
+    stance_rows = [
+        json.loads(line)
+        for line in stance_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert [row["category"] for row in stance_rows] == [
+        "support",
+        "criticism",
+        "neutral",
+    ]
+    assert {row["lexicon_version"] for row in stance_rows} == {"test-v1"}
 
 
 def test_parse_event_datetime_requires_timezone() -> None:

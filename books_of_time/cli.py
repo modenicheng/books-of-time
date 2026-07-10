@@ -19,6 +19,7 @@ from books_of_time.analysis.keywords import (
     KeywordCooccurrenceAnalyzer,
     KeywordTrendAnalyzer,
 )
+from books_of_time.analysis.stance import StanceEvidenceAnalyzer, StanceLexicon
 from books_of_time.app import (
     build_account_manager,
     build_bilibili_client,
@@ -197,6 +198,12 @@ def build_parser() -> argparse.ArgumentParser:
     event_cooccurrence.add_argument("--until", required=True)
     event_cooccurrence.add_argument("--bvid", default=None)
     event_cooccurrence.add_argument("--output", required=True)
+    event_stance = event_sub.add_parser("stance-evidence")
+    event_stance.add_argument("event_reference")
+    event_stance.add_argument("--since", required=True)
+    event_stance.add_argument("--until", required=True)
+    event_stance.add_argument("--bvid", default=None)
+    event_stance.add_argument("--output", required=True)
 
     discover = subparsers.add_parser("discover-user")
     discover.add_argument("mid")
@@ -315,6 +322,17 @@ async def _run(args: argparse.Namespace) -> None:
 
     if args.command == "event" and args.event_command == "keyword-cooccurrence":
         await _export_keyword_cooccurrence(
+            cfg,
+            event_reference=args.event_reference,
+            since=args.since,
+            until=args.until,
+            bvid=args.bvid,
+            output_path=Path(args.output),
+        )
+        return
+
+    if args.command == "event" and args.event_command == "stance-evidence":
+        await _export_stance_evidence(
             cfg,
             event_reference=args.event_reference,
             since=args.since,
@@ -924,6 +942,45 @@ async def _export_keyword_cooccurrence(
         output_path,
     )
     return len(edges)
+
+
+async def _export_stance_evidence(
+    cfg: dict,
+    *,
+    event_reference: str,
+    since: str,
+    until: str,
+    bvid: str | None,
+    output_path: Path,
+) -> int:
+    since_at = _parse_event_datetime(since)
+    until_at = _parse_event_datetime(until)
+    if since_at is None or until_at is None:
+        raise ValueError("Stance evidence window requires since and until")
+    analysis_cfg = cfg.get("analysis")
+    if not isinstance(analysis_cfg, dict):
+        raise ValueError("Configuration section analysis must be a mapping")
+    lexicon = StanceLexicon.from_config(analysis_cfg.get("stance_lexicon", {}))
+    session_factory = build_session_factory(cfg)
+    async with session_factory() as session:
+        rows = await StanceEvidenceAnalyzer(session).analyze(
+            event_reference=event_reference,
+            since=since_at,
+            until=until_at,
+            lexicon=lexicon,
+            bvid=bvid,
+        )
+
+    _write_jsonl_atomic(output_path, [row.as_dict() for row in rows])
+    logger.info(
+        "Exported stance evidence event=%s bvid=%s lexicon=%s rows=%s output=%s",
+        event_reference,
+        bvid,
+        lexicon.version,
+        len(rows),
+        output_path,
+    )
+    return len(rows)
 
 
 def _write_jsonl_atomic(output_path: Path, records: list[dict]) -> None:

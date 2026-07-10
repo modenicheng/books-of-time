@@ -8,6 +8,11 @@ from books_of_time.analysis.keywords import (
     KeywordTrendAnalyzer,
     KeywordTrendPoint,
 )
+from books_of_time.analysis.stance import (
+    StanceEvidenceAnalyzer,
+    StanceEvidenceSummary,
+    StanceLexicon,
+)
 
 __all__ = [
     "HotCommentTurnoverAnalyzer",
@@ -16,4 +21,7 @@ __all__ = [
     "KeywordCooccurrenceEdge",
     "KeywordTrendAnalyzer",
     "KeywordTrendPoint",
+    "StanceEvidenceAnalyzer",
+    "StanceEvidenceSummary",
+    "StanceLexicon",
 ]

@@ -111,6 +111,15 @@ watchlist:
   # Configure project-specific terms explicitly; no subjective defaults are set.
   controversy_keywords: []
 
+analysis:
+  # Version this value whenever terms or category meanings change.
+  # Matches are evidence counts, not exclusive labels for comments or users.
+  stance_lexicon:
+    version: "2026-07-v1"
+    support: ["赞同", "说得对", "支持这个观点"]
+    criticism: ["质疑", "反对", "不认同"]
+    neutral: ["求证", "观望", "等待回应"]
+
 discovery:
   matrix_uids: []
   game_uid_pools:
