@@ -24,6 +24,7 @@ from books_of_time.analysis.keywords import (
     KeywordTrendAnalyzer,
 )
 from books_of_time.analysis.propagation import PropagationNodeAnalyzer
+from books_of_time.analysis.replay import VideoMetricReplayAnalyzer
 from books_of_time.analysis.stance import StanceEvidenceAnalyzer, StanceLexicon
 from books_of_time.analysis.templates import TemplateCandidateAnalyzer
 from books_of_time.analysis.turning_points import TurningPointAnalyzer
@@ -95,6 +96,12 @@ def build_parser() -> argparse.ArgumentParser:
     turnover.add_argument("--until", required=True)
     turnover.add_argument("--top-n", type=int, default=20)
     turnover.add_argument("--output", required=True)
+    metric_replay = video_sub.add_parser("replay-metrics")
+    metric_replay.add_argument("bvid")
+    metric_replay.add_argument("--since", required=True)
+    metric_replay.add_argument("--until", required=True)
+    metric_replay.add_argument("--max-points", type=int, default=100_000)
+    metric_replay.add_argument("--output", required=True)
 
     latest_comments = subparsers.add_parser("collect-latest-comments")
     latest_comments.add_argument("bvid")
@@ -479,6 +486,17 @@ async def _run(args: argparse.Namespace) -> None:
             since=args.since,
             until=args.until,
             top_n=args.top_n,
+            output_path=Path(args.output),
+        )
+        return
+
+    if args.command == "video" and args.video_command == "replay-metrics":
+        await _export_video_metric_replay(
+            cfg,
+            bvid=args.bvid,
+            since=args.since,
+            until=args.until,
+            max_points=args.max_points,
             output_path=Path(args.output),
         )
         return
@@ -1302,6 +1320,37 @@ async def _export_hot_turnover(
         "Exported hot turnover bvid=%s top_n=%s points=%s output=%s",
         bvid,
         top_n,
+        len(points),
+        output_path,
+    )
+    return len(points)
+
+
+async def _export_video_metric_replay(
+    cfg: dict,
+    *,
+    bvid: str,
+    since: str,
+    until: str,
+    max_points: int,
+    output_path: Path,
+) -> int:
+    since_at = _parse_event_datetime(since)
+    until_at = _parse_event_datetime(until)
+    if since_at is None or until_at is None:
+        raise ValueError("Metric replay window requires since and until")
+    session_factory = build_session_factory(cfg)
+    async with session_factory() as session:
+        points = await VideoMetricReplayAnalyzer(session).analyze(
+            bvid=bvid,
+            since=since_at,
+            until=until_at,
+            max_points=max_points,
+        )
+    _write_jsonl_atomic(output_path, [point.as_dict() for point in points])
+    logger.info(
+        "Exported video metric replay bvid=%s points=%s output=%s",
+        bvid,
         len(points),
         output_path,
     )

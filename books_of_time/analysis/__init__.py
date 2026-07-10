@@ -16,6 +16,10 @@ from books_of_time.analysis.propagation import (
     PropagationNodeAnalyzer,
     PropagationNodeScore,
 )
+from books_of_time.analysis.replay import (
+    VideoMetricReplayAnalyzer,
+    VideoMetricReplayPoint,
+)
 from books_of_time.analysis.stance import (
     StanceEvidenceAnalyzer,
     StanceEvidenceSummary,
@@ -48,4 +52,6 @@ __all__ = [
     "TemplateCandidateAnalyzer",
     "TurningPointAnalyzer",
     "TurningPointSignal",
+    "VideoMetricReplayAnalyzer",
+    "VideoMetricReplayPoint",
 ]
