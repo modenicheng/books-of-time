@@ -24,7 +24,10 @@ from books_of_time.analysis.keywords import (
     KeywordTrendAnalyzer,
 )
 from books_of_time.analysis.propagation import PropagationNodeAnalyzer
-from books_of_time.analysis.replay import VideoMetricReplayAnalyzer
+from books_of_time.analysis.replay import (
+    HotCommentReplayAnalyzer,
+    VideoMetricReplayAnalyzer,
+)
 from books_of_time.analysis.stance import StanceEvidenceAnalyzer, StanceLexicon
 from books_of_time.analysis.templates import TemplateCandidateAnalyzer
 from books_of_time.analysis.turning_points import TurningPointAnalyzer
@@ -102,6 +105,13 @@ def build_parser() -> argparse.ArgumentParser:
     metric_replay.add_argument("--until", required=True)
     metric_replay.add_argument("--max-points", type=int, default=100_000)
     metric_replay.add_argument("--output", required=True)
+    hot_replay = video_sub.add_parser("replay-hot-comments")
+    hot_replay.add_argument("bvid")
+    hot_replay.add_argument("--since", required=True)
+    hot_replay.add_argument("--until", required=True)
+    hot_replay.add_argument("--top-n", type=int, default=20)
+    hot_replay.add_argument("--max-snapshots", type=int, default=10_000)
+    hot_replay.add_argument("--output", required=True)
 
     latest_comments = subparsers.add_parser("collect-latest-comments")
     latest_comments.add_argument("bvid")
@@ -497,6 +507,18 @@ async def _run(args: argparse.Namespace) -> None:
             since=args.since,
             until=args.until,
             max_points=args.max_points,
+            output_path=Path(args.output),
+        )
+        return
+
+    if args.command == "video" and args.video_command == "replay-hot-comments":
+        await _export_hot_comment_replay(
+            cfg,
+            bvid=args.bvid,
+            since=args.since,
+            until=args.until,
+            top_n=args.top_n,
+            max_snapshots=args.max_snapshots,
             output_path=Path(args.output),
         )
         return
@@ -1355,6 +1377,39 @@ async def _export_video_metric_replay(
         output_path,
     )
     return len(points)
+
+
+async def _export_hot_comment_replay(
+    cfg: dict,
+    *,
+    bvid: str,
+    since: str,
+    until: str,
+    top_n: int,
+    max_snapshots: int,
+    output_path: Path,
+) -> int:
+    since_at = _parse_event_datetime(since)
+    until_at = _parse_event_datetime(until)
+    if since_at is None or until_at is None:
+        raise ValueError("Hot comment replay window requires since and until")
+    session_factory = build_session_factory(cfg)
+    async with session_factory() as session:
+        snapshots = await HotCommentReplayAnalyzer(session).analyze(
+            bvid=bvid,
+            since=since_at,
+            until=until_at,
+            top_n=top_n,
+            max_snapshots=max_snapshots,
+        )
+    _write_jsonl_atomic(output_path, [snapshot.as_dict() for snapshot in snapshots])
+    logger.info(
+        "Exported hot comment replay bvid=%s snapshots=%s output=%s",
+        bvid,
+        len(snapshots),
+        output_path,
+    )
+    return len(snapshots)
 
 
 async def _monitor_video(cfg: dict, bvid: str, priority: int) -> None:
