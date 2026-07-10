@@ -16,7 +16,12 @@ from books_of_time.db.repositories import (
     CollectionTaskRepository,
     RawPayloadRepository,
 )
-from books_of_time.domain.enums import BilibiliRequestType, TaskKind, TaskStatus
+from books_of_time.domain.enums import (
+    BilibiliRequestType,
+    ScheduledJobKind,
+    TaskKind,
+    TaskStatus,
+)
 from books_of_time.http.client import FetchResult
 from books_of_time.storage.filesystem import RawPayloadFileStore
 
@@ -141,7 +146,12 @@ async def test_run_service_finishes_finite_sqlite_smoke(tmp_path) -> None:
 
     assert len(instances) == 1
     assert instances[0].status == "stopped"
-    assert len(scheduled_jobs) == 3
+    assert {job.job_kind for job in scheduled_jobs} == {
+        ScheduledJobKind.UID_DISCOVERY,
+        ScheduledJobKind.VIDEO_SNAPSHOT_SWEEP,
+        ScheduledJobKind.DAILY_TERMINAL_SNAPSHOT,
+        ScheduledJobKind.ACCOUNT_COOKIE_REFRESH,
+    }
 
 
 def test_coverage_parser_accepts_bvid() -> None:

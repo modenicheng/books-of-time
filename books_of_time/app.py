@@ -191,8 +191,14 @@ def build_service_coordinator(
     *,
     session_factory: async_sessionmaker[AsyncSession],
     instance_id: str,
+    client: BilibiliPlatformClient | None = None,
 ) -> ScheduledJobCoordinator:
-    definitions, handlers = build_default_scheduled_jobs(cfg)
+    effective_client = client or build_bilibili_client(cfg)
+    definitions, handlers = build_default_scheduled_jobs(
+        cfg,
+        account_manager=build_account_manager(cfg),
+        bilibili_client=effective_client,
+    )
     scheduler_cfg = cfg.get("scheduler", {})
     service_cfg = cfg.get("service", {})
     return ScheduledJobCoordinator(

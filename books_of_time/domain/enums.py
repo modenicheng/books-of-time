@@ -38,3 +38,4 @@ class ScheduledJobKind(StrEnum):
     UID_DISCOVERY = "uid_discovery"
     VIDEO_SNAPSHOT_SWEEP = "video_snapshot_sweep"
     DAILY_TERMINAL_SNAPSHOT = "daily_terminal_snapshot"
+    ACCOUNT_COOKIE_REFRESH = "account_cookie_refresh"

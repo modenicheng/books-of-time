@@ -19,7 +19,7 @@ async def test_schema_revision_helpers_read_expected_and_current_head(
     tmp_path: Path,
 ) -> None:
     expected = get_expected_schema_revision()
-    assert expected == "0002_event_archive"
+    assert expected == "0003_account_cookie_refresh_job"
 
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as connection:
@@ -118,6 +118,21 @@ def test_event_archive_revision_is_static() -> None:
     assert 'op.create_table(\n        "event_targets"' in source
     assert 'op.create_table(\n        "event_videos"' in source
     assert 'op.create_table(\n        "event_keywords"' in source
+
+
+def test_account_cookie_refresh_revision_extends_postgresql_enum_safely() -> None:
+    revision_path = (
+        Path(__file__).resolve().parents[1]
+        / "alembic"
+        / "versions"
+        / "0003_account_cookie_refresh_job.py"
+    )
+    source = revision_path.read_text(encoding="utf-8")
+
+    assert 'down_revision: str | Sequence[str] | None = "0002_event_archive"' in source
+    assert "ADD VALUE IF NOT EXISTS 'account_cookie_refresh'" in source
+    assert "DELETE FROM scheduled_jobs" in source
+    assert "Base.metadata" not in source
 
 
 def test_importing_migration_helpers_does_not_load_autogenerate_plugins() -> None:

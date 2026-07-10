@@ -4,9 +4,14 @@ from datetime import datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from books_of_time.accounts.manager import AccountManager
+from books_of_time.common.logger import get_logger
 from books_of_time.db.models import ScheduledJob
 from books_of_time.db.repositories import CollectionTaskRepository, EventRepository
 from books_of_time.domain.enums import ScheduledJobKind, TaskKind
+from books_of_time.http.client import RawHttpClient
+from books_of_time.http.rate_limiter import TokenBucketRateLimiter
+from books_of_time.platforms.bilibili.client import BilibiliPlatformClient
 from books_of_time.service.coordinator import (
     ScheduledJobDefinition,
     ScheduledJobHandler,
@@ -18,6 +23,8 @@ from books_of_time.task_orchestrator.discovery_sources import (
 from books_of_time.task_orchestrator.video_snapshot_scheduler import (
     VideoSnapshotScheduler,
 )
+
+logger = get_logger(__name__)
 
 
 class UidDiscoveryScheduleHandler:
@@ -98,8 +105,46 @@ class TerminalSnapshotScheduleHandler:
         await self.scheduler.schedule_terminal_snapshots(session=session, now=now)
 
 
+class AccountCookieRefreshScheduleHandler:
+    def __init__(
+        self,
+        *,
+        manager: AccountManager,
+        http_client: RawHttpClient,
+        rate_limiter: TokenBucketRateLimiter | None,
+        account_id: str,
+    ) -> None:
+        self.manager = manager
+        self.http_client = http_client
+        self.rate_limiter = rate_limiter
+        self.account_id = account_id
+
+    async def handle(
+        self,
+        job: ScheduledJob,
+        session: AsyncSession,
+        *,
+        now: datetime,
+    ) -> None:
+        result = await self.manager.refresh_if_needed(
+            http_client=self.http_client,
+            rate_limiter=self.rate_limiter,
+            account_id=self.account_id,
+            now=now,
+        )
+        logger.info(
+            "Account Cookie refresh account=%s action=%s snapshot=%s",
+            result.account_id,
+            result.action.value,
+            result.current_snapshot_id,
+        )
+
+
 def build_default_scheduled_jobs(
     cfg: dict,
+    *,
+    account_manager: AccountManager | None = None,
+    bilibili_client: BilibiliPlatformClient | None = None,
 ) -> tuple[
     list[ScheduledJobDefinition],
     dict[ScheduledJobKind, ScheduledJobHandler],
@@ -137,4 +182,32 @@ def build_default_scheduled_jobs(
         ScheduledJobKind.VIDEO_SNAPSHOT_SWEEP: VideoSnapshotSweepScheduleHandler(),
         ScheduledJobKind.DAILY_TERMINAL_SNAPSHOT: (TerminalSnapshotScheduleHandler()),
     }
+    account_cfg = cfg.get("accounts", {})
+    if (
+        bool(account_cfg.get("enabled", True))
+        and bool(account_cfg.get("auto_refresh", True))
+        and account_manager is not None
+        and bilibili_client is not None
+    ):
+        account_id = str(account_cfg.get("active_account_id", "default"))
+        definitions.append(
+            ScheduledJobDefinition(
+                job_key=f"account-cookie-refresh:{account_id}",
+                job_kind=ScheduledJobKind.ACCOUNT_COOKIE_REFRESH,
+                schedule_seconds=max(
+                    int(account_cfg.get("refresh_check_seconds", 21600)),
+                    60,
+                ),
+                priority=60,
+                payload={"account_id": account_id},
+            )
+        )
+        handlers[ScheduledJobKind.ACCOUNT_COOKIE_REFRESH] = (
+            AccountCookieRefreshScheduleHandler(
+                manager=account_manager,
+                http_client=bilibili_client.http_client,
+                rate_limiter=bilibili_client.rate_limiter,
+                account_id=account_id,
+            )
+        )
     return definitions, handlers

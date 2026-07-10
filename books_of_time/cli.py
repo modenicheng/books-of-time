@@ -398,6 +398,7 @@ async def _run_service(
             cfg,
             session_factory=session_factory,
             instance_id=instance_id,
+            client=client,
         )
         await coordinator.bootstrap(now=datetime.now(UTC))
     host = ServiceHost(

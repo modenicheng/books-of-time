@@ -12,6 +12,13 @@ class CookieHealth(StrEnum):
     SUPERSEDED = "superseded"
 
 
+class RefreshAction(StrEnum):
+    ANONYMOUS = "anonymous"
+    UNCHANGED = "unchanged"
+    INVALID = "invalid"
+    ROTATED = "rotated"
+
+
 @dataclass(frozen=True)
 class CredentialSnapshot:
     snapshot_id: str
@@ -41,3 +48,11 @@ class AccountStatus:
     created_at: datetime
     health: CookieHealth
     last_checked_at: datetime | None
+
+
+@dataclass(frozen=True)
+class AccountRefreshResult:
+    account_id: str
+    action: RefreshAction
+    previous_snapshot_id: str | None
+    current_snapshot_id: str | None

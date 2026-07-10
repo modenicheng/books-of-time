@@ -30,11 +30,11 @@
 
 ## Task 4: Automatic Cookie Refresh
 
-- [ ] Write tests for anonymous no-op, valid unchanged, invalid fallback, successful rotation and transient failure preservation.
-- [ ] Implement `AccountManager.refresh_if_needed()` around bilibili-api-python Credential APIs.
-- [ ] Add a persistent scheduled-job kind/handler and configuration interval.
-- [ ] Verify service construction and execution without account files.
-- [ ] Commit `feat: refresh managed cookies automatically`.
+- [x] Write tests for anonymous no-op, valid unchanged, invalid fallback, successful rotation and transient failure preservation.
+- [x] Implement `AccountManager.refresh_if_needed()` around bilibili-api-python Credential APIs.
+- [x] Add a persistent scheduled-job kind/handler and configuration interval.
+- [x] Verify service construction and execution without account files.
+- [x] Commit `feat: refresh managed cookies automatically`.
 
 ## Task 5: Operations And Documentation
 
