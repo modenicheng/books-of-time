@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, datetime
 
 import pytest
@@ -55,6 +56,18 @@ def test_event_parser_supports_archive_management_commands() -> None:
     assert coverage.event_command == "coverage"
     assert coverage.event_reference == "ghost-picture-war"
 
+    export = cli.build_parser().parse_args(
+        [
+            "event",
+            "export-timeline",
+            "ghost-picture-war",
+            "--output",
+            "timeline.jsonl",
+        ]
+    )
+    assert export.event_command == "export-timeline"
+    assert export.output == "timeline.jsonl"
+
 
 @pytest.mark.asyncio
 async def test_event_cli_helpers_create_event_and_seed_video(tmp_path) -> None:
@@ -89,6 +102,12 @@ async def test_event_cli_helpers_create_event_and_seed_video(tmp_path) -> None:
         cfg,
         event_reference="ghost-picture-war",
     )
+    output_path = tmp_path / "exports" / "timeline.jsonl"
+    exported = await cli._export_event_timeline(
+        cfg,
+        event_reference="ghost-picture-war",
+        output_path=output_path,
+    )
 
     engine = create_async_engine(database_url)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -107,6 +126,13 @@ async def test_event_cli_helpers_create_event_and_seed_video(tmp_path) -> None:
     assert target_count == 1
     assert coverage.active_video_count == 1
     assert coverage.videos_with_coverage == 0
+    assert exported == 1
+    exported_rows = [
+        json.loads(line)
+        for line in output_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert exported_rows[0]["record_type"] == "event_video_associated"
+    assert exported_rows[0]["bvid"] == "BV1xx411c7mD"
 
 
 def test_parse_event_datetime_requires_timezone() -> None:

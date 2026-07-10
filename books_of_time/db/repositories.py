@@ -41,6 +41,7 @@ from books_of_time.domain.enums import (
     TaskStatus,
 )
 from books_of_time.domain.events import (
+    EventTimelineRow,
     normalize_event_slug,
     normalize_event_target,
     validate_event_status,
@@ -919,6 +920,135 @@ class EventRepository:
             first_started_at=row.first_started_at,
             last_finished_at=row.last_finished_at,
         )
+
+    async def build_timeline(
+        self,
+        reference: int | str,
+    ) -> list[EventTimelineRow]:
+        event = await self.resolve_event(reference)
+        event_videos = list(
+            await self.session.scalars(
+                select(EventVideo)
+                .where(EventVideo.event_id == event.id)
+                .order_by(EventVideo.bvid.asc())
+            )
+        )
+        if not event_videos:
+            return []
+
+        bvids = [video.bvid for video in event_videos]
+        metrics = list(
+            await self.session.scalars(
+                select(VideoMetricSnapshot).where(VideoMetricSnapshot.bvid.in_(bvids))
+            )
+        )
+        state_events = list(
+            await self.session.scalars(
+                select(CommentStateEvent).where(CommentStateEvent.bvid.in_(bvids))
+            )
+        )
+        visibility_events = list(
+            await self.session.scalars(
+                select(CommentVisibilityEvent).where(
+                    CommentVisibilityEvent.bvid.in_(bvids)
+                )
+            )
+        )
+
+        rows = [
+            EventTimelineRow(
+                event_id=event.id,
+                event_slug=event.slug,
+                timestamp=video.first_seen_at,
+                record_type="event_video_associated",
+                source_table="event_videos",
+                source_key=f"event_videos:{event.id}:{video.bvid}",
+                bvid=video.bvid,
+                data={
+                    "active": video.active,
+                    "association_reason": video.association_reason,
+                    "confidence": video.confidence,
+                    "source_target_id": video.source_target_id,
+                },
+            )
+            for video in event_videos
+        ]
+        rows.extend(
+            EventTimelineRow(
+                event_id=event.id,
+                event_slug=event.slug,
+                timestamp=metric.captured_at,
+                record_type="video_metric_snapshot",
+                source_table="video_metric_snapshots",
+                source_key=(
+                    f"video_metric_snapshots:{metric.bvid}:"
+                    f"{metric.captured_at.isoformat()}"
+                ),
+                bvid=metric.bvid,
+                data={
+                    "view_count": metric.view_count,
+                    "like_count": metric.like_count,
+                    "coin_count": metric.coin_count,
+                    "favorite_count": metric.favorite_count,
+                    "share_count": metric.share_count,
+                    "reply_count": metric.reply_count,
+                    "danmaku_count": metric.danmaku_count,
+                    "raw_payload_id": metric.raw_payload_id,
+                },
+            )
+            for metric in metrics
+        )
+        rows.extend(
+            EventTimelineRow(
+                event_id=event.id,
+                event_slug=event.slug,
+                timestamp=state_event.created_at,
+                record_type="comment_state_event",
+                source_table="comment_state_events",
+                source_key=f"comment_state_events:{state_event.id}",
+                bvid=state_event.bvid,
+                data={
+                    "rpid": state_event.rpid,
+                    "event_type": state_event.event_type,
+                    "previous_comment_observation_id": (
+                        state_event.previous_comment_observation_id
+                    ),
+                    "current_comment_observation_id": (
+                        state_event.current_comment_observation_id
+                    ),
+                    "old_value": state_event.old_value,
+                    "new_value": state_event.new_value,
+                },
+            )
+            for state_event in state_events
+        )
+        rows.extend(
+            EventTimelineRow(
+                event_id=event.id,
+                event_slug=event.slug,
+                timestamp=visibility_event.created_at,
+                record_type="comment_visibility_event",
+                source_table="comment_visibility_events",
+                source_key=f"comment_visibility_events:{visibility_event.id}",
+                bvid=visibility_event.bvid,
+                data={
+                    "rpid": visibility_event.rpid,
+                    "event_type": visibility_event.event_type,
+                    "previous_comment_observation_id": (
+                        visibility_event.previous_comment_observation_id
+                    ),
+                    "current_comment_observation_id": (
+                        visibility_event.current_comment_observation_id
+                    ),
+                    "old_visibility": visibility_event.old_visibility,
+                    "new_visibility": visibility_event.new_visibility,
+                    "missing_reason": visibility_event.missing_reason,
+                },
+            )
+            for visibility_event in visibility_events
+        )
+        rows.sort(key=lambda row: (row.timestamp, row.record_type, row.source_key))
+        return rows
 
     async def resolve_active_uid_target(
         self,

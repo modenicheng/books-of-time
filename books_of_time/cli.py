@@ -170,6 +170,9 @@ def build_parser() -> argparse.ArgumentParser:
     event_list_videos.add_argument("--limit", type=int, default=1000)
     event_coverage = event_sub.add_parser("coverage")
     event_coverage.add_argument("event_reference")
+    event_export = event_sub.add_parser("export-timeline")
+    event_export.add_argument("event_reference")
+    event_export.add_argument("--output", required=True)
 
     discover = subparsers.add_parser("discover-user")
     discover.add_argument("mid")
@@ -264,6 +267,14 @@ async def _run(args: argparse.Namespace) -> None:
 
     if args.command == "event" and args.event_command == "coverage":
         await _show_event_coverage(cfg, event_reference=args.event_reference)
+        return
+
+    if args.command == "event" and args.event_command == "export-timeline":
+        await _export_event_timeline(
+            cfg,
+            event_reference=args.event_reference,
+            output_path=Path(args.output),
+        )
         return
 
     if args.command == "monitor-video":
@@ -758,6 +769,43 @@ async def _show_event_coverage(
 def _format_ratio(numerator: int, denominator: int, ratio: float | None) -> str:
     percentage = f"{ratio:.1%}" if ratio is not None else "n/a"
     return f"{numerator}/{denominator} ({percentage})"
+
+
+async def _export_event_timeline(
+    cfg: dict,
+    *,
+    event_reference: str,
+    output_path: Path,
+) -> int:
+    session_factory = build_session_factory(cfg)
+    async with session_factory() as session:
+        rows = await EventRepository(session).build_timeline(event_reference)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = output_path.with_name(f".{output_path.name}.{uuid4().hex}.tmp")
+    try:
+        with temporary_path.open("w", encoding="utf-8", newline="\n") as output:
+            for row in rows:
+                output.write(
+                    json.dumps(
+                        row.as_dict(),
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
+                )
+                output.write("\n")
+        temporary_path.replace(output_path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+    logger.info(
+        "Exported event timeline event=%s rows=%s output=%s",
+        event_reference,
+        len(rows),
+        output_path,
+    )
+    return len(rows)
 
 
 async def _monitor_video(cfg: dict, bvid: str, priority: int) -> None:

@@ -1,13 +1,40 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from datetime import datetime
+from typing import Any
 
 EVENT_TARGET_TYPES = frozenset({"uid", "keyword", "seed_bvid", "game"})
 EVENT_STATUSES = frozenset({"planned", "active", "closed", "archived"})
 
 _SLUG_PATTERN = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 _BVID_PATTERN = re.compile(r"BV[0-9A-Za-z]{10}")
+
+
+@dataclass(frozen=True, slots=True)
+class EventTimelineRow:
+    event_id: int
+    event_slug: str
+    timestamp: datetime
+    record_type: str
+    source_table: str
+    source_key: str
+    bvid: str
+    data: dict[str, Any]
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": "event-timeline-v1",
+            "event_id": self.event_id,
+            "event_slug": self.event_slug,
+            "timestamp": self.timestamp.isoformat(),
+            "record_type": self.record_type,
+            "source_table": self.source_table,
+            "source_key": self.source_key,
+            "bvid": self.bvid,
+            "data": self.data,
+        }
 
 
 def normalize_event_slug(value: str) -> str:
