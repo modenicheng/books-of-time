@@ -407,6 +407,47 @@ class RequestBackoffRepository:
         await self.session.flush()
         return state
 
+    async def reset_success(
+        self,
+        *,
+        platform: str,
+        scope: str,
+        request_type: BilibiliRequestType,
+        now: datetime,
+    ) -> None:
+        state = await self.session.scalar(
+            select(RequestBackoffState).where(
+                RequestBackoffState.platform == platform,
+                RequestBackoffState.request_type == request_type,
+                RequestBackoffState.scope == scope,
+            )
+        )
+        if state is None:
+            return
+        state.fail_count = 0
+        state.backoff_until = now
+        state.updated_at = now
+        await self.session.flush()
+
+    async def reset_all_success(
+        self,
+        *,
+        platform: str,
+        scope: str,
+        now: datetime,
+    ) -> None:
+        rows = await self.session.scalars(
+            select(RequestBackoffState).where(
+                RequestBackoffState.platform == platform,
+                RequestBackoffState.scope == scope,
+            )
+        )
+        for state in rows:
+            state.fail_count = 0
+            state.backoff_until = now
+            state.updated_at = now
+        await self.session.flush()
+
 
 class VideoMetricSnapshotRepository:
     def __init__(self, session: AsyncSession) -> None:

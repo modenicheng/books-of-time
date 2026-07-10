@@ -142,6 +142,11 @@ class Worker:
                 finished_at=finished_at,
             )
             await run_repo.record_task_succeeded(run, now=finished_at)
+            await RequestBackoffRepository(session).reset_all_success(
+                platform="bilibili",
+                scope="global",
+                now=finished_at,
+            )
             task.status = TaskStatus.SUCCEEDED
             task.lease_owner = None
             task.lease_until = None
