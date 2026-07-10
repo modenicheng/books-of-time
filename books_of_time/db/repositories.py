@@ -6,11 +6,11 @@ from collections.abc import Mapping
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import or_, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
 
-from books_of_time.coverage import CoverageDraft
+from books_of_time.coverage import CoverageDraft, EventCoverageSummary
 from books_of_time.db.models import (
     CollectionCoverageStat,
     CollectionRun,
@@ -827,6 +827,98 @@ class EventRepository:
             .order_by(EventTarget.normalized_value.asc(), EventTarget.id.asc())
         )
         return list(rows)
+
+    async def get_coverage_summary(
+        self,
+        reference: int | str,
+    ) -> EventCoverageSummary:
+        event = await self.resolve_event(reference)
+        active_bvids = select(EventVideo.bvid).where(
+            EventVideo.event_id == event.id,
+            EventVideo.active.is_(True),
+        )
+        active_video_count = int(
+            await self.session.scalar(
+                select(func.count()).select_from(active_bvids.subquery())
+            )
+            or 0
+        )
+        row = (
+            await self.session.execute(
+                select(
+                    func.count(CollectionCoverageStat.id).label("row_count"),
+                    func.count(func.distinct(CollectionCoverageStat.target_id)).label(
+                        "video_count"
+                    ),
+                    func.sum(
+                        case((CollectionCoverageStat.status == "succeeded", 1), else_=0)
+                    ).label("succeeded_count"),
+                    func.sum(
+                        case((CollectionCoverageStat.status == "partial", 1), else_=0)
+                    ).label("partial_count"),
+                    func.sum(
+                        case((CollectionCoverageStat.status == "failed", 1), else_=0)
+                    ).label("failed_count"),
+                    func.sum(CollectionCoverageStat.pages_requested).label(
+                        "pages_requested"
+                    ),
+                    func.sum(CollectionCoverageStat.pages_succeeded).label(
+                        "pages_succeeded"
+                    ),
+                    func.sum(CollectionCoverageStat.items_observed).label(
+                        "items_observed"
+                    ),
+                    func.sum(CollectionCoverageStat.raw_payloads_saved).label(
+                        "raw_payloads_saved"
+                    ),
+                    func.sum(CollectionCoverageStat.parse_errors).label("parse_errors"),
+                    func.sum(CollectionCoverageStat.request_errors).label(
+                        "request_errors"
+                    ),
+                    func.sum(
+                        case(
+                            (CollectionCoverageStat.truncated.is_(True), 1),
+                            else_=0,
+                        )
+                    ).label("truncated_count"),
+                    func.sum(
+                        case(
+                            (CollectionCoverageStat.corrupted.is_(True), 1),
+                            else_=0,
+                        )
+                    ).label("corrupted_count"),
+                    func.min(CollectionCoverageStat.started_at).label(
+                        "first_started_at"
+                    ),
+                    func.max(CollectionCoverageStat.finished_at).label(
+                        "last_finished_at"
+                    ),
+                ).where(
+                    CollectionCoverageStat.target_type == "video",
+                    CollectionCoverageStat.target_id.in_(active_bvids),
+                )
+            )
+        ).one()
+        return EventCoverageSummary(
+            event_id=event.id,
+            event_slug=event.slug,
+            active_video_count=active_video_count,
+            videos_with_coverage=int(row.video_count or 0),
+            coverage_row_count=int(row.row_count or 0),
+            succeeded_count=int(row.succeeded_count or 0),
+            partial_count=int(row.partial_count or 0),
+            failed_count=int(row.failed_count or 0),
+            pages_requested=int(row.pages_requested or 0),
+            pages_succeeded=int(row.pages_succeeded or 0),
+            items_observed=int(row.items_observed or 0),
+            raw_payloads_saved=int(row.raw_payloads_saved or 0),
+            parse_errors=int(row.parse_errors or 0),
+            request_errors=int(row.request_errors or 0),
+            truncated_count=int(row.truncated_count or 0),
+            corrupted_count=int(row.corrupted_count or 0),
+            first_started_at=row.first_started_at,
+            last_finished_at=row.last_finished_at,
+        )
 
     async def resolve_active_uid_target(
         self,

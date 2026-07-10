@@ -51,6 +51,10 @@ def test_event_parser_supports_archive_management_commands() -> None:
     assert videos.event_command == "list-videos"
     assert videos.limit == 10
 
+    coverage = cli.build_parser().parse_args(["event", "coverage", "ghost-picture-war"])
+    assert coverage.event_command == "coverage"
+    assert coverage.event_reference == "ghost-picture-war"
+
 
 @pytest.mark.asyncio
 async def test_event_cli_helpers_create_event_and_seed_video(tmp_path) -> None:
@@ -81,6 +85,10 @@ async def test_event_cli_helpers_create_event_and_seed_video(tmp_path) -> None:
     )
     await cli._list_events(cfg, limit=10)
     await cli._list_event_videos(cfg, event_reference=str(event.id), limit=10)
+    coverage = await cli._show_event_coverage(
+        cfg,
+        event_reference="ghost-picture-war",
+    )
 
     engine = create_async_engine(database_url)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -97,6 +105,8 @@ async def test_event_cli_helpers_create_event_and_seed_video(tmp_path) -> None:
     assert video is not None
     assert task_count == 1
     assert target_count == 1
+    assert coverage.active_video_count == 1
+    assert coverage.videos_with_coverage == 0
 
 
 def test_parse_event_datetime_requires_timezone() -> None:

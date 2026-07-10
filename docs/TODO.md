@@ -221,7 +221,7 @@
 - [x] CLI 支持 `bot event add-target`。
 - [x] CLI 支持 `bot event list-videos`。
 - [x] Scheduler 可按事件目标池发现新视频，并按 UID 合并请求、自动写入事件视频关联。
-- [ ] 事件级覆盖率汇总。
+- [x] 事件级覆盖率汇总：视频覆盖比、页面成功率、raw 数量和错误/截断/损坏计数。
 - [ ] 事件基础时间线导出。
 
 ## P3: Analysis

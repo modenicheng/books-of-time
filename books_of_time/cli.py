@@ -21,6 +21,7 @@ from books_of_time.app import (
 )
 from books_of_time.common.logger import get_logger
 from books_of_time.config import load_config
+from books_of_time.coverage import EventCoverageSummary
 from books_of_time.db.migrations import get_expected_schema_revision
 from books_of_time.db.repositories import (
     CollectionCoverageRepository,
@@ -154,6 +155,8 @@ def build_parser() -> argparse.ArgumentParser:
     event_list_videos = event_sub.add_parser("list-videos")
     event_list_videos.add_argument("event_reference")
     event_list_videos.add_argument("--limit", type=int, default=1000)
+    event_coverage = event_sub.add_parser("coverage")
+    event_coverage.add_argument("event_reference")
 
     discover = subparsers.add_parser("discover-user")
     discover.add_argument("mid")
@@ -228,6 +231,10 @@ async def _run(args: argparse.Namespace) -> None:
             event_reference=args.event_reference,
             limit=args.limit,
         )
+        return
+
+    if args.command == "event" and args.event_command == "coverage":
+        await _show_event_coverage(cfg, event_reference=args.event_reference)
         return
 
     if args.command == "monitor-video":
@@ -624,6 +631,54 @@ async def _list_event_videos(
             video.confidence,
             video.first_seen_at.isoformat(),
         )
+
+
+async def _show_event_coverage(
+    cfg: dict,
+    *,
+    event_reference: str,
+) -> EventCoverageSummary:
+    session_factory = build_session_factory(cfg)
+    async with session_factory() as session:
+        summary = await EventRepository(session).get_coverage_summary(event_reference)
+    logger.info(
+        "event_coverage event=%s videos=%s rows=%s statuses=%s/%s/%s "
+        "pages=%s items=%s raw=%s errors=parse:%s,request:%s "
+        "truncated=%s corrupted=%s first_started_at=%s last_finished_at=%s",
+        summary.event_slug,
+        _format_ratio(
+            summary.videos_with_coverage,
+            summary.active_video_count,
+            summary.video_coverage_ratio,
+        ),
+        summary.coverage_row_count,
+        summary.succeeded_count,
+        summary.partial_count,
+        summary.failed_count,
+        _format_ratio(
+            summary.pages_succeeded,
+            summary.pages_requested,
+            summary.page_success_rate,
+        ),
+        summary.items_observed,
+        summary.raw_payloads_saved,
+        summary.parse_errors,
+        summary.request_errors,
+        summary.truncated_count,
+        summary.corrupted_count,
+        summary.first_started_at.isoformat()
+        if summary.first_started_at is not None
+        else None,
+        summary.last_finished_at.isoformat()
+        if summary.last_finished_at is not None
+        else None,
+    )
+    return summary
+
+
+def _format_ratio(numerator: int, denominator: int, ratio: float | None) -> str:
+    percentage = f"{ratio:.1%}" if ratio is not None else "n/a"
+    return f"{numerator}/{denominator} ({percentage})"
 
 
 async def _monitor_video(cfg: dict, bvid: str, priority: int) -> None:
