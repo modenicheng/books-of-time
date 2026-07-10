@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -24,12 +24,18 @@ from books_of_time.db.models import (
     RawPageObservation,
     RawPayload,
     RequestBackoffState,
+    ScheduledJob,
     ServiceInstance,
     VideoAvailabilitySnapshot,
     VideoInfoSnapshot,
     VideoMetricSnapshot,
 )
-from books_of_time.domain.enums import BilibiliRequestType, TaskKind, TaskStatus
+from books_of_time.domain.enums import (
+    BilibiliRequestType,
+    ScheduledJobKind,
+    TaskKind,
+    TaskStatus,
+)
 from books_of_time.http.client import FetchResult
 from books_of_time.http.errors import RequestFailure
 from books_of_time.parsers.comments import (
@@ -582,6 +588,129 @@ class ServiceInstanceRepository:
         if instance is None:
             raise LookupError(f"Unknown service instance: {instance_id}")
         return instance
+
+
+class ScheduledJobRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def ensure(
+        self,
+        *,
+        job_key: str,
+        job_kind: ScheduledJobKind,
+        schedule_seconds: int,
+        priority: int,
+        payload: dict[str, Any],
+        next_run_at: datetime,
+        enabled: bool = True,
+    ) -> ScheduledJob:
+        job = await self.session.scalar(
+            select(ScheduledJob).where(ScheduledJob.job_key == job_key)
+        )
+        if job is None:
+            job = ScheduledJob(
+                job_key=job_key,
+                job_kind=job_kind,
+                schedule_seconds=max(int(schedule_seconds), 1),
+                priority=int(priority),
+                payload=dict(payload),
+                enabled=enabled,
+                next_run_at=next_run_at,
+                lease_owner=None,
+                lease_until=None,
+                last_started_at=None,
+                last_succeeded_at=None,
+                last_failed_at=None,
+                consecutive_failures=0,
+                last_error_type=None,
+                last_error_message=None,
+            )
+            self.session.add(job)
+        else:
+            job.job_kind = job_kind
+            job.schedule_seconds = max(int(schedule_seconds), 1)
+            job.priority = int(priority)
+            job.payload = dict(payload)
+            job.enabled = enabled
+            flag_modified(job, "payload")
+        await self.session.flush()
+        return job
+
+    async def lease_due(
+        self,
+        *,
+        lease_owner: str,
+        now: datetime,
+        lease_seconds: int,
+    ) -> ScheduledJob | None:
+        job = await self.session.scalar(
+            select(ScheduledJob)
+            .where(
+                ScheduledJob.enabled.is_(True),
+                ScheduledJob.next_run_at <= now,
+                or_(
+                    ScheduledJob.lease_owner.is_(None),
+                    ScheduledJob.lease_until.is_(None),
+                    ScheduledJob.lease_until <= now,
+                ),
+            )
+            .order_by(
+                ScheduledJob.priority.desc(),
+                ScheduledJob.next_run_at.asc(),
+                ScheduledJob.id.asc(),
+            )
+            .limit(1)
+            .with_for_update(skip_locked=True)
+        )
+        if job is None:
+            return None
+        job.lease_owner = lease_owner
+        job.lease_until = now + timedelta(seconds=max(int(lease_seconds), 1))
+        job.last_started_at = now
+        await self.session.flush()
+        return job
+
+    async def mark_succeeded(
+        self,
+        job: ScheduledJob,
+        *,
+        now: datetime,
+    ) -> ScheduledJob:
+        interval_seconds = max(int(job.schedule_seconds), 1)
+        next_run_at = job.next_run_at + timedelta(seconds=interval_seconds)
+        if next_run_at <= now:
+            missed_slots = (
+                int((now - next_run_at).total_seconds() // interval_seconds) + 1
+            )
+            next_run_at += timedelta(seconds=interval_seconds * missed_slots)
+        job.next_run_at = next_run_at
+        job.lease_owner = None
+        job.lease_until = None
+        job.last_succeeded_at = now
+        job.consecutive_failures = 0
+        job.last_error_type = None
+        job.last_error_message = None
+        await self.session.flush()
+        return job
+
+    async def mark_failed(
+        self,
+        job: ScheduledJob,
+        *,
+        now: datetime,
+        retry_delay_seconds: int,
+        error: BaseException,
+    ) -> ScheduledJob:
+        job.next_run_at = now + timedelta(seconds=max(int(retry_delay_seconds), 1))
+        job.lease_owner = None
+        job.lease_until = None
+        job.last_failed_at = now
+        job.consecutive_failures += 1
+        job.last_error_type = type(error).__name__[:120]
+        job.last_error_message = str(error)[:2000]
+        await self.session.flush()
+        return job
 
 
 class VideoMetricSnapshotRepository:

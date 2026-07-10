@@ -20,7 +20,12 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from books_of_time.db.base import Base, TimestampMixin
 from books_of_time.db.types import UTCDateTime, bigint_pk_type, json_dict_type
-from books_of_time.domain.enums import BilibiliRequestType, TaskKind, TaskStatus
+from books_of_time.domain.enums import (
+    BilibiliRequestType,
+    ScheduledJobKind,
+    TaskKind,
+    TaskStatus,
+)
 
 
 class RawPayload(Base):
@@ -677,6 +682,50 @@ Index(
     ServiceInstance.heartbeat_at.desc(),
 )
 Index("idx_service_instances_started_at", ServiceInstance.started_at.desc())
+
+
+class ScheduledJob(TimestampMixin, Base):
+    __tablename__ = "scheduled_jobs"
+    __table_args__ = (UniqueConstraint("job_key"),)
+
+    id: Mapped[int] = mapped_column(
+        bigint_pk_type, primary_key=True, autoincrement=True
+    )
+    job_key: Mapped[str] = mapped_column(Text, nullable=False)
+    job_kind: Mapped[ScheduledJobKind] = mapped_column(
+        Enum(ScheduledJobKind, values_callable=lambda x: [e.value for e in x]),
+        nullable=False,
+    )
+    schedule_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    payload: Mapped[dict[str, Any]] = mapped_column(
+        json_dict_type,
+        nullable=False,
+        default=dict,
+    )
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    next_run_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    lease_owner: Mapped[str | None] = mapped_column(Text)
+    lease_until: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    last_started_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    last_succeeded_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    last_failed_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    consecutive_failures: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+    )
+    last_error_type: Mapped[str | None] = mapped_column(String(120))
+    last_error_message: Mapped[str | None] = mapped_column(String(2000))
+
+
+Index(
+    "idx_scheduled_jobs_due",
+    ScheduledJob.enabled,
+    ScheduledJob.next_run_at,
+    ScheduledJob.priority.desc(),
+)
+Index("idx_scheduled_jobs_lease", ScheduledJob.lease_until)
 
 
 class KnownVideo(TimestampMixin, Base):
