@@ -14,6 +14,7 @@ from uuid import uuid4
 
 from books_of_time.accounts.models import AccountStatus, CredentialSnapshot
 from books_of_time.accounts.qr_login import QrLoginFlow
+from books_of_time.analysis.hot_turnover import HotCommentTurnoverAnalyzer
 from books_of_time.analysis.keywords import (
     KeywordCooccurrenceAnalyzer,
     KeywordTrendAnalyzer,
@@ -79,6 +80,12 @@ def build_parser() -> argparse.ArgumentParser:
     stats = video_sub.add_parser("stats")
     stats.add_argument("bvid")
     stats.add_argument("--limit", type=int, default=20)
+    turnover = video_sub.add_parser("hot-turnover")
+    turnover.add_argument("bvid")
+    turnover.add_argument("--since", required=True)
+    turnover.add_argument("--until", required=True)
+    turnover.add_argument("--top-n", type=int, default=20)
+    turnover.add_argument("--output", required=True)
 
     latest_comments = subparsers.add_parser("collect-latest-comments")
     latest_comments.add_argument("bvid")
@@ -334,6 +341,17 @@ async def _run(args: argparse.Namespace) -> None:
 
     if args.command == "video" and args.video_command == "stats":
         await _show_video_stats(cfg, args.bvid, args.limit)
+        return
+
+    if args.command == "video" and args.video_command == "hot-turnover":
+        await _export_hot_turnover(
+            cfg,
+            bvid=args.bvid,
+            since=args.since,
+            until=args.until,
+            top_n=args.top_n,
+            output_path=Path(args.output),
+        )
         return
 
     if args.command == "collect-latest-comments":
@@ -926,6 +944,38 @@ def _write_jsonl_atomic(output_path: Path, records: list[dict]) -> None:
         temporary_path.replace(output_path)
     finally:
         temporary_path.unlink(missing_ok=True)
+
+
+async def _export_hot_turnover(
+    cfg: dict,
+    *,
+    bvid: str,
+    since: str,
+    until: str,
+    top_n: int,
+    output_path: Path,
+) -> int:
+    since_at = _parse_event_datetime(since)
+    until_at = _parse_event_datetime(until)
+    if since_at is None or until_at is None:
+        raise ValueError("Hot turnover window requires since and until")
+    session_factory = build_session_factory(cfg)
+    async with session_factory() as session:
+        points = await HotCommentTurnoverAnalyzer(session).analyze(
+            bvid=bvid,
+            since=since_at,
+            until=until_at,
+            top_n=top_n,
+        )
+    _write_jsonl_atomic(output_path, [point.as_dict() for point in points])
+    logger.info(
+        "Exported hot turnover bvid=%s top_n=%s points=%s output=%s",
+        bvid,
+        top_n,
+        len(points),
+        output_path,
+    )
+    return len(points)
 
 
 async def _monitor_video(cfg: dict, bvid: str, priority: int) -> None:
