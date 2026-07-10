@@ -11,6 +11,7 @@ from books_of_time.db.migrations import (
     get_current_schema_revision,
     get_expected_schema_revision,
 )
+from books_of_time.db.schema import adopt_legacy_schema, create_schema
 from books_of_time.service.health import ServiceHealthChecker
 
 
@@ -168,3 +169,91 @@ def test_importing_migration_helpers_does_not_load_autogenerate_plugins() -> Non
     )
 
     assert result.stdout.strip() == "False"
+
+
+@pytest.mark.asyncio
+async def test_create_schema_uses_alembic_head(tmp_path: Path) -> None:
+    database_path = tmp_path / "fresh.sqlite3"
+    config_path = _write_sqlite_config(tmp_path / "fresh.yaml", database_path)
+
+    await create_schema(str(config_path))
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{database_path}")
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        assert (
+            await get_current_schema_revision(session) == get_expected_schema_revision()
+        )
+        table = await session.scalar(
+            text(
+                "SELECT name FROM sqlite_master "
+                "WHERE type = 'table' AND name = 'comment_analysis_flags'"
+            )
+        )
+    await engine.dispose()
+    assert table == "comment_analysis_flags"
+
+
+@pytest.mark.asyncio
+async def test_adopt_legacy_schema_repairs_known_drift_and_upgrades(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "legacy.sqlite3"
+    database_url = f"sqlite+aiosqlite:///{database_path}"
+    config_path = _write_sqlite_config(tmp_path / "legacy.yaml", database_path)
+    engine = create_async_engine(database_url)
+    newer_tables = {
+        "events",
+        "event_targets",
+        "event_videos",
+        "event_keywords",
+        "comment_analysis_flags",
+    }
+    baseline_tables = [
+        table
+        for name, table in Base.metadata.tables.items()
+        if name not in newer_tables
+    ]
+    async with engine.begin() as connection:
+        await connection.run_sync(
+            lambda sync_connection: Base.metadata.create_all(
+                sync_connection,
+                tables=baseline_tables,
+            )
+        )
+        await connection.execute(text("ALTER TABLE frontier_states DROP COLUMN extra"))
+    await engine.dispose()
+
+    await adopt_legacy_schema(str(config_path))
+
+    engine = create_async_engine(database_url)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        assert (
+            await get_current_schema_revision(session) == get_expected_schema_revision()
+        )
+        column_rows = (
+            await session.execute(text("PRAGMA table_info(frontier_states)"))
+        ).mappings()
+        columns = [row["name"] for row in column_rows]
+    await engine.dispose()
+    assert "extra" in columns
+
+
+@pytest.mark.asyncio
+async def test_adopt_legacy_schema_refuses_unknown_drift(tmp_path: Path) -> None:
+    database_path = tmp_path / "invalid.sqlite3"
+    config_path = _write_sqlite_config(tmp_path / "invalid.yaml", database_path)
+    engine = create_async_engine(f"sqlite+aiosqlite:///{database_path}")
+    async with engine.begin() as connection:
+        await connection.execute(text("CREATE TABLE unexpected_table (id INTEGER)"))
+    await engine.dispose()
+
+    with pytest.raises(ValueError, match="Refusing legacy schema adoption"):
+        await adopt_legacy_schema(str(config_path))
+
+
+def _write_sqlite_config(path: Path, database_path: Path) -> Path:
+    database_url = f"sqlite+aiosqlite:///{database_path.as_posix()}"
+    path.write_text(f'database:\n  url: "{database_url}"\n', encoding="utf-8")
+    return path

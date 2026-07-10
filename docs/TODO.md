@@ -68,6 +68,7 @@
 - [x] 增加 YAML 的 `service` 配置和 `BOT_*` 部署环境变量覆盖。
 - [x] 初始 worker concurrency 固定为 1，跨进程全局限流完成前不启动多个 HTTP worker。
 - [x] 提交可复现的 Alembic revision，并停止忽略 `alembic/versions/*.py`。
+- [x] `init-db` 使用 Alembic 创建带 revision 的新库，并提供严格差异白名单的 `--adopt-legacy` 旧库接管。
 - [x] 增加只运行 Books of Time 的 Dockerfile 和 Compose 示例，不捆绑 PostgreSQL。
 - [x] Docker 支持连接宿主机或局域网已有 PostgreSQL，并挂载本地 raw/media 持久目录。
 - [x] 增加 Linux systemd unit 和部署说明，连接已有 PostgreSQL。

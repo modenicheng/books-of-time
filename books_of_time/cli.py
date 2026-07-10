@@ -44,7 +44,7 @@ from books_of_time.db.repositories import (
     RawPayloadRepository,
     VideoMetricSnapshotRepository,
 )
-from books_of_time.db.schema import create_schema
+from books_of_time.db.schema import adopt_legacy_schema, create_schema
 from books_of_time.domain.enums import TaskKind, TaskStatus
 from books_of_time.domain.events import EVENT_STATUSES, EVENT_TARGET_TYPES
 from books_of_time.parsers.discovery import parse_user_video_list
@@ -69,7 +69,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", default=None)
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    subparsers.add_parser("init-db")
+    init_db = subparsers.add_parser("init-db")
+    init_db.add_argument("--adopt-legacy", action="store_true")
 
     monitor = subparsers.add_parser("monitor-video")
     monitor.add_argument("bvid")
@@ -244,7 +245,10 @@ def main(argv: list[str] | None = None) -> None:
 
 async def _run(args: argparse.Namespace) -> None:
     if args.command == "init-db":
-        await create_schema(args.config)
+        if args.adopt_legacy:
+            await adopt_legacy_schema(args.config)
+        else:
+            await create_schema(args.config)
         logger.info("Database schema is ready")
         return
 

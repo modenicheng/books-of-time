@@ -47,7 +47,7 @@ def test_deployment_guide_covers_supported_runtime_paths() -> None:
 
     for required in (
         "alembic upgrade head",
-        "alembic stamp 0001_initial",
+        "init-db --adopt-legacy",
         "host.docker.internal",
         "pg_hba.conf",
         "docker compose --env-file deploy/docker.env up -d",

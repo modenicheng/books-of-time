@@ -627,3 +627,11 @@ async def test_retry_failed_tasks_requeues_matching_tasks(tmp_path, caplog) -> N
 
     assert [item.target_id for item in task] == ["BVFAILED"]
     assert "Retried failed tasks: 1" in caplog.text
+
+
+def test_init_db_parser_supports_explicit_legacy_adoption() -> None:
+    fresh = cli.build_parser().parse_args(["init-db"])
+    legacy = cli.build_parser().parse_args(["init-db", "--adopt-legacy"])
+
+    assert fresh.adopt_legacy is False
+    assert legacy.adopt_legacy is True

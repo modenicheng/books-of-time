@@ -17,10 +17,12 @@ from books_of_time.config import load_config
 # ---------------------------------------------------------------------------
 config = context.config
 
-if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+if config.config_file_name is not None and not config.attributes.get(
+    "skip_logger_config", False
+):
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
-app_config = load_config()
+app_config = load_config(config.attributes.get("bot_config_path"))
 db_url = str(app_config["database"]["url"])
 config.set_main_option("sqlalchemy.url", db_url.replace("%", "%%"))
 

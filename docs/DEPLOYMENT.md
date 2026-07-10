@@ -27,30 +27,25 @@ postgresql+asyncpg://USER:PASSWORD@HOST:5432/books_of_time
 
 ### New Database
 
-对空数据库直接运行：
+对空数据库运行下列任一入口，两者都会执行 Alembic `upgrade head`：
 
 ```bash
+uv run python main.py init-db
+# 或
 uv run alembic upgrade head
 uv run python main.py service doctor
 ```
 
 ### Existing Unversioned Development Database
 
-旧版本使用 `init-db` 创建表但没有 `alembic_version`。不要直接对这些已有表执行初始 upgrade。先完整备份，再执行：
+旧版本的 `init-db` 通过 `create_all` 创建表，可能没有 `alembic_version`。不要直接对这些已有表执行初始 upgrade，也不要手工强制 stamp。先完整备份，再执行：
 
 ```bash
-# 仅用于把旧开发库补齐到当前 ORM 的缺失表；不会修改已有列。
-uv run python main.py init-db
-
-# 必须显示 No new upgrade operations detected。
-uv run alembic check
-
-# 只有 check 无差异时才登记基线。
-uv run alembic stamp 0001_initial
+uv run python main.py init-db --adopt-legacy
 uv run python main.py service doctor
 ```
 
-如果 `alembic check` 报告差异，应先审查并编写针对该旧库的迁移，不能强行 stamp。
+`--adopt-legacy` 会先用 Alembic metadata 严格比对旧库，只接受已知的基线漂移：事件/flag 新表、`frontier_states.extra` 和已知 enum 值。它会在补齐后登记 `0001_initial`，再升级到 head。任何额外缺表、缺列、索引或约束差异都会直接拒绝接管；此时应人工审计并编写针对性迁移。
 
 ## Docker Compose
 
