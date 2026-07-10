@@ -107,14 +107,19 @@ class BooksOfTimeBiliAPIClient(BiliAPIClient):
         self,
         method: str = "",
         url: str = "",
-        params: dict[str, Any] = {},
-        data: dict[str, Any] | str | bytes = {},
-        files: dict[str, BiliAPIFile] = {},
-        headers: dict[str, str] = {},
-        cookies: dict[str, str] = {},
+        params: dict[str, Any] | None = None,
+        data: dict[str, Any] | str | bytes | None = None,
+        files: dict[str, BiliAPIFile] | None = None,
+        headers: dict[str, str] | None = None,
+        cookies: dict[str, str] | None = None,
         allow_redirects: bool = True,
     ) -> BiliAPIResponse:
-        if files:
+        _params = params or {}
+        _data: dict[str, Any] | str | bytes = {} if data is None else data
+        _headers = headers or {}
+        _cookies = cookies or {}
+        _files = files or {}
+        if _files:
             raise NotImplementedError(
                 "Bilibili file uploads are outside collector scope"
             )
@@ -124,17 +129,17 @@ class BooksOfTimeBiliAPIClient(BiliAPIClient):
             msg = "BooksOfTimeBiliAPIClient requires capture_bili_api_requests context"
             raise RuntimeError(msg)
 
-        request_type = classify_bilibili_request(url, params)
+        request_type = classify_bilibili_request(url, _params)
         await _acquire(context.rate_limiter, request_type)
         try:
             result = await context.http_client.request(
                 method=method,
                 url=url,
                 request_type=request_type,
-                params=params,
-                data=None if data == {} else data,
-                headers=headers,
-                cookies=cookies,
+                params=_params,
+                data=None if _data == {} else _data,
+                headers=_headers,
+                cookies=_cookies,
                 allow_redirects=allow_redirects,
             )
         except RequestFailure as exc:
