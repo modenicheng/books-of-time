@@ -5,6 +5,8 @@ from typing import Any
 
 from books_of_time.task_orchestrator.discovery import DiscoveredVideo
 
+DISCOVERY_PARSER_VERSION = "bilibili-user-video-list-v1"
+
 
 def parse_user_video_list(
     payload: dict[str, Any],

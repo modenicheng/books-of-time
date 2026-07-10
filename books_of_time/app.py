@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import (
 from books_of_time.collectors.hot_comments import HotCommentCollector
 from books_of_time.collectors.latest_comments import LatestCommentCollector
 from books_of_time.collectors.reply_comments import ReplyCommentCollector
+from books_of_time.collectors.user_videos import UserVideosCollector
 from books_of_time.collectors.video_stats import VideoStatsCollector
 from books_of_time.domain.enums import TaskKind
 from books_of_time.http.client import RawHttpClient
@@ -119,6 +120,12 @@ def build_worker(
                 client=effective_client,
                 raw_store=raw_store,
                 run_id=run_id,
+            ),
+            TaskKind.DISCOVER_USER_VIDEOS: UserVideosCollector(
+                client=effective_client,
+                raw_store=raw_store,
+                run_id=run_id,
+                session_factory=effective_session_factory,
             ),
             TaskKind.FETCH_MEDIA_ASSET: MediaAssetCollector(
                 MediaDownloader(
