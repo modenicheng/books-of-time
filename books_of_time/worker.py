@@ -82,7 +82,23 @@ class Worker:
             )
             await run_repo.record_task_started(run, now=effective_now)
 
-            collector = self.collectors[task.kind]
+            collector = self.collectors.get(task.kind)
+            if collector is None:
+                finished_at = datetime.now(UTC)
+                await coverage_repo.insert_failed(
+                    task=task,
+                    run_id=self.run_id,
+                    started_at=effective_now,
+                    finished_at=finished_at,
+                    reason="no_collector",
+                    extra={"task_kind": task.kind.value},
+                )
+                await run_repo.record_task_failed(run, now=finished_at)
+                task.status = TaskStatus.FAILED
+                task.lease_owner = None
+                task.lease_until = None
+                await session.commit()
+                return True
             try:
                 draft = await collector.collect(task, session)
             except Exception as exc:
@@ -131,7 +147,7 @@ class Worker:
                 task.lease_owner = None
                 task.lease_until = None
                 await session.commit()
-                raise
+                return True
 
             finished_at = datetime.now(UTC)
             await coverage_repo.insert_from_draft(

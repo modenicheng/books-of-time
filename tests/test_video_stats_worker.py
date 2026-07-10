@@ -24,7 +24,6 @@ from books_of_time.db.repositories import (
 )
 from books_of_time.domain.enums import BilibiliRequestType, TaskKind, TaskStatus
 from books_of_time.http.client import FetchResult
-from books_of_time.http.errors import ParseFailure
 from books_of_time.parsers.video import (
     parse_video_availability_snapshot,
     parse_video_info_snapshot,
@@ -464,8 +463,8 @@ async def test_worker_records_video_stats_parse_error_as_request_backoff(
         request_backoff_defaults={"parse_error": 30},
     )
 
-    with pytest.raises(ParseFailure):
-        await worker.run_once(now=now)
+    result = await worker.run_once(now=now)
+    assert result is True
 
     async with session_factory() as session:
         coverage = await session.scalar(select(CollectionCoverageStat))

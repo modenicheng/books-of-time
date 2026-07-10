@@ -124,8 +124,8 @@ async def test_worker_uses_request_failure_backoff_for_retry() -> None:
             retry_delay_seconds=30,
         )
 
-        with pytest.raises(RequestFailure, match="rate limited"):
-            await worker.run_once(now=now)
+        result = await worker.run_once(now=now)
+        assert result is True
 
         async with session_factory() as session:
             stat = await session.scalar(select(CollectionCoverageStat))
@@ -173,8 +173,8 @@ async def test_worker_writes_failed_coverage_and_preserves_retry() -> None:
             retry_delay_seconds=30,
         )
 
-        with pytest.raises(RuntimeError, match="boom"):
-            await worker.run_once(now=now)
+        result = await worker.run_once(now=now)
+        assert result is True
 
         async with session_factory() as session:
             run = await session.scalar(select(CollectionRun))
