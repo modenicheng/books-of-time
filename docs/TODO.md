@@ -51,6 +51,29 @@
 - [x] 增加任务唯一性约束或幂等键，避免重复入队。
 - [x] 增加 collection run id 与 run 生命周期表。
 
+## P0: Long-running Service Foundation
+
+- [ ] 建立 `books_of_time/service/`，由 `ServiceHost` 统一管理运行时资源和协作循环。
+- [ ] 建立 `service_instances` 表，记录实例身份、角色、状态、心跳和停止原因。
+- [ ] 实现服务启动检查：数据库连接、schema 版本、raw/media 目录可写。
+- [ ] 实现 `bot service run`，作为 Docker 和 Linux 原生部署的正式入口。
+- [ ] 实现 `SIGINT` / `SIGTERM` 优雅停止，停止领取新任务并为活动任务保留宽限期。
+- [ ] 实现 `bot service health`，供 Docker `HEALTHCHECK` 和运维探针调用。
+- [ ] 实现 `bot service status`，展示实例心跳、队列积压、最老待处理任务和请求退避。
+- [ ] 实现 `bot service doctor`，只执行部署前检查而不启动循环。
+- [ ] 建立 `scheduled_jobs` 表及持久化 job lease、失败重试和重启补跑。
+- [ ] 将 UID 发现改为 `FETCH_USER_VIDEOS` 任务，统一经过 worker、限流、退避、raw archive 和 coverage。
+- [ ] 将视频快照 sweep 从采集结果回调补全为独立持久化调度作业。
+- [ ] 将每日终结快照改为独立持久化调度作业，不依赖 UID discovery 是否执行。
+- [ ] 增加 YAML 的 `service` 配置和 `BOT_*` 部署环境变量覆盖。
+- [ ] 初始 worker concurrency 固定为 1，跨进程全局限流完成前不启动多个 HTTP worker。
+- [ ] 提交可复现的 Alembic revision，并停止忽略 `alembic/versions/*.py`。
+- [ ] 增加只运行 Books of Time 的 Dockerfile 和 Compose 示例，不捆绑 PostgreSQL。
+- [ ] Docker 支持连接宿主机或局域网已有 PostgreSQL，并挂载本地 raw/media 持久目录。
+- [ ] 增加 Linux systemd unit 和部署说明，连接已有 PostgreSQL。
+- [ ] 保留 Windows 下 `uv run python main.py service run` 开发入口和 Ctrl+C 停止行为。
+- [ ] 服务运行、重启恢复、健康检查和外部 PostgreSQL 连接具备自动化验收或 smoke test。
+
 ## P0: Video Discovery And Snapshot
 
 - [x] 建立阶梯式快照策略：前 30 分钟 1 分钟一次，30 分钟到 6 小时 5 分钟一次，之后动态退火。
@@ -228,13 +251,14 @@
 - [ ] 评估 TimescaleDB 是否必要。
 - [ ] 评估 ClickHouse 分析副本是否必要。
 - [ ] 评估 OpenSearch / Meilisearch 全文检索是否必要。
+- [ ] 在数据库级或独立协调层实现跨进程全局请求预算后，再拆分 scheduler/worker 多容器并支持 worker 副本。
 
 ## Near-term Sprint
 
 建议下一轮优先做：
 
-1. `raw_page_observations` + 热门评论第一页采集。
-2. `comment_entities` + `comment_observations` 基础模型。
-3. 最新评论 frontier 增量采集。
-4. `collection_runs` + `collection_coverage_stats`。
-5. `worker loop` 和 `task list` CLI。
+1. Service-1：`ServiceHost`、`service_instances`、优雅停止和 health/status/doctor。
+2. Service-2：`scheduled_jobs`、持久化调度和 `FETCH_USER_VIDEOS` 任务化发现。
+3. Service-3：Docker、Linux systemd、Windows 开发入口和 Alembic revision 治理。
+4. P2 Event Archive：事件、目标池、视频关联和事件级覆盖率。
+5. 补全 Important Replies 的点赞增长、争议关键词和最近出现优先级。

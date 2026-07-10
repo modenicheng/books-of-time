@@ -14,8 +14,22 @@ Books of Time = 二游社区公共舆论状态的时间机器
 - 所有请求走统一请求后端，统一限流、退避、审计和 raw payload 归档。
 - 结构化数据 append-only，历史状态不覆盖。
 - 不声称评论全量覆盖，所有报告都必须展示覆盖率、失败窗口和不确定性。
-- 分析对象是公开内容、传播结构、匿名化行为簇和事件内角色，不给普通用户贴身份标签。
+- 保留平台公开用户字段用于人工核验；分析聚焦公开内容、传播结构和事件内角色，不给普通用户贴身份标签或建立长期画像。
 - PostgreSQL 作为第一阶段主库，后期按瓶颈再引入 MinIO、TimescaleDB、ClickHouse 或全文检索。
+
+## Operating Model
+
+Books of Time 是长期运行服务，不以人工维持多个 CLI loop 作为正式运行方式。
+
+- 首个生产部署形态是单个 Books of Time Docker 应用容器，连接宿主机或局域网已有 PostgreSQL，不捆绑数据库容器。
+- raw payload 和 media asset 使用宿主机挂载的本地文件系统；media 不迁移到 S3、OSS 或 MinIO。
+- Linux 原生部署使用同一服务内核和 systemd；Windows 保留直接运行和调试入口。
+- `ServiceHost` 在单进程内管理 scheduler、worker 和 heartbeat，共享统一 HTTP client 与限流器。
+- PostgreSQL 持久化 collection task、scheduled job、lease 和 service heartbeat，进程重启后可恢复。
+- 跨进程全局请求预算实现前，不拆分多个 HTTP worker 容器，避免各进程重复拥有完整限额。
+- CLI 保留为管理和诊断界面，`bot service run` 是正式常驻入口。
+
+详细设计见 `docs/superpowers/specs/2026-07-10-long-running-service-design.md`。
 
 ## Current Baseline
 
@@ -155,6 +169,8 @@ Books of Time = 二游社区公共舆论状态的时间机器
 - 可选 ClickHouse 分析副本。
 - 可选 OpenSearch 或 Meilisearch 做全文检索。
 - 采集运行监控、失败告警、任务积压观察。
+- Docker 应用容器、Linux systemd 和 Windows 开发共用的长期服务内核。
+- 服务实例心跳、持久化调度作业、优雅停止和重启恢复。
 
 ### Acceptance Criteria
 
@@ -162,6 +178,7 @@ Books of Time = 二游社区公共舆论状态的时间机器
 - 大表有明确分区策略和维护脚本。
 - 长期 worker 运行有基本健康检查。
 - 请求预算和失败退避可配置、可观察。
+- Docker 和 Linux 原生部署可以连接已有 PostgreSQL，不要求额外数据库实例。
 
 ## System Success Criteria
 
