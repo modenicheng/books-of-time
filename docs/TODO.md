@@ -172,6 +172,21 @@
 
 说明：Phase 1C 以 requested/succeeded/error 计数保存请求成功情况，查询层可由此计算 success rate。
 
+## P1: Account And Cookie Management
+
+- [ ] 建立独立 `accounts` 子系统，不依赖 PostgreSQL 或有效 Cookie 才能初始化采集服务。
+- [ ] 使用本地加密凭据文件保存 Cookie 快照；密钥和密文均限制为当前系统用户可读，禁止日志输出秘密字段。
+- [ ] 当前只启用单个 `default` 账号，同时在存储格式和 provider 接口保留 `account_id` 扩展点。
+- [ ] 明确上述 `account_id` 是避免未来重写持久化格式的兼容边界，不实现账号池、并发多账号调度或风控规避。
+- [ ] 实现独立二维码登录 CLI：`bot login qr`，登录成功后原子切换到新 Cookie 快照。
+- [ ] 实现 `bot login status` 和 `bot login logout`，输出不得包含 Cookie、refresh token 或 CSRF 值。
+- [ ] 统一 HTTP 层在每次请求前读取当前有效 Cookie，自动热加载其他进程写入的最新快照。
+- [ ] 托管 Cookie 覆盖 bilibili-api-python 传入的空值或旧值；登录和刷新握手可显式禁用自动注入。
+- [ ] 实现服务内定时 Cookie 有效性/刷新检查，刷新成功后保存新版本并自动轮换。
+- [ ] Cookie 缺失或确认失效时自动退回匿名请求，不阻止 service、worker 或 scheduler 启动。
+- [ ] 增加 Linux、Docker、Windows 共用的配置、权限说明和 `docs/LOGIN.md` 使用文档。
+- [ ] 覆盖加密存储、原子更新、热加载、请求注入、匿名降级、QR 登录和自动刷新测试。
+
 ## P2: Comment State Events
 
 - [x] 建立 `comment_state_events` 表。
@@ -205,7 +220,7 @@
 - [x] CLI 支持 `bot event create`。
 - [x] CLI 支持 `bot event add-target`。
 - [x] CLI 支持 `bot event list-videos`。
-- [ ] Scheduler 可按事件目标池发现新视频。
+- [x] Scheduler 可按事件目标池发现新视频，并按 UID 合并请求、自动写入事件视频关联。
 - [ ] 事件级覆盖率汇总。
 - [ ] 事件基础时间线导出。
 
@@ -257,8 +272,7 @@
 
 建议下一轮优先做：
 
-1. Service-1：`ServiceHost`、`service_instances`、优雅停止和 health/status/doctor。
-2. Service-2：`scheduled_jobs`、持久化调度和 `FETCH_USER_VIDEOS` 任务化发现。
-3. P2 Event Archive：事件、目标池、视频关联和事件级覆盖率。
-4. 补全 Important Replies 的点赞增长、争议关键词和最近出现优先级。
-5. 在可用 Docker daemon 上执行镜像 build，并完成 Windows Ctrl+C 与 PostgreSQL service run 环境烟测。
+1. P1 Account And Cookie Management：二维码登录、加密快照、统一请求注入和自动刷新。
+2. P2 Event Archive：事件目标池调度、事件级覆盖率和基础时间线。
+3. 补全 Important Replies 的点赞增长、争议关键词和最近出现优先级。
+4. 在可用 Docker daemon 上执行镜像 build，并完成 Windows Ctrl+C 与 PostgreSQL service run 环境烟测。
