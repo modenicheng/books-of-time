@@ -55,7 +55,7 @@
 
 - [x] 建立 `books_of_time/service/`，由 `ServiceHost` 统一管理运行时资源和协作循环。
 - [x] 建立 `service_instances` 表，记录实例身份、角色、状态、心跳和停止原因。
-- [~] 实现服务启动检查：数据库连接、schema 版本、raw/media 目录可写（已检查连接、核心表和目录；Alembic revision 版本检查待 Service-3）。
+- [x] 实现服务启动检查：数据库连接、Alembic schema revision、核心表和 raw/media 目录可写。
 - [x] 实现 `bot service run`，作为 Docker 和 Linux 原生部署的正式入口。
 - [x] 实现 `SIGINT` / `SIGTERM` 优雅停止，停止领取新任务并为活动任务保留宽限期。
 - [x] 实现 `bot service health`，供 Docker `HEALTHCHECK` 和运维探针调用。
@@ -67,12 +67,12 @@
 - [x] 将每日终结快照改为独立持久化调度作业，不依赖 UID discovery 是否执行。
 - [x] 增加 YAML 的 `service` 配置和 `BOT_*` 部署环境变量覆盖。
 - [x] 初始 worker concurrency 固定为 1，跨进程全局限流完成前不启动多个 HTTP worker。
-- [ ] 提交可复现的 Alembic revision，并停止忽略 `alembic/versions/*.py`。
-- [ ] 增加只运行 Books of Time 的 Dockerfile 和 Compose 示例，不捆绑 PostgreSQL。
-- [ ] Docker 支持连接宿主机或局域网已有 PostgreSQL，并挂载本地 raw/media 持久目录。
-- [ ] 增加 Linux systemd unit 和部署说明，连接已有 PostgreSQL。
+- [x] 提交可复现的 Alembic revision，并停止忽略 `alembic/versions/*.py`。
+- [x] 增加只运行 Books of Time 的 Dockerfile 和 Compose 示例，不捆绑 PostgreSQL。
+- [x] Docker 支持连接宿主机或局域网已有 PostgreSQL，并挂载本地 raw/media 持久目录。
+- [x] 增加 Linux systemd unit 和部署说明，连接已有 PostgreSQL。
 - [~] 保留 Windows 下 `uv run python main.py service run` 开发入口和 Ctrl+C 停止行为（入口和 Windows signal fallback 已实现，交互式 Ctrl+C smoke 待执行）。
-- [~] 服务运行、重启恢复、健康检查和外部 PostgreSQL 连接具备自动化验收或 smoke test（SQLite 有限运行、调度租约恢复和健康检查已覆盖；外部 PostgreSQL smoke 待 Service-3 migration）。
+- [~] 服务运行、重启恢复、健康检查和外部 PostgreSQL 连接具备自动化验收或 smoke test（SQLite 服务、调度租约恢复、health、Compose config 与 PostgreSQL migration cycle 已覆盖；Docker daemon build 和 PostgreSQL service run 待环境验收）。
 
 ## P0: Video Discovery And Snapshot
 
@@ -259,6 +259,6 @@
 
 1. Service-1：`ServiceHost`、`service_instances`、优雅停止和 health/status/doctor。
 2. Service-2：`scheduled_jobs`、持久化调度和 `FETCH_USER_VIDEOS` 任务化发现。
-3. Service-3：Docker、Linux systemd、Windows 开发入口和 Alembic revision 治理。
-4. P2 Event Archive：事件、目标池、视频关联和事件级覆盖率。
-5. 补全 Important Replies 的点赞增长、争议关键词和最近出现优先级。
+3. P2 Event Archive：事件、目标池、视频关联和事件级覆盖率。
+4. 补全 Important Replies 的点赞增长、争议关键词和最近出现优先级。
+5. 在可用 Docker daemon 上执行镜像 build，并完成 Windows Ctrl+C 与 PostgreSQL service run 环境烟测。

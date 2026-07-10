@@ -1,0 +1,26 @@
+[Unit]
+Description=Books of Time Bilibili archive service
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=books-of-time
+Group=books-of-time
+WorkingDirectory=/opt/books-of-time
+EnvironmentFile=/etc/books-of-time/books-of-time.env
+StateDirectory=books-of-time
+ExecStartPre=/opt/books-of-time/.venv/bin/python main.py service doctor
+ExecStart=/opt/books-of-time/.venv/bin/python main.py service run
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=70
+KillSignal=SIGTERM
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/books-of-time
+
+[Install]
+WantedBy=multi-user.target
