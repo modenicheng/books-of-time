@@ -14,11 +14,11 @@
 
 ## Task 2: Latest Cookie Provider And HTTP Injection
 
-- [ ] Write tests for missing/invalid anonymous fallback, latest snapshot selection, external file reload and merge precedence.
-- [ ] Implement `CurrentCookieProvider` and optional provider injection in `RawHttpClient`.
-- [ ] Add managed-cookie opt-out to bilibili request capture context.
-- [ ] Wire the provider through application builders, including direct media downloads.
-- [ ] Commit `feat: inject latest managed cookies`.
+- [x] Write tests for missing/invalid anonymous fallback, latest snapshot selection, external file reload and merge precedence.
+- [x] Implement `CurrentCookieProvider` and optional provider injection in `RawHttpClient`.
+- [x] Add managed-cookie opt-out to bilibili request capture context.
+- [x] Wire the provider through application builders, including direct media downloads.
+- [x] Commit `feat: inject latest managed cookies`.
 
 ## Task 3: Independent QR Login CLI
 

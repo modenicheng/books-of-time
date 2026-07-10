@@ -28,6 +28,7 @@ CLIENT_NAME = "books_of_time"
 class BiliAPIRequestContext:
     http_client: RawHttpClient
     rate_limiter: TokenBucketRateLimiter | None = None
+    use_managed_cookies: bool = True
     captured_results: list[FetchResult] = field(default_factory=list)
 
     def latest_result(self, request_type: BilibiliRequestType) -> FetchResult:
@@ -60,11 +61,13 @@ def capture_bili_api_requests(
     *,
     http_client: RawHttpClient,
     rate_limiter: TokenBucketRateLimiter | None,
+    use_managed_cookies: bool = True,
 ) -> Iterator[BiliAPIRequestContext]:
     ensure_books_of_time_client_registered()
     context = BiliAPIRequestContext(
         http_client=http_client,
         rate_limiter=rate_limiter,
+        use_managed_cookies=use_managed_cookies,
     )
     token = _current_context.set(context)
     try:
@@ -141,6 +144,7 @@ class BooksOfTimeBiliAPIClient(BiliAPIClient):
                 headers=_headers,
                 cookies=_cookies,
                 allow_redirects=allow_redirects,
+                use_managed_cookies=context.use_managed_cookies,
             )
         except RequestFailure as exc:
             if exc.fetch_result is not None:

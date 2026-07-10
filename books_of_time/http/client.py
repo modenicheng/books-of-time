@@ -7,6 +7,7 @@ from typing import Any
 from curl_cffi.requests import AsyncSession
 from curl_cffi.requests.session import HttpMethod
 
+from books_of_time.accounts.provider import CookieProvider
 from books_of_time.domain.enums import BilibiliRequestType
 from books_of_time.http.errors import (
     RequestErrorKind,
@@ -34,9 +35,11 @@ class RawHttpClient:
         *,
         timeout_seconds: float = 10,
         user_agent: str = "BooksOfTime/0.1 research collector",
+        cookie_provider: CookieProvider | None = None,
     ) -> None:
         self.timeout_seconds = timeout_seconds
         self.user_agent = user_agent
+        self.cookie_provider = cookie_provider
 
     async def request(
         self,
@@ -49,10 +52,15 @@ class RawHttpClient:
         headers: dict[str, str] | None = None,
         cookies: dict[str, str] | None = None,
         allow_redirects: bool = True,
+        use_managed_cookies: bool = True,
+        account_id: str | None = None,
     ) -> FetchResult:
         request_headers = {"User-Agent": self.user_agent}
         if headers:
             request_headers.update(headers)
+        request_cookies = dict(cookies or {})
+        if use_managed_cookies and self.cookie_provider is not None:
+            request_cookies.update(await self.cookie_provider.get_cookies(account_id))
 
         try:
             async with AsyncSession() as session:
@@ -62,7 +70,7 @@ class RawHttpClient:
                     params=params,
                     data=data,
                     headers=request_headers,
-                    cookies=cookies,
+                    cookies=request_cookies or None,
                     allow_redirects=allow_redirects,
                     timeout=self.timeout_seconds,
                 )

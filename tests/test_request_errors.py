@@ -110,6 +110,37 @@ class FakeRateLimitedSession:
         return FakeResponse()
 
 
+class FakeSuccessfulResponse(FakeResponse):
+    def __init__(self) -> None:
+        super().__init__()
+        self.status_code = 200
+        self.content = b'{"code": 0}'
+        self.headers = {}
+
+
+class FakeRecordingSession:
+    latest_request = None
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return None
+
+    async def request(self, *args, **kwargs):
+        type(self).latest_request = kwargs
+        return FakeSuccessfulResponse()
+
+
+class FakeCookieProvider:
+    def __init__(self) -> None:
+        self.account_ids = []
+
+    async def get_cookies(self, account_id=None):
+        self.account_ids.append(account_id)
+        return {"SESSDATA": "latest-session", "bili_jct": "latest-csrf"}
+
+
 @pytest.mark.asyncio
 async def test_raw_http_client_maps_timeout(monkeypatch) -> None:
     monkeypatch.setattr("books_of_time.http.client.AsyncSession", FakeTimeoutSession)
@@ -148,3 +179,49 @@ async def test_raw_http_client_raises_typed_failure_with_fetch_result(
     assert exc_info.value.retry_after_seconds == 45
     assert exc_info.value.fetch_result is not None
     assert exc_info.value.fetch_result.status_code == 429
+
+
+@pytest.mark.asyncio
+async def test_raw_http_client_injects_latest_managed_cookie_with_precedence(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("books_of_time.http.client.AsyncSession", FakeRecordingSession)
+    provider = FakeCookieProvider()
+    client = RawHttpClient(cookie_provider=provider)
+
+    await client.request(
+        method="GET",
+        url="https://api.bilibili.com/x/test",
+        request_type=BilibiliRequestType.DEFAULT,
+        cookies={"SESSDATA": "stale-session", "request-only": "kept"},
+        account_id="default",
+    )
+
+    assert provider.account_ids == ["default"]
+    assert FakeRecordingSession.latest_request["cookies"] == {
+        "SESSDATA": "latest-session",
+        "bili_jct": "latest-csrf",
+        "request-only": "kept",
+    }
+
+
+@pytest.mark.asyncio
+async def test_raw_http_client_can_disable_managed_cookie_injection(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("books_of_time.http.client.AsyncSession", FakeRecordingSession)
+    provider = FakeCookieProvider()
+    client = RawHttpClient(cookie_provider=provider)
+
+    await client.request(
+        method="GET",
+        url="https://api.bilibili.com/x/test",
+        request_type=BilibiliRequestType.DEFAULT,
+        cookies={"SESSDATA": "handshake-session"},
+        use_managed_cookies=False,
+    )
+
+    assert provider.account_ids == []
+    assert FakeRecordingSession.latest_request["cookies"] == {
+        "SESSDATA": "handshake-session"
+    }

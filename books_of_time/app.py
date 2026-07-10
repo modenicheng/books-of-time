@@ -10,6 +10,8 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
+from books_of_time.accounts.provider import CurrentCookieProvider
+from books_of_time.accounts.storage import EncryptedFileCredentialStore
 from books_of_time.collectors.hot_comments import HotCommentCollector
 from books_of_time.collectors.latest_comments import LatestCommentCollector
 from books_of_time.collectors.reply_comments import ReplyCommentCollector
@@ -61,14 +63,42 @@ def build_rate_limiter(cfg: dict[str, Any]) -> TokenBucketRateLimiter:
 
 def build_bilibili_client(cfg: dict[str, Any]) -> BilibiliPlatformClient:
     http_cfg = cfg.get("http", {})
+    cookie_provider = build_cookie_provider(cfg)
     return BilibiliPlatformClient(
         http_client=RawHttpClient(
             timeout_seconds=float(http_cfg.get("timeout_seconds", 10)),
             user_agent=str(
                 http_cfg.get("user_agent", "BooksOfTime/0.1 research collector")
             ),
+            cookie_provider=cookie_provider,
         ),
         rate_limiter=build_rate_limiter(cfg),
+    )
+
+
+def build_credential_store(cfg: dict[str, Any]) -> EncryptedFileCredentialStore:
+    account_cfg = cfg.get("accounts", {})
+    return EncryptedFileCredentialStore(
+        credentials_path=Path(
+            account_cfg.get(
+                "credentials_path",
+                "./data/accounts/credentials.enc",
+            )
+        ),
+        key_path=Path(account_cfg.get("key_path", "./data/accounts/master.key")),
+        history_limit=int(account_cfg.get("history_limit", 5)),
+    )
+
+
+def build_cookie_provider(
+    cfg: dict[str, Any],
+) -> CurrentCookieProvider | None:
+    account_cfg = cfg.get("accounts", {})
+    if not bool(account_cfg.get("enabled", True)):
+        return None
+    return CurrentCookieProvider(
+        store=build_credential_store(cfg),
+        default_account_id=str(account_cfg.get("active_account_id", "default")),
     )
 
 

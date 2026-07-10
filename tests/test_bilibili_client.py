@@ -358,3 +358,24 @@ async def test_bilibili_api_client_captures_failed_fetch_result() -> None:
         request_context.captured_results[0].request_type
         == BilibiliRequestType.COMMENT_REPLY
     )
+
+
+@pytest.mark.asyncio
+async def test_bilibili_request_context_can_disable_managed_cookies() -> None:
+    from bilibili_api.utils.network import get_client
+
+    raw_http_client = FakeRawHttpClient()
+    with capture_bili_api_requests(
+        http_client=raw_http_client,
+        rate_limiter=None,
+        use_managed_cookies=False,
+    ):
+        await get_client().request(
+            method="GET",
+            url="https://api.bilibili.com/x/web-interface/view",
+            params={"bvid": "BV1xx411c7mD"},
+            headers={},
+            cookies={"SESSDATA": "handshake-session"},
+        )
+
+    assert raw_http_client.requests[0]["use_managed_cookies"] is False
