@@ -6,11 +6,11 @@
 
 ## Task 1: Encrypted Credential Store
 
-- [ ] Add direct cryptography and file-lock dependencies.
-- [ ] Write tests for key creation, encrypted round-trip, bounded versions, atomic replacement, status and logout.
-- [ ] Implement account snapshot models and `EncryptedFileCredentialStore`.
-- [ ] Verify tests, secret redaction and file modes.
-- [ ] Commit `feat: store versioned account credentials`.
+- [x] Add direct cryptography and file-lock dependencies.
+- [x] Write tests for key creation, encrypted round-trip, bounded versions, atomic replacement, status and logout.
+- [x] Implement account snapshot models and `EncryptedFileCredentialStore`.
+- [x] Verify tests, secret redaction and file modes.
+- [x] Commit `feat: store versioned account credentials`.
 
 ## Task 2: Latest Cookie Provider And HTTP Injection
 
