@@ -86,6 +86,21 @@ def test_event_parser_supports_archive_management_commands() -> None:
     assert trends.event_command == "keyword-trends"
     assert trends.bucket_minutes == 60
 
+    cooccurrence = cli.build_parser().parse_args(
+        [
+            "event",
+            "keyword-cooccurrence",
+            "ghost-picture-war",
+            "--since",
+            "2026-07-10T00:00:00Z",
+            "--until",
+            "2026-07-10T02:00:00Z",
+            "--output",
+            "cooccurrence.jsonl",
+        ]
+    )
+    assert cooccurrence.event_command == "keyword-cooccurrence"
+
 
 @pytest.mark.asyncio
 async def test_event_cli_helpers_create_event_and_seed_video(tmp_path) -> None:
@@ -121,6 +136,13 @@ async def test_event_cli_helpers_create_event_and_seed_video(tmp_path) -> None:
         target_value="控评",
         priority=50,
     )
+    await cli._add_event_target(
+        cfg,
+        event_reference="ghost-picture-war",
+        target_type="keyword",
+        target_value="删评",
+        priority=50,
+    )
     await cli._list_events(cfg, limit=10)
     await cli._list_event_videos(cfg, event_reference=str(event.id), limit=10)
     coverage = await cli._show_event_coverage(
@@ -143,6 +165,15 @@ async def test_event_cli_helpers_create_event_and_seed_video(tmp_path) -> None:
         bvid=None,
         output_path=trend_path,
     )
+    cooccurrence_path = tmp_path / "exports" / "cooccurrence.jsonl"
+    cooccurrence_count = await cli._export_keyword_cooccurrence(
+        cfg,
+        event_reference="ghost-picture-war",
+        since="2026-07-10T00:00:00Z",
+        until="2026-07-10T02:00:00Z",
+        bvid=None,
+        output_path=cooccurrence_path,
+    )
 
     engine = create_async_engine(database_url)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -158,7 +189,7 @@ async def test_event_cli_helpers_create_event_and_seed_video(tmp_path) -> None:
     assert target.event_id == event.id
     assert video is not None
     assert task_count == 1
-    assert target_count == 2
+    assert target_count == 3
     assert coverage.active_video_count == 1
     assert coverage.videos_with_coverage == 0
     assert exported == 1
@@ -168,12 +199,14 @@ async def test_event_cli_helpers_create_event_and_seed_video(tmp_path) -> None:
     ]
     assert exported_rows[0]["record_type"] == "event_video_associated"
     assert exported_rows[0]["bvid"] == "BV1xx411c7mD"
-    assert trend_count == 2
+    assert trend_count == 4
     trend_rows = [
         json.loads(line) for line in trend_path.read_text(encoding="utf-8").splitlines()
     ]
-    assert [row["distinct_comment_count"] for row in trend_rows] == [0, 0]
-    assert all(row["keyword"] == "控评" for row in trend_rows)
+    assert [row["distinct_comment_count"] for row in trend_rows] == [0, 0, 0, 0]
+    assert {row["keyword"] for row in trend_rows} == {"控评", "删评"}
+    assert cooccurrence_count == 0
+    assert cooccurrence_path.read_text(encoding="utf-8") == ""
 
 
 def test_parse_event_datetime_requires_timezone() -> None:

@@ -72,7 +72,7 @@
 - [x] Docker 支持连接宿主机或局域网已有 PostgreSQL，并挂载本地 raw/media 持久目录。
 - [x] 增加 Linux systemd unit 和部署说明，连接已有 PostgreSQL。
 - [x] 保留 Windows 下 `uv run python main.py service run` 开发入口，并通过新进程组 `CTRL_BREAK_EVENT` 烟测确认协作式停止和 `stopped` 状态落库。
-- [~] 服务运行、重启恢复、健康检查和外部 PostgreSQL 连接具备自动化验收或 smoke test（SQLite 服务、调度租约恢复、health、Compose config 与 PostgreSQL migration cycle 已覆盖；Docker daemon build 和 PostgreSQL service run 待环境验收）。
+- [~] 服务运行、重启恢复、健康检查和外部 PostgreSQL 连接具备自动化验收或 smoke test（SQLite/Windows 控制事件、PostgreSQL 隔离 schema service run、调度租约恢复、health、Compose config 与 migration cycle 已覆盖；仅 Docker daemon build 待环境验收）。
 
 ## P0: Video Discovery And Snapshot
 
@@ -227,7 +227,7 @@
 ## P3: Analysis
 
 - [x] 关键词趋势分析：按事件/视频、UTC 时间桶聚合去重评论数与观测命中数，并导出 JSONL。
-- [ ] 关键词共现分析。
+- [x] 关键词共现分析：按事件/视频和时间窗口统计关键词对的去重评论数与观测命中数，并导出 JSONL。
 - [ ] 热门评论 Top N 换血率。
 - [ ] 支持/批评/中性词表的初版配置。
 - [ ] 模板化评论候选检测：相似文本、短时间、跨视频。

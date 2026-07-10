@@ -48,6 +48,39 @@ class KeywordTrendPoint:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class KeywordCooccurrenceEdge:
+    event_id: int
+    event_slug: str
+    scope_type: str
+    scope_id: str
+    keyword_a_id: int
+    keyword_a: str
+    keyword_a_version: int
+    keyword_b_id: int
+    keyword_b: str
+    keyword_b_version: int
+    distinct_comment_count: int
+    observation_count: int
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": "keyword-cooccurrence-v1",
+            "event_id": self.event_id,
+            "event_slug": self.event_slug,
+            "scope_type": self.scope_type,
+            "scope_id": self.scope_id,
+            "keyword_a_id": self.keyword_a_id,
+            "keyword_a": self.keyword_a,
+            "keyword_a_version": self.keyword_a_version,
+            "keyword_b_id": self.keyword_b_id,
+            "keyword_b": self.keyword_b,
+            "keyword_b_version": self.keyword_b_version,
+            "distinct_comment_count": self.distinct_comment_count,
+            "observation_count": self.observation_count,
+        }
+
+
 class KeywordTrendAnalyzer:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -156,6 +189,106 @@ class KeywordTrendAnalyzer:
                     )
                 )
         return points
+
+
+class KeywordCooccurrenceAnalyzer:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def analyze(
+        self,
+        *,
+        event_reference: int | str,
+        since: datetime,
+        until: datetime,
+        bvid: str | None = None,
+    ) -> list[KeywordCooccurrenceEdge]:
+        since_utc = _require_aware(since, name="since").astimezone(UTC)
+        until_utc = _require_aware(until, name="until").astimezone(UTC)
+        if until_utc <= since_utc:
+            raise ValueError("until must be after since")
+
+        event = await EventRepository(self.session).resolve_event(event_reference)
+        associated_bvids = set(
+            await self.session.scalars(
+                select(EventVideo.bvid).where(
+                    EventVideo.event_id == event.id,
+                    EventVideo.active.is_(True),
+                )
+            )
+        )
+        if bvid is not None and bvid not in associated_bvids:
+            raise ValueError(f"Video is not associated with event {event.slug}: {bvid}")
+        selected_bvids = [bvid] if bvid is not None else sorted(associated_bvids)
+
+        keywords = _latest_active_keywords(
+            list(
+                await self.session.scalars(
+                    select(EventKeyword)
+                    .where(
+                        EventKeyword.event_id == event.id,
+                        EventKeyword.active.is_(True),
+                    )
+                    .order_by(
+                        EventKeyword.normalized_keyword.asc(),
+                        EventKeyword.version.desc(),
+                        EventKeyword.id.desc(),
+                    )
+                )
+            )
+        )
+        if len(keywords) < 2 or not selected_bvids:
+            return []
+
+        observations = list(
+            await self.session.scalars(
+                select(CommentObservation).where(
+                    CommentObservation.bvid.in_(selected_bvids),
+                    CommentObservation.captured_at >= since_utc,
+                    CommentObservation.captured_at < until_utc,
+                    CommentObservation.content.is_not(None),
+                )
+            )
+        )
+        distinct: dict[tuple[int, int], set[int]] = {}
+        observation_counts: dict[tuple[int, int], int] = {}
+        for observation in observations:
+            content = (observation.content or "").casefold()
+            matched = [
+                keyword for keyword in keywords if keyword.normalized_keyword in content
+            ]
+            for index, keyword_a in enumerate(matched):
+                for keyword_b in matched[index + 1 :]:
+                    key = (keyword_a.id, keyword_b.id)
+                    distinct.setdefault(key, set()).add(observation.rpid)
+                    observation_counts[key] = observation_counts.get(key, 0) + 1
+
+        scope_type = "video" if bvid is not None else "event"
+        scope_id = bvid or event.slug
+        edges: list[KeywordCooccurrenceEdge] = []
+        for index, keyword_a in enumerate(keywords):
+            for keyword_b in keywords[index + 1 :]:
+                key = (keyword_a.id, keyword_b.id)
+                observation_count = observation_counts.get(key, 0)
+                if observation_count == 0:
+                    continue
+                edges.append(
+                    KeywordCooccurrenceEdge(
+                        event_id=event.id,
+                        event_slug=event.slug,
+                        scope_type=scope_type,
+                        scope_id=scope_id,
+                        keyword_a_id=keyword_a.id,
+                        keyword_a=keyword_a.keyword,
+                        keyword_a_version=keyword_a.version,
+                        keyword_b_id=keyword_b.id,
+                        keyword_b=keyword_b.keyword,
+                        keyword_b_version=keyword_b.version,
+                        distinct_comment_count=len(distinct[key]),
+                        observation_count=observation_count,
+                    )
+                )
+        return edges
 
 
 def _latest_active_keywords(keywords: list[EventKeyword]) -> list[EventKeyword]:

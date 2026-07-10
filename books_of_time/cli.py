@@ -14,7 +14,10 @@ from uuid import uuid4
 
 from books_of_time.accounts.models import AccountStatus, CredentialSnapshot
 from books_of_time.accounts.qr_login import QrLoginFlow
-from books_of_time.analysis.keywords import KeywordTrendAnalyzer
+from books_of_time.analysis.keywords import (
+    KeywordCooccurrenceAnalyzer,
+    KeywordTrendAnalyzer,
+)
 from books_of_time.app import (
     build_account_manager,
     build_bilibili_client,
@@ -181,6 +184,12 @@ def build_parser() -> argparse.ArgumentParser:
     event_trends.add_argument("--bucket-minutes", type=int, default=60)
     event_trends.add_argument("--bvid", default=None)
     event_trends.add_argument("--output", required=True)
+    event_cooccurrence = event_sub.add_parser("keyword-cooccurrence")
+    event_cooccurrence.add_argument("event_reference")
+    event_cooccurrence.add_argument("--since", required=True)
+    event_cooccurrence.add_argument("--until", required=True)
+    event_cooccurrence.add_argument("--bvid", default=None)
+    event_cooccurrence.add_argument("--output", required=True)
 
     discover = subparsers.add_parser("discover-user")
     discover.add_argument("mid")
@@ -292,6 +301,17 @@ async def _run(args: argparse.Namespace) -> None:
             since=args.since,
             until=args.until,
             bucket_minutes=args.bucket_minutes,
+            bvid=args.bvid,
+            output_path=Path(args.output),
+        )
+        return
+
+    if args.command == "event" and args.event_command == "keyword-cooccurrence":
+        await _export_keyword_cooccurrence(
+            cfg,
+            event_reference=args.event_reference,
+            since=args.since,
+            until=args.until,
             bvid=args.bvid,
             output_path=Path(args.output),
         )
@@ -853,6 +873,39 @@ async def _export_keyword_trends(
         output_path,
     )
     return len(points)
+
+
+async def _export_keyword_cooccurrence(
+    cfg: dict,
+    *,
+    event_reference: str,
+    since: str,
+    until: str,
+    bvid: str | None,
+    output_path: Path,
+) -> int:
+    since_at = _parse_event_datetime(since)
+    until_at = _parse_event_datetime(until)
+    if since_at is None or until_at is None:
+        raise ValueError("Keyword co-occurrence window requires since and until")
+    session_factory = build_session_factory(cfg)
+    async with session_factory() as session:
+        edges = await KeywordCooccurrenceAnalyzer(session).analyze(
+            event_reference=event_reference,
+            since=since_at,
+            until=until_at,
+            bvid=bvid,
+        )
+
+    _write_jsonl_atomic(output_path, [edge.as_dict() for edge in edges])
+    logger.info(
+        "Exported keyword co-occurrence event=%s bvid=%s edges=%s output=%s",
+        event_reference,
+        bvid,
+        len(edges),
+        output_path,
+    )
+    return len(edges)
 
 
 def _write_jsonl_atomic(output_path: Path, records: list[dict]) -> None:
