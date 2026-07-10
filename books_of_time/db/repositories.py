@@ -47,6 +47,10 @@ from books_of_time.domain.events import (
     validate_event_status,
     validate_event_window,
 )
+from books_of_time.domain.watchlist import (
+    WatchlistPolicy,
+    calculate_watchlist_priority,
+)
 from books_of_time.http.client import FetchResult
 from books_of_time.http.errors import RequestFailure
 from books_of_time.parsers.comments import (
@@ -1422,8 +1426,14 @@ class RawPageObservationRepository:
 
 
 class CommentRepository:
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        *,
+        watchlist_policy: WatchlistPolicy | None = None,
+    ) -> None:
         self.session = session
+        self.watchlist_policy = watchlist_policy or WatchlistPolicy()
 
     async def upsert_page(
         self,
@@ -1488,6 +1498,8 @@ class CommentRepository:
             await self._upsert_watchlist_candidates(
                 previous=previous_observation,
                 current=observation,
+                is_first_seen=is_new_entity,
+                is_root=comment.root_rpid in (None, 0),
                 created_at=parsed.captured_at,
             )
             observations.append(observation)
@@ -1608,38 +1620,33 @@ class CommentRepository:
         *,
         previous: CommentObservation | None,
         current: CommentObservation,
+        is_first_seen: bool,
+        is_root: bool,
         created_at: datetime,
     ) -> None:
-        if (
-            current.sort_mode == "hot"
-            and current.position is not None
-            and current.position <= 3
-        ):
-            await self._upsert_watchlist_item(
-                current=current,
-                reason="hot_top",
-                priority=100 - current.position,
-                score=float(100 - current.position),
-                extra={"hot_position": current.position},
-                created_at=created_at,
-            )
-
-        if (
-            previous is not None
-            and previous.reply_count is not None
-            and current.reply_count is not None
-        ):
-            reply_delta = current.reply_count - previous.reply_count
-            if reply_delta >= 5:
-                priority = 80 + min(reply_delta, 19)
-                await self._upsert_watchlist_item(
-                    current=current,
-                    reason="reply_growth",
-                    priority=priority,
-                    score=float(reply_delta),
-                    extra={"reply_delta": reply_delta},
-                    created_at=created_at,
-                )
+        if not is_root:
+            return
+        candidate = calculate_watchlist_priority(
+            policy=self.watchlist_policy,
+            content=current.content,
+            sort_mode=current.sort_mode,
+            position=current.position,
+            previous_reply_count=(previous.reply_count if previous else None),
+            current_reply_count=current.reply_count,
+            previous_like_count=(previous.like_count if previous else None),
+            current_like_count=current.like_count,
+            is_first_seen=is_first_seen,
+        )
+        if candidate is None:
+            return
+        await self._upsert_watchlist_item(
+            current=current,
+            reason=candidate.reason,
+            priority=candidate.priority,
+            score=candidate.score,
+            extra=candidate.extra,
+            created_at=created_at,
+        )
 
     async def _upsert_watchlist_item(
         self,

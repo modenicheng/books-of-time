@@ -203,7 +203,7 @@
 ## P2: Important Replies
 
 - [x] 建立 `important_comment_watchlist` 表。
-- [~] 定义 root priority 计算：回复增长、点赞增长、热门位置、争议关键词、最近出现（已实现回复增长和热门位置）。
+- [x] 定义 root priority 综合计算：回复增长、点赞增长、热门位置、可配置争议关键词、首次观测加分。
 - [x] 热门评论前排进入 watchlist。
 - [x] 回复数增长快的 root 进入 watchlist。
 - [x] 实现 `FetchCommentRepliesTask`。
@@ -272,7 +272,7 @@
 
 建议下一轮优先做：
 
-1. P1 Account And Cookie Management：二维码登录、加密快照、统一请求注入和自动刷新。
-2. P2 Event Archive：事件目标池调度、事件级覆盖率和基础时间线。
-3. 补全 Important Replies 的点赞增长、争议关键词和最近出现优先级。
-4. 在可用 Docker daemon 上执行镜像 build，并完成 Windows Ctrl+C 与 PostgreSQL service run 环境烟测。
+1. [x] P1 Account And Cookie Management：二维码登录、加密快照、统一请求注入和自动刷新。
+2. [x] P2 Event Archive：事件目标池调度、事件级覆盖率和基础时间线。
+3. [x] 补全 Important Replies 的点赞增长、争议关键词和最近出现优先级。
+4. [ ] 在可用 Docker daemon 上执行镜像 build，并完成 Windows Ctrl+C 与 PostgreSQL service run 环境烟测。

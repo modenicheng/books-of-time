@@ -26,6 +26,7 @@ from books_of_time.db.repositories import (
     RawPayloadRepository,
 )
 from books_of_time.domain.enums import BilibiliRequestType, TaskKind
+from books_of_time.domain.watchlist import WatchlistPolicy
 from books_of_time.http.client import FetchResult
 from books_of_time.http.errors import ParseFailure
 from books_of_time.media.normalizer import MediaService
@@ -60,6 +61,7 @@ class LatestCommentCollector:
         page_retry_backoff_seconds: list[float] | None = None,
         monotonic: MonotonicFunc | None = None,
         sleep: SleepFunc | None = None,
+        watchlist_policy: WatchlistPolicy | None = None,
     ) -> None:
         self.client = client
         self.raw_store = raw_store
@@ -69,6 +71,7 @@ class LatestCommentCollector:
         self.page_retry_backoff_seconds = page_retry_backoff_seconds or [1, 3, 5]
         self.monotonic = monotonic or time.monotonic
         self.sleep = sleep or time.sleep
+        self.watchlist_policy = watchlist_policy or WatchlistPolicy()
 
     async def collect(
         self,
@@ -470,7 +473,10 @@ class LatestCommentCollector:
             parsed,
             request_type=BilibiliRequestType.COMMENT_LATEST,
         )
-        observations = await CommentRepository(session).upsert_page(
+        observations = await CommentRepository(
+            session,
+            watchlist_policy=self.watchlist_policy,
+        ).upsert_page(
             parsed,
             raw_page_observation_id=raw_page.id,
         )

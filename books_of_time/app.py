@@ -19,6 +19,7 @@ from books_of_time.collectors.reply_comments import ReplyCommentCollector
 from books_of_time.collectors.user_videos import UserVideosCollector
 from books_of_time.collectors.video_stats import VideoStatsCollector
 from books_of_time.domain.enums import TaskKind
+from books_of_time.domain.watchlist import WatchlistPolicy
 from books_of_time.http.client import RawHttpClient
 from books_of_time.http.rate_limiter import RateLimitRule, TokenBucketRateLimiter
 from books_of_time.media.downloader import MediaAssetCollector, MediaDownloader
@@ -127,6 +128,7 @@ def build_worker(
     raw_store = RawPayloadFileStore(raw_dir)
     scheduler_cfg = cfg.get("scheduler", {})
     latest_comments_cfg = cfg.get("latest_comments", {})
+    watchlist_policy = WatchlistPolicy.from_config(cfg.get("watchlist"))
     return Worker(
         session_factory=effective_session_factory,
         collectors={
@@ -140,6 +142,7 @@ def build_worker(
                 client=effective_client,
                 raw_store=raw_store,
                 run_id=run_id,
+                watchlist_policy=watchlist_policy,
             ),
             TaskKind.FETCH_LATEST_COMMENTS: LatestCommentCollector(
                 client=effective_client,
@@ -156,11 +159,13 @@ def build_worker(
                         [1, 3, 5],
                     )
                 ],
+                watchlist_policy=watchlist_policy,
             ),
             TaskKind.FETCH_COMMENT_REPLIES: ReplyCommentCollector(
                 client=effective_client,
                 raw_store=raw_store,
                 run_id=run_id,
+                watchlist_policy=watchlist_policy,
             ),
             TaskKind.DISCOVER_USER_VIDEOS: UserVideosCollector(
                 client=effective_client,

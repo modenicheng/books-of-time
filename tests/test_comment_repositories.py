@@ -23,6 +23,7 @@ from books_of_time.db.repositories import (
     RawPageObservationRepository,
 )
 from books_of_time.domain.enums import BilibiliRequestType, TaskKind
+from books_of_time.domain.watchlist import WatchlistPolicy
 from books_of_time.parsers.comments import (
     ParsedComment,
     ParsedCommentPage,
@@ -37,6 +38,7 @@ def _parsed_comment_page(
     like_count: int = 12,
     reply_count: int = 3,
     position: int = 1,
+    root_rpid: int | None = None,
 ) -> ParsedCommentPage:
     return ParsedCommentPage(
         bvid="BV1abc",
@@ -50,7 +52,7 @@ def _parsed_comment_page(
                 rpid=1001,
                 oid=777,
                 bvid="BV1abc",
-                root_rpid=None,
+                root_rpid=root_rpid,
                 parent_rpid=None,
                 author_mid=42,
                 author_name="Alice",
@@ -270,6 +272,118 @@ async def test_comment_repository_adds_reply_growth_to_watchlist() -> None:
         assert reply_task.payload["reason"] == "reply_growth"
         assert reply_task.payload["root_rpid"] == 1001
 
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_comment_repository_adds_like_growth_to_watchlist() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    first = _parsed_comment_page(
+        captured_at=datetime(2026, 7, 8, 10, 0, tzinfo=UTC),
+        like_count=10,
+        reply_count=1,
+        position=5,
+    )
+    second = _parsed_comment_page(
+        captured_at=datetime(2026, 7, 8, 10, 1, tzinfo=UTC),
+        like_count=50,
+        reply_count=1,
+        position=5,
+    )
+
+    async with session_factory() as session:
+        repository = CommentRepository(
+            session,
+            watchlist_policy=WatchlistPolicy(like_growth_min=20),
+        )
+        for page in (first, second):
+            raw_page = await RawPageObservationRepository(
+                session
+            ).insert_from_parsed_page(
+                page,
+                request_type=BilibiliRequestType.COMMENT_HOT,
+            )
+            await repository.upsert_page(
+                page,
+                raw_page_observation_id=raw_page.id,
+            )
+        await session.commit()
+
+    async with session_factory() as session:
+        watch = await session.scalar(select(ImportantCommentWatchlist))
+
+    assert watch is not None
+    assert watch.reason == "like_growth"
+    assert watch.extra["like_delta"] == 40
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_comment_repository_adds_keyword_match_with_recent_bonus() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    page = _parsed_comment_page(
+        captured_at=datetime(2026, 7, 8, 10, 0, tzinfo=UTC),
+        content="质疑控评",
+        like_count=1,
+        reply_count=0,
+        position=8,
+    )
+
+    async with session_factory() as session:
+        raw_page = await RawPageObservationRepository(session).insert_from_parsed_page(
+            page,
+            request_type=BilibiliRequestType.COMMENT_HOT,
+        )
+        await CommentRepository(
+            session,
+            watchlist_policy=WatchlistPolicy(controversy_keywords=("控评",)),
+        ).upsert_page(page, raw_page_observation_id=raw_page.id)
+        await session.commit()
+
+    async with session_factory() as session:
+        watch = await session.scalar(select(ImportantCommentWatchlist))
+
+    assert watch is not None
+    assert watch.reason == "controversy_keyword"
+    assert watch.priority == 77
+    assert watch.extra["controversy_keywords"] == ["控评"]
+    assert watch.extra["recent_first_seen"] is True
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_comment_repository_does_not_watch_nested_keyword_reply() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    page = _parsed_comment_page(
+        captured_at=datetime(2026, 7, 8, 10, 0, tzinfo=UTC),
+        content="质疑控评",
+        position=1,
+        root_rpid=999,
+    )
+
+    async with session_factory() as session:
+        raw_page = await RawPageObservationRepository(session).insert_from_parsed_page(
+            page,
+            request_type=BilibiliRequestType.COMMENT_REPLY,
+        )
+        await CommentRepository(
+            session,
+            watchlist_policy=WatchlistPolicy(controversy_keywords=("控评",)),
+        ).upsert_page(page, raw_page_observation_id=raw_page.id)
+        await session.commit()
+
+    async with session_factory() as session:
+        assert await session.scalar(select(ImportantCommentWatchlist)) is None
+        assert await session.scalar(select(CollectionTask)) is None
     await engine.dispose()
 
 

@@ -94,6 +94,14 @@ request_budget:
     latest_pages: 0
     reply_roots: 0
 
+watchlist:
+  hot_max_position: 3
+  reply_growth_min: 5
+  like_growth_min: 20
+  recent_first_seen_bonus: 2
+  # Configure project-specific terms explicitly; no subjective defaults are set.
+  controversy_keywords: []
+
 discovery:
   matrix_uids: []
   game_uid_pools:
