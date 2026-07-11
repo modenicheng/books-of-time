@@ -53,7 +53,7 @@ uv run python main.py service doctor
 
 ## Docker Compose
 
-Compose 只运行 Books of Time。先准备环境变量：
+Compose 只运行 Books of Time，不捆绑 PostgreSQL 或 MinIO。先准备环境变量：
 
 ```bash
 cp deploy/docker.env.example deploy/docker.env
@@ -74,6 +74,20 @@ docker compose --env-file deploy/docker.env run --rm \
 docker compose --env-file deploy/docker.env up -d
 docker compose ps
 ```
+
+上面是兼容性最好的单容器形态，scheduler 与 worker 同进程运行。需要独立扩缩 worker 时使用 split Compose：
+
+```bash
+docker compose --env-file deploy/docker.env -f compose.split.yaml run --rm \
+  scheduler /app/.venv/bin/alembic upgrade head
+docker compose --env-file deploy/docker.env -f compose.split.yaml run --rm \
+  scheduler /app/.venv/bin/python main.py service doctor
+docker compose --env-file deploy/docker.env -f compose.split.yaml up -d
+# 临时覆盖副本数；也可在 deploy/docker.env 设置 BOT_WORKER_REPLICAS
+docker compose --env-file deploy/docker.env -f compose.split.yaml up -d --scale worker=3
+```
+
+split 形态只运行一个 scheduler；worker 副本通过 PostgreSQL task lease 竞争任务，并通过 `request_budget_states` 共享全局请求预算。不要让多个部署连接同一任务库却使用不同的 `rate_limit` 配置。
 
 默认绑定 `${BOT_DATA_DIR}/raw`、`${BOT_DATA_DIR}/media` 和 `${BOT_DATA_DIR}/accounts`。Linux 上应提前创建目录并让容器用户可写；不要把本地 `config/config.yaml` 或账号密钥放进镜像。
 
@@ -103,6 +117,8 @@ docker compose exec books-of-time \
   /app/.venv/bin/python main.py service status
 docker compose logs -f books-of-time
 ```
+
+split 形态将上述服务名换成 `scheduler`，worker 日志可用 `docker compose -f compose.split.yaml logs -f worker` 查看。
 
 ## Linux systemd
 

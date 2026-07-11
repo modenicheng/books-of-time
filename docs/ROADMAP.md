@@ -21,12 +21,12 @@ Books of Time = 二游社区公共舆论状态的时间机器
 
 Books of Time 是长期运行服务，不以人工维持多个 CLI loop 作为正式运行方式。
 
-- 首个生产部署形态是单个 Books of Time Docker 应用容器，连接宿主机或局域网已有 PostgreSQL，不捆绑数据库容器。
+- Docker 默认保留单个 Books of Time 应用容器；扩展形态使用独立 scheduler 与可水平扩展的 worker 容器，二者连接宿主机或局域网已有 PostgreSQL，不捆绑数据库容器。
 - raw payload 和 media asset 使用宿主机挂载的本地文件系统；media 不迁移到 S3、OSS 或 MinIO。
 - Linux 原生部署使用同一服务内核和 systemd；Windows 保留直接运行和调试入口。
-- `ServiceHost` 在单进程内管理 scheduler、worker 和 heartbeat，共享统一 HTTP client 与限流器。
+- `ServiceHost` 可运行 scheduler、worker 或二者，并为当前实例维护 heartbeat。
 - PostgreSQL 持久化 collection task、scheduled job、lease 和 service heartbeat，进程重启后可恢复。
-- 跨进程全局请求预算实现前，不拆分多个 HTTP worker 容器，避免各进程重复拥有完整限额。
+- PostgreSQL `request_budget_states` 通过行锁原子保留 global、host 与 request-type 令牌，使多个 worker 副本共享请求预算；配置漂移会明确失败。
 - CLI 保留为管理和诊断界面，`bot service run` 是正式常驻入口。
 - 登录是独立管理 CLI；服务没有 Cookie 或 Cookie 失效时继续按匿名能力运行，不把采集生命周期绑定到登录态。
 

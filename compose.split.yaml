@@ -1,0 +1,18 @@
+services:
+  scheduler:
+    extends:
+      file: compose.yaml
+      service: books-of-time
+    environment:
+      BOT_INSTANCE_ID: "${BOT_INSTANCE_ID:-books-of-time}-scheduler"
+      BOT_SERVICE_ROLES: scheduler
+
+  worker:
+    extends:
+      file: compose.yaml
+      service: books-of-time
+    environment:
+      BOT_INSTANCE_ID: "${BOT_INSTANCE_ID:-books-of-time}-worker"
+      BOT_SERVICE_ROLES: worker
+    deploy:
+      replicas: "${BOT_WORKER_REPLICAS:-1}"

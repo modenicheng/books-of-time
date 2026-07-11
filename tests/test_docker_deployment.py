@@ -68,3 +68,22 @@ def test_container_environment_example_has_no_real_credentials() -> None:
     assert "password@" not in environment
     assert "BOT_DATA_DIR=" in environment
     assert "BOT_ACCOUNT_ID=default" in environment
+    assert "BOT_WORKER_REPLICAS=1" in environment
+
+
+def test_split_compose_separates_scheduler_and_scalable_worker() -> None:
+    compose = yaml.safe_load((ROOT / "compose.split.yaml").read_text(encoding="utf-8"))
+
+    assert set(compose["services"]) == {"scheduler", "worker"}
+    scheduler = compose["services"]["scheduler"]
+    worker = compose["services"]["worker"]
+    assert scheduler["extends"] == {
+        "file": "compose.yaml",
+        "service": "books-of-time",
+    }
+    assert worker["extends"] == scheduler["extends"]
+    assert scheduler["environment"]["BOT_SERVICE_ROLES"] == "scheduler"
+    assert worker["environment"]["BOT_SERVICE_ROLES"] == "worker"
+    assert worker["deploy"]["replicas"] == "${BOT_WORKER_REPLICAS:-1}"
+    assert "postgres" not in compose["services"]
+    assert "minio" not in compose["services"]
