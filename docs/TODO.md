@@ -73,7 +73,7 @@
 - [x] Docker 支持连接宿主机或局域网已有 PostgreSQL，并挂载本地 raw/media 持久目录。
 - [x] 增加 Linux systemd unit 和部署说明，连接已有 PostgreSQL。
 - [x] 保留 Windows 下 `uv run python main.py service run` 开发入口，并通过新进程组 `CTRL_BREAK_EVENT` 烟测确认协作式停止和 `stopped` 状态落库。
-- [~] 服务运行、重启恢复、健康检查和外部 PostgreSQL 连接具备自动化验收或 smoke test（SQLite/Windows 控制事件、PostgreSQL 隔离 schema service run、调度租约恢复、health、Compose config 与 migration cycle 已覆盖；仅 Docker daemon build 待环境验收）。
+- [x] 服务运行、重启恢复、健康检查和外部 PostgreSQL 连接具备自动化验收或 smoke test：已覆盖 SQLite/Windows 控制事件、PostgreSQL 隔离 schema service run、调度租约恢复、health、Compose config、migration cycle、Docker daemon build，以及容器连接宿主机 PostgreSQL 的 `service doctor`。
 
 ## P0: Video Discovery And Snapshot
 
@@ -276,4 +276,4 @@
 1. [x] P1 Account And Cookie Management：二维码登录、加密快照、统一请求注入和自动刷新。
 2. [x] P2 Event Archive：事件目标池调度、事件级覆盖率和基础时间线。
 3. [x] 补全 Important Replies 的点赞增长、争议关键词和最近出现优先级。
-4. [ ] 在可用 Docker daemon 上执行镜像 build，并完成 Windows Ctrl+C 与 PostgreSQL service run 环境烟测。
+4. [x] 在可用 Docker daemon 上执行镜像 build，并完成 Windows Ctrl+C、PostgreSQL service run 和容器连接宿主机 PostgreSQL 环境烟测。
