@@ -26,7 +26,7 @@ def comment_observation_partition_for(value: datetime) -> MonthPartition:
     start = datetime(utc.year, utc.month, 1, tzinfo=UTC)
     end = _add_months(start, 1)
     return MonthPartition(
-        parent_table="comment_observations",
+        parent_table="comment_observations_v2",
         name=f"comment_observations_y{start.year:04d}m{start.month:02d}",
         start=start,
         end=end,

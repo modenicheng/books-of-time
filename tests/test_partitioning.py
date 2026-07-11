@@ -17,7 +17,7 @@ def test_comment_observation_month_partition_handles_year_boundary() -> None:
     assert partition.end == datetime(2027, 1, 1, tzinfo=UTC)
     assert partition.create_sql() == (
         "CREATE TABLE IF NOT EXISTS comment_observations_y2026m12 "
-        "PARTITION OF comment_observations FOR VALUES FROM "
+        "PARTITION OF comment_observations_v2 FOR VALUES FROM "
         "('2026-12-01T00:00:00+00:00') TO ('2027-01-01T00:00:00+00:00')"
     )
 
