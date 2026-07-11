@@ -44,6 +44,7 @@ from books_of_time.app import (
 from books_of_time.common.logger import get_logger
 from books_of_time.config import load_config
 from books_of_time.coverage import EventCoverageSummary
+from books_of_time.db.maintenance import DatabaseMaintenanceService
 from books_of_time.db.migrations import get_expected_schema_revision
 from books_of_time.db.repositories import (
     CollectionCoverageRepository,
@@ -84,6 +85,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     init_db = subparsers.add_parser("init-db")
     init_db.add_argument("--adopt-legacy", action="store_true")
+
+    database = subparsers.add_parser("database")
+    database_sub = database.add_subparsers(dest="database_command", required=True)
+    database_maintain = database_sub.add_parser("maintain")
+    database_maintain.add_argument("--execute", action="store_true")
+    database_maintain.add_argument("--vacuum", action="store_true")
+    database_maintain.add_argument("--months-ahead", type=int, default=3)
+    database_maintain.add_argument("--output", default=None)
 
     monitor = subparsers.add_parser("monitor-video")
     monitor.add_argument("bvid")
@@ -329,6 +338,16 @@ async def _run(args: argparse.Namespace) -> None:
         return
 
     cfg = load_config(args.config)
+
+    if args.command == "database" and args.database_command == "maintain":
+        await _maintain_database(
+            cfg,
+            execute=args.execute,
+            vacuum=args.vacuum,
+            months_ahead=args.months_ahead,
+            output_path=Path(args.output) if args.output is not None else None,
+        )
+        return
 
     if args.command == "service" and args.service_command == "run":
         await _run_service(
@@ -830,6 +849,38 @@ def _build_service_health_checker(cfg: dict, session_factory) -> ServiceHealthCh
         ),
         expected_schema_revision=get_expected_schema_revision(),
     )
+
+
+async def _maintain_database(
+    cfg: dict,
+    *,
+    execute: bool,
+    vacuum: bool,
+    months_ahead: int,
+    output_path: Path | None,
+):
+    engine = build_engine(cfg)
+    try:
+        actions = await DatabaseMaintenanceService(engine).run(
+            now=datetime.now(UTC),
+            execute=execute,
+            vacuum=vacuum,
+            months_ahead=months_ahead,
+        )
+    finally:
+        await engine.dispose()
+    if output_path is not None:
+        _write_jsonl_atomic(output_path, [action.as_dict() for action in actions])
+    for action in actions:
+        logger.info(
+            "database_maintenance kind=%s target=%s status=%s reason=%s sql=%s",
+            action.kind,
+            action.target,
+            action.status,
+            action.reason,
+            action.sql,
+        )
+    return actions
 
 
 def _log_health_report(report: ServiceHealthReport) -> None:
