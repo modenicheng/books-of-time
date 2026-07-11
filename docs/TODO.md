@@ -264,9 +264,9 @@
 - [x] 增加 worker health check：`service health` 独立验证新鲜 worker 角色心跳。
 - [x] 增加任务积压监控：`service status` 输出 pending/running/failed、最老 pending 时间与活跃退避。
 - [x] 增加请求失败率监控：`service status` 输出可配置滚动窗口内的请求页数、错误数、失败率与解析错误数。
-- [ ] 评估 TimescaleDB 是否必要。
-- [ ] 评估 ClickHouse 分析副本是否必要。
-- [ ] 评估 OpenSearch / Meilisearch 全文检索是否必要。
+- [x] 评估 TimescaleDB：当前不引入，先使用原生分区/BRIN/显式聚合，并记录行数、查询 p95、CPU 与 retention 复评阈值。
+- [x] 评估 ClickHouse 分析副本：当前不引入；分析扫描、资源隔离或并发达到阈值后仅以 CDC 构建可重建只读副本。
+- [x] 评估 OpenSearch / Meilisearch：当前先用 PostgreSQL FTS/`pg_trgm`；出现用户搜索 SLA、容错或独立扩缩容需求后复评。
 - [ ] 在数据库级或独立协调层实现跨进程全局请求预算后，再拆分 scheduler/worker 多容器并支持 worker 副本。
 
 ## Near-term Sprint
