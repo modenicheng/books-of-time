@@ -39,6 +39,7 @@ def _parsed_comment_page(
     reply_count: int = 3,
     position: int = 1,
     root_rpid: int | None = None,
+    visibility: str = "visible",
 ) -> ParsedCommentPage:
     return ParsedCommentPage(
         bvid="BV1abc",
@@ -61,6 +62,7 @@ def _parsed_comment_page(
                 like_count=like_count,
                 reply_count=reply_count,
                 position=position,
+                visibility=visibility,
             )
         ],
         extra={"all_count": 1},
@@ -156,6 +158,59 @@ async def test_comment_repository_upserts_entity_and_appends_observations() -> N
         assert observations[0].content == "first comment"
         assert observations[0].author_name == "Alice"
 
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_comment_repository_records_folded_and_unfolded_transitions() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    pages = [
+        _parsed_comment_page(
+            captured_at=datetime(2026, 7, 8, 10, minute, tzinfo=UTC),
+            visibility=visibility,
+        )
+        for minute, visibility in ((0, "visible"), (1, "folded"), (2, "visible"))
+    ]
+    async with session_factory() as session:
+        repository = CommentRepository(session)
+        for page in pages:
+            raw_page = await RawPageObservationRepository(
+                session
+            ).insert_from_parsed_page(
+                page,
+                request_type=BilibiliRequestType.COMMENT_HOT,
+            )
+            await repository.upsert_page(
+                page,
+                raw_page_observation_id=raw_page.id,
+            )
+        await session.commit()
+
+    async with session_factory() as session:
+        observations = list(
+            await session.scalars(
+                select(CommentObservation).order_by(CommentObservation.id)
+            )
+        )
+        events = list(
+            await session.scalars(
+                select(CommentVisibilityEvent).order_by(CommentVisibilityEvent.id)
+            )
+        )
+    assert [item.visibility for item in observations] == [
+        "visible",
+        "folded",
+        "visible",
+    ]
+    assert [event.event_type for event in events] == ["folded", "unfolded"]
+    assert events[0].old_visibility == "visible"
+    assert events[0].new_visibility == "folded"
+    assert events[1].old_visibility == "folded"
+    assert events[1].new_visibility == "visible"
     await engine.dispose()
 
 

@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-COMMENT_PARSER_VERSION = "comments.v1"
+COMMENT_PARSER_VERSION = "comments.v2"
 
 
 class CommentParseError(ValueError):
@@ -33,6 +33,8 @@ class ParsedComment:
     like_count: int | None
     reply_count: int | None
     position: int
+    visibility: str = "visible"
+    visibility_evidence: dict[str, Any] = field(default_factory=dict)
     media: list[ParsedCommentMedia] = field(default_factory=list)
 
 
@@ -161,6 +163,7 @@ def parse_latest_comment_page(
             "request_offset": request_offset,
             "next_offset": next_offset,
             "is_end": is_end,
+            **_folder_extra(data),
         },
     )
 
@@ -231,6 +234,7 @@ def _parse_comment(
         else None
     )
     content_text = message if isinstance(message, str) else None
+    visibility, visibility_evidence = _parse_comment_visibility(item)
     return ParsedComment(
         rpid=_required_int(item.get("rpid"), "rpid"),
         oid=oid,
@@ -244,8 +248,22 @@ def _parse_comment(
         like_count=_int_or_none(item.get("like")),
         reply_count=_int_or_none(item.get("rcount")),
         position=position,
+        visibility=visibility,
+        visibility_evidence=visibility_evidence,
         media=_parse_comment_media(content),
     )
+
+
+def _parse_comment_visibility(
+    item: dict[str, Any],
+) -> tuple[str, dict[str, Any]]:
+    evidence = {
+        key: item[key] for key in ("folder", "invisible", "state") if key in item
+    }
+    folder = item.get("folder")
+    if isinstance(folder, dict) and folder.get("is_folded") is True:
+        return "folded", evidence
+    return "visible", evidence
 
 
 def _parse_comment_media(content: Any) -> list[ParsedCommentMedia]:
@@ -293,17 +311,16 @@ def _media_url(item: Any) -> str | None:
 
 def _page_extra(data: dict[str, Any]) -> dict[str, Any]:
     cursor = data.get("cursor")
-    if not isinstance(cursor, dict):
-        return {}
-    extra: dict[str, Any] = {}
-    for key in ("all_count", "is_begin", "is_end", "next", "prev"):
-        if key in cursor:
-            extra[key] = cursor[key]
+    extra = _folder_extra(data)
+    if isinstance(cursor, dict):
+        for key in ("all_count", "is_begin", "is_end", "next", "prev"):
+            if key in cursor:
+                extra[key] = cursor[key]
     return extra
 
 
 def _reply_page_extra(data: dict[str, Any], *, root_rpid: int) -> dict[str, Any]:
-    extra: dict[str, Any] = {"root_rpid": root_rpid}
+    extra: dict[str, Any] = {"root_rpid": root_rpid, **_folder_extra(data)}
     page = data.get("page")
     if not isinstance(page, dict):
         return extra
@@ -311,6 +328,11 @@ def _reply_page_extra(data: dict[str, Any], *, root_rpid: int) -> dict[str, Any]
         if key in page:
             extra[key] = page[key]
     return extra
+
+
+def _folder_extra(data: dict[str, Any]) -> dict[str, Any]:
+    folder = data.get("folder")
+    return {"folder": folder} if isinstance(folder, dict) else {}
 
 
 def _required_int(value: Any, field_name: str) -> int:

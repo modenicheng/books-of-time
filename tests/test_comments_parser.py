@@ -116,6 +116,44 @@ def test_parse_hot_comment_page_extracts_comment_images() -> None:
     assert [item.role for item in media] == ["comment_image", "comment_image"]
 
 
+def test_parse_comment_uses_explicit_platform_fold_state() -> None:
+    page = parse_hot_comment_page(
+        {
+            "code": 0,
+            "data": {
+                "folder": {"has_folded": True, "is_folded": False, "rule": ""},
+                "replies": [
+                    {
+                        "rpid": 1001,
+                        "oid": 777,
+                        "folder": {
+                            "has_folded": False,
+                            "is_folded": True,
+                            "rule": "",
+                        },
+                        "invisible": False,
+                        "state": 0,
+                        "content": {"message": "folded comment"},
+                    }
+                ],
+            },
+        },
+        bvid="BV1abc",
+        oid=777,
+        captured_at=datetime(2026, 7, 8, 10, 0, tzinfo=UTC),
+        raw_payload_id=42,
+        page_number=1,
+    )
+
+    assert page.extra["folder"]["has_folded"] is True
+    assert page.comments[0].visibility == "folded"
+    assert page.comments[0].visibility_evidence == {
+        "folder": {"has_folded": False, "is_folded": True, "rule": ""},
+        "invisible": False,
+        "state": 0,
+    }
+
+
 def test_parse_hot_comment_page_rejects_missing_replies_list() -> None:
     with pytest.raises(CommentParseError, match=r"data\.replies"):
         parse_hot_comment_page(

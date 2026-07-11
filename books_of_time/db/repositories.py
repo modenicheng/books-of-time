@@ -1495,8 +1495,8 @@ class CommentRepository:
                 author_mid=comment.author_mid,
                 author_name=comment.author_name,
                 is_deleted=False,
-                visibility="visible",
-                extra={},
+                visibility=comment.visibility,
+                extra={"visibility_evidence": comment.visibility_evidence},
             )
             self.session.add(observation)
             await self.session.flush()
@@ -1521,6 +1521,12 @@ class CommentRepository:
                 current=observation,
                 created_at=parsed.captured_at,
             )
+            if previous_observation is not None:
+                self._add_fold_transition_if_needed(
+                    previous=previous_observation,
+                    current=observation,
+                    created_at=parsed.captured_at,
+                )
             await self._upsert_watchlist_candidates(
                 previous=previous_observation,
                 current=observation,
@@ -1672,6 +1678,35 @@ class CommentRepository:
             score=candidate.score,
             extra=candidate.extra,
             created_at=created_at,
+        )
+
+    def _add_fold_transition_if_needed(
+        self,
+        *,
+        previous: CommentObservation,
+        current: CommentObservation,
+        created_at: datetime,
+    ) -> None:
+        if previous.visibility == current.visibility:
+            return
+        if current.visibility == "folded":
+            event_type = "folded"
+        elif previous.visibility == "folded":
+            event_type = "unfolded"
+        else:
+            return
+        self.session.add(
+            CommentVisibilityEvent(
+                rpid=current.rpid,
+                bvid=current.bvid,
+                previous_comment_observation_id=previous.id,
+                current_comment_observation_id=current.id,
+                event_type=event_type,
+                old_visibility=previous.visibility,
+                new_visibility=current.visibility,
+                missing_reason=None,
+                created_at=created_at,
+            )
         )
 
     async def _upsert_watchlist_item(
