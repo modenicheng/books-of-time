@@ -198,7 +198,7 @@
 - [x] 实现 hot position 变化事件。
 - [x] 实现 content hash 变化事件。
 - [x] 实现 disappeared/reappeared/folded/unfolded 事件；folded 仅依据评论级平台字段 `folder.is_folded`，页面级 folder 只作为覆盖证据，不推断单条评论状态。
-- [~] 区分 `missing_after_seen`、`not_reached`、`unknown_due_to_fetch_error`（已实现 `missing_after_seen`）。
+- [x] 区分 `missing_after_seen`、`not_reached`、`unknown_due_to_fetch_error`：只有完整到达服务端尾部仍缺少旧 frontier 才写消失事件；未到达和请求失败仅写入 coverage 的 `frontier_outcome`，不伪造可见性变化。
 - [x] 确保无变化时不写 state event。
 
 ## P2: Important Replies
