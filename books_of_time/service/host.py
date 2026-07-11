@@ -33,7 +33,7 @@ class ServiceHost:
         self,
         *,
         session_factory: async_sessionmaker[AsyncSession],
-        worker: ServiceWorker,
+        worker: ServiceWorker | None,
         coordinator: ServiceCoordinator | None = None,
         instance_id: str,
         roles: list[str],
@@ -56,6 +56,8 @@ class ServiceHost:
         self.shutdown_grace_seconds = max(shutdown_grace_seconds, 0)
         self.worker_idle_sleep_seconds = max(worker_idle_sleep_seconds, 0)
         self.stop_event = asyncio.Event()
+        if self.worker is None and self.coordinator is None:
+            raise ValueError("ServiceHost requires a worker or coordinator")
 
     def request_stop(self) -> None:
         self.stop_event.set()
@@ -64,13 +66,17 @@ class ServiceHost:
         await self._register()
         await self._mark_running()
 
-        worker_task = asyncio.create_task(
-            self.worker.run_loop(
-                idle_sleep_seconds=self.worker_idle_sleep_seconds,
-                max_iterations=max_worker_iterations,
-                stop_event=self.stop_event,
-            ),
-            name=f"{self.instance_id}:worker",
+        worker_task = (
+            asyncio.create_task(
+                self.worker.run_loop(
+                    idle_sleep_seconds=self.worker_idle_sleep_seconds,
+                    max_iterations=max_worker_iterations,
+                    stop_event=self.stop_event,
+                ),
+                name=f"{self.instance_id}:worker",
+            )
+            if self.worker is not None
+            else None
         )
         heartbeat_task = asyncio.create_task(
             self._heartbeat_loop(),
@@ -96,10 +102,14 @@ class ServiceHost:
 
         try:
             done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-            if worker_task in done:
+            if worker_task is not None and worker_task in done:
                 result = await worker_task
             elif stop_task in done:
-                result = await self._finish_worker(worker_task)
+                result = (
+                    await self._finish_worker(worker_task)
+                    if worker_task is not None
+                    else 0
+                )
             elif heartbeat_task in done:
                 await heartbeat_task
                 raise RuntimeError("Heartbeat loop stopped unexpectedly")
@@ -110,7 +120,7 @@ class ServiceHost:
 
             await self._mark_stopping()
             self.stop_event.set()
-            if not worker_task.done():
+            if worker_task is not None and not worker_task.done():
                 result = await self._finish_worker(worker_task)
             await heartbeat_task
             if coordinator_task is not None:

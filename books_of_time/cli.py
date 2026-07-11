@@ -697,9 +697,10 @@ async def _run_service(
     checker = _build_service_health_checker(cfg, session_factory)
     service_cfg = cfg.get("service", {})
     roles = [str(role) for role in service_cfg.get("roles", ["worker", "scheduler"])]
-    if "worker" not in roles:
+    supported_roles = {"worker", "scheduler"}
+    if not roles or not set(roles).issubset(supported_roles):
         await engine.dispose()
-        raise ValueError("Service-1 requires the worker role")
+        raise ValueError("Service roles must contain worker and/or scheduler")
 
     doctor = await checker.doctor()
     _log_health_report(doctor)
@@ -711,12 +712,16 @@ async def _run_service(
     instance_prefix = str(service_cfg.get("instance_id") or socket.gethostname())
     instance_id = f"{instance_prefix}-{os.getpid()}-{uuid4().hex[:8]}"
     run_id = f"service-{datetime.now(UTC):%Y%m%dT%H%M%SZ}-{uuid4().hex[:8]}"
-    worker = build_worker(
-        cfg,
-        run_id=run_id,
-        lease_owner=instance_id,
-        session_factory=session_factory,
-        client=client,
+    worker = (
+        build_worker(
+            cfg,
+            run_id=run_id,
+            lease_owner=instance_id,
+            session_factory=session_factory,
+            client=client,
+        )
+        if "worker" in roles
+        else None
     )
     coordinator = None
     if "scheduler" in roles:

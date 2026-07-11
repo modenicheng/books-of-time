@@ -254,3 +254,33 @@ async def test_service_host_records_coordinator_failure_and_reraises() -> None:
     assert instance.last_error_type == "RuntimeError"
     assert instance.last_error_message == "coordinator exploded"
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_service_host_runs_scheduler_without_worker() -> None:
+    engine, session_factory = await _session_factory()
+    coordinator = WaitingCoordinator()
+    host = ServiceHost(
+        session_factory=session_factory,
+        worker=None,
+        coordinator=coordinator,
+        instance_id="scheduler-only",
+        roles=["scheduler"],
+        hostname="scheduler-host",
+        pid=790,
+        version="0.1.0",
+        heartbeat_seconds=0.01,
+    )
+    running = asyncio.create_task(host.run())
+    await coordinator.started.wait()
+
+    host.request_stop()
+    result = await running
+
+    async with session_factory() as session:
+        instance = await ServiceInstanceRepository(session).get("scheduler-only")
+    assert result == 0
+    assert coordinator.saw_stop is True
+    assert instance is not None
+    assert instance.status == "stopped"
+    await engine.dispose()
