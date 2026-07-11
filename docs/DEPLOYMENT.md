@@ -191,7 +191,37 @@ uv run python main.py task retry-failed
 uv run python main.py database maintain --output maintenance-plan.jsonl
 ```
 
-`health` 检查数据库、Alembic revision、实际 raw 后端、本地 media 目录和服务/worker 心跳。`status` 展示实例、队列积压、最老待处理任务、活动请求退避，以及最近 `service.request_failure_window_seconds` 秒内的请求页数、请求错误数、失败率和解析错误数。失败率用于观测，不直接触发 health 失败。
+`health` 检查数据库、Alembic revision、实际 raw 后端、本地 media 目录和服务/worker 心跳。`status` 展示实例、队列积压、最老待处理任务、活动请求退避、请求失败窗口和当前 active operational alerts。失败率用于观测和告警评估，不直接触发 health 失败。
+
+### Operational Alerts
+
+scheduler 默认每 60 秒运行持久化的 `operational-alert-evaluation` job，评估以下条件：
+
+- 没有新鲜 worker heartbeat。
+- pending task 数量或最老 pending 时长超过阈值。
+- 达到最小请求页数后，请求失败率超过阈值。
+- 任一 enabled scheduled job 连续失败达到阈值。
+
+状态保存在 `operational_alert_states`。首次触发、超过重复通知间隔和恢复时才通知；普通重复评估只更新次数，服务重启或 scheduler 切换不会重复刷屏。默认 notifier 仅写日志，不发送到第三方服务。
+
+配置位于 `operations.alerts`：
+
+```yaml
+operations:
+  alerts:
+    enabled: true
+    evaluation_seconds: 60
+    worker_heartbeat_timeout_seconds: 90
+    pending_task_threshold: 1000
+    oldest_pending_seconds: 900
+    request_failure_window_seconds: 3600
+    request_failure_min_pages: 20
+    request_failure_rate: 0.25
+    scheduled_job_failure_threshold: 3
+    repeat_notification_seconds: 3600
+```
+
+设置 `enabled: false` 会停止创建/执行告警评估 job，但不会删除历史状态。
 
 `database maintain` 默认只输出并记录计划，不执行 SQL。人工审查后使用 `--execute` 执行 ANALYZE、BRIN summarization 和已验证分区父表的未来月份 DDL；只有明确需要时才额外传 `--vacuum`。VACUUM 可能长时间占用 I/O，应放在低峰窗口运行。普通 `comment_observations` 表不会执行分区 DDL，完整切换前置条件见 [PARTITIONING](PARTITIONING.md)。
 
