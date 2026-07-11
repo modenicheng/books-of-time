@@ -217,6 +217,23 @@ def build_parser() -> argparse.ArgumentParser:
     event_create.add_argument("--start-at", default=None)
     event_create.add_argument("--end-at", default=None)
     event_create.add_argument("--timezone", default="Asia/Shanghai")
+    event_update = event_sub.add_parser("update")
+    event_update.add_argument("event_reference")
+    event_update.add_argument("--name")
+    game_group = event_update.add_mutually_exclusive_group()
+    game_group.add_argument("--game")
+    game_group.add_argument("--clear-game", action="store_true")
+    description_group = event_update.add_mutually_exclusive_group()
+    description_group.add_argument("--description")
+    description_group.add_argument("--clear-description", action="store_true")
+    event_update.add_argument("--status", choices=sorted(EVENT_STATUSES))
+    start_group = event_update.add_mutually_exclusive_group()
+    start_group.add_argument("--start-at")
+    start_group.add_argument("--clear-start-at", action="store_true")
+    end_group = event_update.add_mutually_exclusive_group()
+    end_group.add_argument("--end-at")
+    end_group.add_argument("--clear-end-at", action="store_true")
+    event_update.add_argument("--timezone")
     event_list = event_sub.add_parser("list")
     event_list.add_argument("--limit", type=int, default=100)
     event_add_target = event_sub.add_parser("add-target")
@@ -229,9 +246,25 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["official", "major_creator"],
         default=None,
     )
+    event_list_targets = event_sub.add_parser("list-targets")
+    event_list_targets.add_argument("event_reference")
+    event_list_targets.add_argument(
+        "--type", dest="target_type", choices=sorted(EVENT_TARGET_TYPES)
+    )
+    event_list_targets.add_argument("--all", action="store_true")
+    event_list_targets.add_argument("--limit", type=int, default=1000)
+    event_target_status = event_sub.add_parser("set-target-status")
+    event_target_status.add_argument("event_reference")
+    event_target_status.add_argument("target_id", type=int)
+    event_target_status.add_argument("status", choices=["active", "inactive"])
     event_list_videos = event_sub.add_parser("list-videos")
     event_list_videos.add_argument("event_reference")
     event_list_videos.add_argument("--limit", type=int, default=1000)
+    event_list_videos.add_argument("--all", action="store_true")
+    event_video_status = event_sub.add_parser("set-video-status")
+    event_video_status.add_argument("event_reference")
+    event_video_status.add_argument("bvid")
+    event_video_status.add_argument("status", choices=["active", "inactive"])
     event_coverage = event_sub.add_parser("coverage")
     event_coverage.add_argument("event_reference")
     event_export = event_sub.add_parser("export-timeline")
@@ -402,6 +435,24 @@ async def _run(args: argparse.Namespace) -> None:
         await _list_events(cfg, limit=args.limit)
         return
 
+    if args.command == "event" and args.event_command == "update":
+        await _update_event(
+            cfg,
+            event_reference=args.event_reference,
+            name=args.name,
+            game=args.game,
+            clear_game=args.clear_game,
+            description=args.description,
+            clear_description=args.clear_description,
+            status=args.status,
+            start_at=args.start_at,
+            clear_start_at=args.clear_start_at,
+            end_at=args.end_at,
+            clear_end_at=args.clear_end_at,
+            timezone=args.timezone,
+        )
+        return
+
     if args.command == "event" and args.event_command == "add-target":
         await _add_event_target(
             cfg,
@@ -413,11 +464,40 @@ async def _run(args: argparse.Namespace) -> None:
         )
         return
 
+    if args.command == "event" and args.event_command == "list-targets":
+        await _list_event_targets(
+            cfg,
+            event_reference=args.event_reference,
+            target_type=args.target_type,
+            include_inactive=args.all,
+            limit=args.limit,
+        )
+        return
+
+    if args.command == "event" and args.event_command == "set-target-status":
+        await _set_event_target_active(
+            cfg,
+            event_reference=args.event_reference,
+            target_id=args.target_id,
+            active=args.status == "active",
+        )
+        return
+
     if args.command == "event" and args.event_command == "list-videos":
         await _list_event_videos(
             cfg,
             event_reference=args.event_reference,
+            include_inactive=args.all,
             limit=args.limit,
+        )
+        return
+
+    if args.command == "event" and args.event_command == "set-video-status":
+        await _set_event_video_active(
+            cfg,
+            event_reference=args.event_reference,
+            bvid=args.bvid,
+            active=args.status == "active",
         )
         return
 
@@ -1031,6 +1111,68 @@ async def _create_event(
     return event
 
 
+async def _update_event(
+    cfg: dict,
+    *,
+    event_reference: str,
+    name: str | None,
+    game: str | None,
+    clear_game: bool,
+    description: str | None,
+    clear_description: bool,
+    status: str | None,
+    start_at: str | None,
+    clear_start_at: bool,
+    end_at: str | None,
+    clear_end_at: bool,
+    timezone: str | None,
+):
+    changes: dict[str, object] = {}
+    if name is not None:
+        changes["name"] = name
+    if clear_game:
+        changes["game"] = None
+    elif game is not None:
+        changes["game"] = game
+    if clear_description:
+        changes["description"] = None
+    elif description is not None:
+        changes["description"] = description
+    if status is not None:
+        changes["status"] = status
+    if clear_start_at:
+        changes["start_at"] = None
+    elif start_at is not None:
+        changes["start_at"] = _parse_event_datetime(start_at)
+    if clear_end_at:
+        changes["end_at"] = None
+    elif end_at is not None:
+        changes["end_at"] = _parse_event_datetime(end_at)
+    if timezone is not None:
+        changes["timezone"] = timezone
+    if not changes:
+        raise ValueError("Event update requires at least one changed field")
+
+    session_factory = build_session_factory(cfg)
+    async with session_factory() as session:
+        event = await EventRepository(session).update_event(
+            event_reference,
+            now=datetime.now(UTC),
+            **changes,
+        )
+        await session.commit()
+    logger.info(
+        "Updated event id=%s slug=%s name=%s status=%s start_at=%s end_at=%s",
+        event.id,
+        event.slug,
+        event.name,
+        event.status,
+        event.start_at.isoformat() if event.start_at is not None else None,
+        event.end_at.isoformat() if event.end_at is not None else None,
+    )
+    return event
+
+
 async def _list_events(cfg: dict, *, limit: int) -> None:
     session_factory = build_session_factory(cfg)
     async with session_factory() as session:
@@ -1086,29 +1228,127 @@ async def _add_event_target(
     return target
 
 
-async def _list_event_videos(
+async def _list_event_targets(
     cfg: dict,
     *,
     event_reference: str,
+    target_type: str | None,
+    include_inactive: bool,
     limit: int,
-) -> None:
+):
     session_factory = build_session_factory(cfg)
     async with session_factory() as session:
         repository = EventRepository(session)
         event = await repository.resolve_event(event_reference)
-        videos = await repository.list_videos(event.id, limit=limit)
+        targets = await repository.list_targets(
+            event.id,
+            active_only=not include_inactive,
+            target_type=target_type,
+            limit=limit,
+        )
+    if not targets:
+        logger.info("No event targets found event=%s", event.slug)
+        return []
+    for target in targets:
+        logger.info(
+            "event_target event=%s id=%s type=%s value=%s priority=%s active=%s role=%s",
+            event.slug,
+            target.id,
+            target.target_type,
+            target.target_value,
+            target.priority,
+            target.active,
+            target.extra.get("role"),
+        )
+    return targets
+
+
+async def _set_event_target_active(
+    cfg: dict,
+    *,
+    event_reference: str,
+    target_id: int,
+    active: bool,
+):
+    session_factory = build_session_factory(cfg)
+    async with session_factory() as session:
+        repository = EventRepository(session)
+        event = await repository.resolve_event(event_reference)
+        target = await repository.set_target_active(
+            event.id,
+            target_id,
+            active=active,
+            now=datetime.now(UTC),
+        )
+        await session.commit()
+    logger.info(
+        "Updated event target event=%s id=%s type=%s value=%s active=%s",
+        event.slug,
+        target.id,
+        target.target_type,
+        target.target_value,
+        target.active,
+    )
+    return target
+
+
+async def _list_event_videos(
+    cfg: dict,
+    *,
+    event_reference: str,
+    include_inactive: bool = False,
+    limit: int,
+):
+    session_factory = build_session_factory(cfg)
+    async with session_factory() as session:
+        repository = EventRepository(session)
+        event = await repository.resolve_event(event_reference)
+        videos = await repository.list_videos(
+            event.id,
+            active_only=not include_inactive,
+            limit=limit,
+        )
     if not videos:
         logger.info("No videos found for event id=%s slug=%s", event.id, event.slug)
-        return
+        return []
     for video in videos:
         logger.info(
-            "event_video event=%s bvid=%s reason=%s confidence=%s first_seen_at=%s",
+            "event_video event=%s bvid=%s reason=%s confidence=%s active=%s first_seen_at=%s",
             event.slug,
             video.bvid,
             video.association_reason,
             video.confidence,
+            video.active,
             video.first_seen_at.isoformat(),
         )
+    return videos
+
+
+async def _set_event_video_active(
+    cfg: dict,
+    *,
+    event_reference: str,
+    bvid: str,
+    active: bool,
+):
+    session_factory = build_session_factory(cfg)
+    async with session_factory() as session:
+        repository = EventRepository(session)
+        event = await repository.resolve_event(event_reference)
+        video = await repository.set_video_active(
+            event.id,
+            bvid,
+            active=active,
+            now=datetime.now(UTC),
+        )
+        await session.commit()
+    logger.info(
+        "Updated event video event=%s bvid=%s active=%s",
+        event.slug,
+        video.bvid,
+        video.active,
+    )
+    return video
 
 
 async def _show_event_coverage(

@@ -28,6 +28,24 @@ def test_event_parser_supports_archive_management_commands() -> None:
     assert create.slug == "ghost-picture-war"
     assert create.name == "鬼图战争"
 
+    update = cli.build_parser().parse_args(
+        [
+            "event",
+            "update",
+            "ghost-picture-war",
+            "--name",
+            "鬼图战争复盘",
+            "--clear-game",
+            "--status",
+            "closed",
+            "--end-at",
+            "2026-07-18T00:00:00+08:00",
+        ]
+    )
+    assert update.event_command == "update"
+    assert update.clear_game is True
+    assert update.status == "closed"
+
     add_target = cli.build_parser().parse_args(
         [
             "event",
@@ -41,6 +59,44 @@ def test_event_parser_supports_archive_management_commands() -> None:
     )
     assert add_target.event_command == "add-target"
     assert add_target.priority == 90
+
+    targets = cli.build_parser().parse_args(
+        [
+            "event",
+            "list-targets",
+            "ghost-picture-war",
+            "--type",
+            "keyword",
+            "--all",
+        ]
+    )
+    assert targets.event_command == "list-targets"
+    assert targets.target_type == "keyword"
+    assert targets.all is True
+
+    target_status = cli.build_parser().parse_args(
+        [
+            "event",
+            "set-target-status",
+            "ghost-picture-war",
+            "42",
+            "inactive",
+        ]
+    )
+    assert target_status.target_id == 42
+    assert target_status.status == "inactive"
+
+    video_status = cli.build_parser().parse_args(
+        [
+            "event",
+            "set-video-status",
+            "ghost-picture-war",
+            "BV1xx411c7mD",
+            "active",
+        ]
+    )
+    assert video_status.bvid == "BV1xx411c7mD"
+    assert video_status.status == "active"
 
     official_target = cli.build_parser().parse_args(
         [
@@ -64,6 +120,7 @@ def test_event_parser_supports_archive_management_commands() -> None:
     )
     assert videos.event_command == "list-videos"
     assert videos.limit == 10
+    assert videos.all is False
 
     coverage = cli.build_parser().parse_args(["event", "coverage", "ghost-picture-war"])
     assert coverage.event_command == "coverage"
@@ -229,6 +286,46 @@ async def test_event_cli_helpers_create_event_and_seed_video(tmp_path) -> None:
         bvid=None,
         output_path=stance_path,
     )
+    updated = await cli._update_event(
+        cfg,
+        event_reference="ghost-picture-war",
+        name="鬼图战争复盘",
+        game=None,
+        clear_game=True,
+        description="归档说明",
+        clear_description=False,
+        status="closed",
+        start_at=None,
+        clear_start_at=False,
+        end_at="2026-07-18T00:00:00+08:00",
+        clear_end_at=False,
+        timezone="UTC",
+    )
+    targets = await cli._list_event_targets(
+        cfg,
+        event_reference="ghost-picture-war",
+        target_type=None,
+        include_inactive=True,
+        limit=10,
+    )
+    disabled_target = await cli._set_event_target_active(
+        cfg,
+        event_reference="ghost-picture-war",
+        target_id=target.id,
+        active=False,
+    )
+    videos = await cli._list_event_videos(
+        cfg,
+        event_reference="ghost-picture-war",
+        include_inactive=True,
+        limit=10,
+    )
+    disabled_video = await cli._set_event_video_active(
+        cfg,
+        event_reference="ghost-picture-war",
+        bvid="BV1xx411c7mD",
+        active=False,
+    )
 
     engine = create_async_engine(database_url)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -241,7 +338,15 @@ async def test_event_cli_helpers_create_event_and_seed_video(tmp_path) -> None:
 
     assert stored_event is not None
     assert stored_event.start_at == datetime(2026, 7, 9, 16, tzinfo=UTC)
+    assert updated.slug == "ghost-picture-war"
+    assert updated.name == "鬼图战争复盘"
+    assert updated.game is None
+    assert updated.status == "closed"
     assert target.event_id == event.id
+    assert len(targets) == 4
+    assert disabled_target.active is False
+    assert [item.bvid for item in videos] == ["BV1xx411c7mD"]
+    assert disabled_video.active is False
     assert video is not None
     assert task_count == 1
     assert target_count == 4
