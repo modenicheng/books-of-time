@@ -95,6 +95,7 @@ async def test_event_report_preserves_raw_evidence_across_summary_sections() -> 
             )
         session.add_all(
             [
+                _failed_coverage(right_bvid, start - timedelta(days=1)),
                 _coverage(left_bvid, start),
                 VideoInfoSnapshot(
                     bvid=left_bvid,
@@ -182,7 +183,10 @@ async def test_event_report_preserves_raw_evidence_across_summary_sections() -> 
             ),
         )
 
+    assert report.coverage["coverage_row_count"] == 1
     assert report.coverage["video_coverage_ratio"] == 0.5
+    assert report.coverage["failed_count"] == 0
+    assert not any("当前全部采集记录" in item for item in report.limitations)
     assert report.core_videos[0]["title"] == "核心视频"
     assert report.core_videos[0]["info_raw_payload_id"] == 801
     assert report.hot_comment_changes[0]["current_raw_payload_id"] == 902
@@ -227,6 +231,17 @@ def _coverage(bvid: str, started_at: datetime) -> CollectionCoverageStat:
         created_at=started_at,
         updated_at=started_at,
     )
+
+
+def _failed_coverage(bvid: str, started_at: datetime) -> CollectionCoverageStat:
+    row = _coverage(bvid, started_at)
+    row.collection_task_id = 99
+    row.run_id = "old-report-run"
+    row.status = "failed"
+    row.pages_succeeded = 0
+    row.request_errors = 2
+    row.frontier_reached = False
+    return row
 
 
 def _entity(

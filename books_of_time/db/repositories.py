@@ -980,7 +980,12 @@ class EventRepository:
     async def get_coverage_summary(
         self,
         reference: int | str,
+        *,
+        since: datetime | None = None,
+        until: datetime | None = None,
     ) -> EventCoverageSummary:
+        if since is not None and until is not None and until <= since:
+            raise ValueError("until must be after since")
         event = await self.resolve_event(reference)
         active_bvids = select(EventVideo.bvid).where(
             EventVideo.event_id == event.id,
@@ -992,62 +997,55 @@ class EventRepository:
             )
             or 0
         )
-        row = (
-            await self.session.execute(
-                select(
-                    func.count(CollectionCoverageStat.id).label("row_count"),
-                    func.count(func.distinct(CollectionCoverageStat.target_id)).label(
-                        "video_count"
-                    ),
-                    func.sum(
-                        case((CollectionCoverageStat.status == "succeeded", 1), else_=0)
-                    ).label("succeeded_count"),
-                    func.sum(
-                        case((CollectionCoverageStat.status == "partial", 1), else_=0)
-                    ).label("partial_count"),
-                    func.sum(
-                        case((CollectionCoverageStat.status == "failed", 1), else_=0)
-                    ).label("failed_count"),
-                    func.sum(CollectionCoverageStat.pages_requested).label(
-                        "pages_requested"
-                    ),
-                    func.sum(CollectionCoverageStat.pages_succeeded).label(
-                        "pages_succeeded"
-                    ),
-                    func.sum(CollectionCoverageStat.items_observed).label(
-                        "items_observed"
-                    ),
-                    func.sum(CollectionCoverageStat.raw_payloads_saved).label(
-                        "raw_payloads_saved"
-                    ),
-                    func.sum(CollectionCoverageStat.parse_errors).label("parse_errors"),
-                    func.sum(CollectionCoverageStat.request_errors).label(
-                        "request_errors"
-                    ),
-                    func.sum(
-                        case(
-                            (CollectionCoverageStat.truncated.is_(True), 1),
-                            else_=0,
-                        )
-                    ).label("truncated_count"),
-                    func.sum(
-                        case(
-                            (CollectionCoverageStat.corrupted.is_(True), 1),
-                            else_=0,
-                        )
-                    ).label("corrupted_count"),
-                    func.min(CollectionCoverageStat.started_at).label(
-                        "first_started_at"
-                    ),
-                    func.max(CollectionCoverageStat.finished_at).label(
-                        "last_finished_at"
-                    ),
-                ).where(
-                    CollectionCoverageStat.target_type == "video",
-                    CollectionCoverageStat.target_id.in_(active_bvids),
+        coverage_stmt = select(
+            func.count(CollectionCoverageStat.id).label("row_count"),
+            func.count(func.distinct(CollectionCoverageStat.target_id)).label(
+                "video_count"
+            ),
+            func.sum(
+                case((CollectionCoverageStat.status == "succeeded", 1), else_=0)
+            ).label("succeeded_count"),
+            func.sum(
+                case((CollectionCoverageStat.status == "partial", 1), else_=0)
+            ).label("partial_count"),
+            func.sum(
+                case((CollectionCoverageStat.status == "failed", 1), else_=0)
+            ).label("failed_count"),
+            func.sum(CollectionCoverageStat.pages_requested).label("pages_requested"),
+            func.sum(CollectionCoverageStat.pages_succeeded).label("pages_succeeded"),
+            func.sum(CollectionCoverageStat.items_observed).label("items_observed"),
+            func.sum(CollectionCoverageStat.raw_payloads_saved).label(
+                "raw_payloads_saved"
+            ),
+            func.sum(CollectionCoverageStat.parse_errors).label("parse_errors"),
+            func.sum(CollectionCoverageStat.request_errors).label("request_errors"),
+            func.sum(
+                case(
+                    (CollectionCoverageStat.truncated.is_(True), 1),
+                    else_=0,
                 )
+            ).label("truncated_count"),
+            func.sum(
+                case(
+                    (CollectionCoverageStat.corrupted.is_(True), 1),
+                    else_=0,
+                )
+            ).label("corrupted_count"),
+            func.min(CollectionCoverageStat.started_at).label("first_started_at"),
+            func.max(CollectionCoverageStat.finished_at).label("last_finished_at"),
+        ).where(
+            CollectionCoverageStat.target_type == "video",
+            CollectionCoverageStat.target_id.in_(active_bvids),
+        )
+        if since is not None:
+            coverage_stmt = coverage_stmt.where(
+                CollectionCoverageStat.finished_at >= since
             )
-        ).one()
+        if until is not None:
+            coverage_stmt = coverage_stmt.where(
+                CollectionCoverageStat.finished_at < until
+            )
+        row = (await self.session.execute(coverage_stmt)).one()
         return EventCoverageSummary(
             event_id=event.id,
             event_slug=event.slug,

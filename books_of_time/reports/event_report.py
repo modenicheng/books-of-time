@@ -141,7 +141,19 @@ class EventReportGenerator:
         )
         _check_limit("event videos", event_videos, selected.max_videos)
         active_bvids = [video.bvid for video in event_videos if video.active]
-        coverage = _coverage_dict(await repository.get_coverage_summary(event.id))
+        coverage = _coverage_dict(
+            await repository.get_coverage_summary(
+                event.id,
+                since=since_utc,
+                until=until_utc,
+            )
+        )
+        coverage["window"] = {
+            "since": since_utc.isoformat(),
+            "until": until_utc.isoformat(),
+            "timestamp_field": "finished_at",
+            "until_exclusive": True,
+        }
         timeline_records = [
             row.as_dict()
             for row in await repository.build_timeline(
@@ -523,7 +535,7 @@ def _coverage_dict(coverage: Any) -> dict[str, Any]:
 def _limitations(coverage: dict[str, Any], active_bvids: list[str]) -> list[str]:
     limitations = [
         "分析章节仅覆盖所选时间窗内成功采集到的公开数据。",
-        "数据覆盖章节汇总事件当前全部采集记录，不按报告时间窗过滤。",
+        "数据覆盖章节仅汇总 finished_at 落在所选半开时间窗内的采集记录。",
         "缺少观测不等同于平台删除，模板候选也不构成协同行为证明。",
         "所有启发式结论都需要结合证据索引和原始响应复核。",
     ]

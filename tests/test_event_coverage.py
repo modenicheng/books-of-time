@@ -131,6 +131,86 @@ async def test_event_coverage_handles_empty_event() -> None:
     await engine.dispose()
 
 
+@pytest.mark.asyncio
+async def test_event_coverage_is_bounded_by_finished_at_window() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    now = datetime(2026, 7, 10, 10, 0, tzinfo=UTC)
+
+    async with session_factory() as session:
+        repository = EventRepository(session)
+        event = await repository.create_event(slug="event-a", name="事件 A", now=now)
+        await repository.attach_video(
+            event_id=event.id,
+            bvid="BV1xx411c7mD",
+            association_reason="manual",
+            now=now,
+        )
+        session.add_all(
+            [
+                _coverage(
+                    task_id=1,
+                    bvid="BV1xx411c7mD",
+                    status="failed",
+                    started_at=now - timedelta(hours=1),
+                    pages_requested=5,
+                    pages_succeeded=0,
+                    raw_payloads_saved=1,
+                    request_errors=5,
+                ),
+                _coverage(
+                    task_id=2,
+                    bvid="BV1xx411c7mD",
+                    status="succeeded",
+                    started_at=now + timedelta(minutes=5),
+                    pages_requested=2,
+                    pages_succeeded=2,
+                    raw_payloads_saved=2,
+                    items_observed=40,
+                ),
+                _coverage(
+                    task_id=3,
+                    bvid="BV1xx411c7mD",
+                    status="partial",
+                    started_at=now + timedelta(hours=2),
+                    pages_requested=3,
+                    pages_succeeded=1,
+                    raw_payloads_saved=1,
+                    truncated=True,
+                ),
+            ]
+        )
+        await session.commit()
+
+        summary = await repository.get_coverage_summary(
+            event.id,
+            since=now,
+            until=now + timedelta(hours=1),
+        )
+
+        assert summary.active_video_count == 1
+        assert summary.videos_with_coverage == 1
+        assert summary.coverage_row_count == 1
+        assert summary.succeeded_count == 1
+        assert summary.failed_count == 0
+        assert summary.partial_count == 0
+        assert summary.pages_requested == 2
+        assert summary.pages_succeeded == 2
+        assert summary.request_errors == 0
+        assert summary.first_started_at == now + timedelta(minutes=5)
+
+        with pytest.raises(ValueError, match="until"):
+            await repository.get_coverage_summary(
+                event.id,
+                since=now + timedelta(hours=1),
+                until=now,
+            )
+
+    await engine.dispose()
+
+
 def _coverage(
     *,
     task_id: int,
