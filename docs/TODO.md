@@ -259,7 +259,7 @@
 
 - [x] 支持 raw storage backend 抽象：filesystem / MinIO；worker、raw inspect 和 doctor 共用后端工厂，media 保持本地文件系统。
 - [x] 为 comment observations 设计月分区：提供 UTC 月边界/DDL 生成器和 v2 双写、回填、校验、切换、DEFAULT 分区及 rollback 契约；现有单主键表不自动原地转换。
-- [ ] 为大时间表建立 BRIN 索引。
+- [x] 为大时间表建立 PostgreSQL-only BRIN 时间索引，启用 autosummarize；SQLite 不生成伪 B-tree，Alembic metadata 保持一致。
 - [ ] 增加数据库维护脚本。
 - [x] 增加 worker health check：`service health` 独立验证新鲜 worker 角色心跳。
 - [x] 增加任务积压监控：`service status` 输出 pending/running/failed、最老 pending 时间与活跃退避。

@@ -4,7 +4,9 @@ from pathlib import Path
 
 import pytest
 from sqlalchemy import text
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.schema import CreateIndex
 
 from books_of_time.db.base import Base
 from books_of_time.db.migrations import (
@@ -20,7 +22,7 @@ async def test_schema_revision_helpers_read_expected_and_current_head(
     tmp_path: Path,
 ) -> None:
     expected = get_expected_schema_revision()
-    assert expected == "0004_comment_analysis_flags"
+    assert expected == "0005_brin_time_indexes"
 
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as connection:
@@ -154,6 +156,51 @@ def test_comment_analysis_flags_revision_is_static() -> None:
     assert "Base.metadata" not in source
 
 
+def test_brin_time_index_revision_is_postgresql_only_and_static() -> None:
+    revision_path = (
+        Path(__file__).resolve().parents[1]
+        / "alembic"
+        / "versions"
+        / "0005_brin_time_indexes.py"
+    )
+    source = revision_path.read_text(encoding="utf-8")
+
+    assert (
+        'down_revision: str | Sequence[str] | None = "0004_comment_analysis_flags"'
+        in source
+    )
+    assert 'dialect.name != "postgresql"' in source
+    assert 'postgresql_using="brin"' in source
+    assert '"autosummarize": True' in source
+    assert "Base.metadata" not in source
+
+
+def test_large_time_indexes_compile_as_postgresql_brin() -> None:
+    expected = {
+        "idx_raw_payloads_captured_brin",
+        "idx_raw_page_observations_captured_brin",
+        "idx_comment_observations_captured_brin",
+        "idx_video_metric_snapshots_captured_brin",
+        "idx_video_info_snapshots_captured_brin",
+        "idx_video_availability_snapshots_captured_brin",
+        "idx_comment_state_events_created_brin",
+        "idx_comment_visibility_events_created_brin",
+    }
+    indexes = {
+        index.name: index
+        for table in Base.metadata.tables.values()
+        for index in table.indexes
+        if index.name in expected
+    }
+
+    assert set(indexes) == expected
+    for index in indexes.values():
+        statement = str(CreateIndex(index).compile(dialect=postgresql.dialect()))
+        assert " USING brin " in statement
+        assert "autosummarize = True" in statement
+        assert "pages_per_range = 128" in statement
+
+
 def test_importing_migration_helpers_does_not_load_autogenerate_plugins() -> None:
     result = subprocess.run(
         [
@@ -190,8 +237,15 @@ async def test_create_schema_uses_alembic_head(tmp_path: Path) -> None:
                 "WHERE type = 'table' AND name = 'comment_analysis_flags'"
             )
         )
+        sqlite_brin_count = await session.scalar(
+            text(
+                "SELECT COUNT(*) FROM sqlite_master "
+                "WHERE type = 'index' AND name LIKE '%_brin'"
+            )
+        )
     await engine.dispose()
     assert table == "comment_analysis_flags"
+    assert sqlite_brin_count == 0
 
 
 @pytest.mark.asyncio

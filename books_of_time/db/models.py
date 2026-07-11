@@ -29,6 +29,16 @@ from books_of_time.domain.enums import (
 )
 
 
+def _postgresql_brin_index(name: str, column):
+    return Index(
+        name,
+        column,
+        info={"postgresql_only": True},
+        postgresql_using="brin",
+        postgresql_with={"pages_per_range": 128, "autosummarize": True},
+    ).ddl_if(dialect="postgresql")
+
+
 class RawPayload(Base):
     __tablename__ = "raw_payloads"
 
@@ -61,6 +71,7 @@ Index(
     RawPayload.request_type,
     RawPayload.captured_at.desc(),
 )
+_postgresql_brin_index("idx_raw_payloads_captured_brin", RawPayload.captured_at)
 
 
 class RawPageObservation(Base):
@@ -97,6 +108,10 @@ Index(
     RawPageObservation.captured_at.desc(),
 )
 Index("idx_raw_page_observations_raw_payload", RawPageObservation.raw_payload_id)
+_postgresql_brin_index(
+    "idx_raw_page_observations_captured_brin",
+    RawPageObservation.captured_at,
+)
 
 
 class CommentEntity(TimestampMixin, Base):
@@ -165,6 +180,10 @@ Index(
     "idx_comment_observations_raw_page",
     CommentObservation.raw_page_observation_id,
 )
+_postgresql_brin_index(
+    "idx_comment_observations_captured_brin",
+    CommentObservation.captured_at,
+)
 
 
 class CommentStateEvent(Base):
@@ -199,6 +218,10 @@ class CommentStateEvent(Base):
 
 
 Index("idx_comment_state_events_rpid", CommentStateEvent.rpid)
+_postgresql_brin_index(
+    "idx_comment_state_events_created_brin",
+    CommentStateEvent.created_at,
+)
 Index(
     "idx_comment_state_events_current",
     CommentStateEvent.current_comment_observation_id,
@@ -236,6 +259,10 @@ Index(
     "idx_comment_visibility_events_type",
     CommentVisibilityEvent.event_type,
     CommentVisibilityEvent.created_at.desc(),
+)
+_postgresql_brin_index(
+    "idx_comment_visibility_events_created_brin",
+    CommentVisibilityEvent.created_at,
 )
 
 
@@ -436,6 +463,12 @@ class VideoMetricSnapshot(Base):
     raw_payload_id: Mapped[int | None] = mapped_column(BigInteger)
 
 
+_postgresql_brin_index(
+    "idx_video_metric_snapshots_captured_brin",
+    VideoMetricSnapshot.captured_at,
+)
+
+
 class VideoInfoSnapshot(Base):
     __tablename__ = "video_info_snapshots"
 
@@ -457,6 +490,10 @@ Index(
     "idx_video_info_snapshots_bvid_time",
     VideoInfoSnapshot.bvid,
     VideoInfoSnapshot.captured_at.desc(),
+)
+_postgresql_brin_index(
+    "idx_video_info_snapshots_captured_brin",
+    VideoInfoSnapshot.captured_at,
 )
 
 
@@ -481,6 +518,10 @@ Index(
     "idx_video_availability_snapshots_status_time",
     VideoAvailabilitySnapshot.status,
     VideoAvailabilitySnapshot.captured_at.desc(),
+)
+_postgresql_brin_index(
+    "idx_video_availability_snapshots_captured_brin",
+    VideoAvailabilitySnapshot.captured_at,
 )
 
 

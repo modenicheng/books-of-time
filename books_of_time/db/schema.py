@@ -119,9 +119,16 @@ async def adopt_legacy_schema(config_path: str | None = None) -> None:
 
 
 def _schema_differences(sync_connection) -> list[Any]:
+    def include_object(obj, _name, type_, _reflected, _compare_to) -> bool:
+        return not (
+            sync_connection.dialect.name != "postgresql"
+            and type_ == "index"
+            and obj.info.get("postgresql_only", False)
+        )
+
     context = MigrationContext.configure(
         sync_connection,
-        opts={"compare_type": True},
+        opts={"compare_type": True, "include_object": include_object},
     )
     return list(compare_metadata(context, Base.metadata))
 

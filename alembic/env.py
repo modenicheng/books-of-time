@@ -41,6 +41,15 @@ from books_of_time.db import models as _models  # noqa: E402,F401
 target_metadata = Base.metadata
 
 
+def _include_object(obj, _name, type_, reflected, compare_to) -> bool:
+    if type_ != "index":
+        return True
+    metadata_index = compare_to if reflected else obj
+    if not getattr(metadata_index, "info", {}).get("postgresql_only", False):
+        return True
+    return context.get_context().dialect.name == "postgresql"
+
+
 def run_migrations_offline() -> None:
     """Offline mode: generate SQL script without connecting to DB."""
     context.configure(
@@ -48,6 +57,7 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        include_object=_include_object,
     )
     with context.begin_transaction():
         context.run_migrations()
@@ -55,7 +65,11 @@ def run_migrations_offline() -> None:
 
 def do_run_migrations(connection):
     """Run migrations on an existing connection (called by async wrapper)."""
-    context.configure(connection=connection, target_metadata=target_metadata)
+    context.configure(
+        connection=connection,
+        target_metadata=target_metadata,
+        include_object=_include_object,
+    )
     with context.begin_transaction():
         context.run_migrations()
 
