@@ -56,6 +56,11 @@ from books_of_time.db.schema import adopt_legacy_schema, create_schema
 from books_of_time.domain.enums import TaskKind, TaskStatus
 from books_of_time.domain.events import EVENT_STATUSES, EVENT_TARGET_TYPES
 from books_of_time.parsers.discovery import parse_user_video_list
+from books_of_time.reports.event_report import (
+    EventReport,
+    EventReportGenerator,
+    EventReportOptions,
+)
 from books_of_time.service.health import ServiceHealthChecker
 from books_of_time.service.host import ServiceHost
 from books_of_time.service.models import ServiceHealthReport
@@ -285,6 +290,22 @@ def build_parser() -> argparse.ArgumentParser:
     event_replay.add_argument("--until", required=True)
     event_replay.add_argument("--max-records", type=int, default=100_000)
     event_replay.add_argument("--output", required=True)
+    event_report = event_sub.add_parser("report")
+    event_report.add_argument("event_reference")
+    event_report.add_argument("--since", required=True)
+    event_report.add_argument("--until", required=True)
+    event_report.add_argument("--bucket-minutes", type=int, default=60)
+    event_report.add_argument("--spike-multiplier", type=float, default=3.0)
+    event_report.add_argument("--spike-min-count", type=int, default=5)
+    event_report.add_argument("--turnover-threshold", type=float, default=0.5)
+    event_report.add_argument("--top-n", type=int, default=20)
+    event_report.add_argument("--template-window-minutes", type=int, default=60)
+    event_report.add_argument("--template-min-similarity", type=float, default=0.85)
+    event_report.add_argument("--template-min-text-chars", type=int, default=8)
+    event_report.add_argument("--max-videos", type=int, default=100)
+    event_report.add_argument("--max-records", type=int, default=5000)
+    event_report.add_argument("--output", required=True)
+    event_report.add_argument("--json-output")
 
     discover = subparsers.add_parser("discover-user")
     discover.add_argument("mid")
@@ -492,6 +513,29 @@ async def _run(args: argparse.Namespace) -> None:
             until=args.until,
             max_records=args.max_records,
             output_path=Path(args.output),
+        )
+        return
+
+    if args.command == "event" and args.event_command == "report":
+        await _export_event_report(
+            cfg,
+            event_reference=args.event_reference,
+            since=args.since,
+            until=args.until,
+            bucket_minutes=args.bucket_minutes,
+            spike_multiplier=args.spike_multiplier,
+            spike_min_count=args.spike_min_count,
+            turnover_threshold=args.turnover_threshold,
+            top_n=args.top_n,
+            template_window_minutes=args.template_window_minutes,
+            template_min_similarity=args.template_min_similarity,
+            template_min_text_chars=args.template_min_text_chars,
+            max_videos=args.max_videos,
+            max_records=args.max_records,
+            output_path=Path(args.output),
+            json_output_path=(
+                Path(args.json_output) if args.json_output is not None else None
+            ),
         )
         return
 
@@ -1361,6 +1405,80 @@ async def _export_propagation_replay(
         output_path,
     )
     return len(rows)
+
+
+async def _export_event_report(
+    cfg: dict,
+    *,
+    event_reference: str,
+    since: str,
+    until: str,
+    bucket_minutes: int,
+    spike_multiplier: float,
+    spike_min_count: int,
+    turnover_threshold: float,
+    top_n: int,
+    template_window_minutes: int,
+    template_min_similarity: float,
+    template_min_text_chars: int,
+    max_videos: int,
+    max_records: int,
+    output_path: Path,
+    json_output_path: Path | None,
+) -> EventReport:
+    since_at = _parse_event_datetime(since)
+    until_at = _parse_event_datetime(until)
+    if since_at is None or until_at is None:
+        raise ValueError("Event report window requires since and until")
+    session_factory = build_session_factory(cfg)
+    async with session_factory() as session:
+        report = await EventReportGenerator(session).generate(
+            event_reference=event_reference,
+            since=since_at,
+            until=until_at,
+            options=EventReportOptions(
+                bucket_seconds=bucket_minutes * 60,
+                hot_top_n=top_n,
+                spike_multiplier=spike_multiplier,
+                spike_min_count=spike_min_count,
+                turnover_threshold=turnover_threshold,
+                template_window_seconds=template_window_minutes * 60,
+                template_min_similarity=template_min_similarity,
+                template_min_text_chars=template_min_text_chars,
+                max_videos=max_videos,
+                max_records=max_records,
+            ),
+        )
+    _write_text_atomic(output_path, report.render_markdown())
+    if json_output_path is not None:
+        _write_json_atomic(json_output_path, report.as_dict())
+    logger.info(
+        "Exported event report event=%s output=%s", event_reference, output_path
+    )
+    return report
+
+
+def _write_text_atomic(output_path: Path, content: str) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = output_path.with_name(f".{output_path.name}.{uuid4().hex}.tmp")
+    try:
+        temporary_path.write_text(content, encoding="utf-8", newline="\n")
+        temporary_path.replace(output_path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+
+def _write_json_atomic(output_path: Path, record: dict) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = output_path.with_name(f".{output_path.name}.{uuid4().hex}.tmp")
+    try:
+        temporary_path.write_text(
+            json.dumps(record, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        temporary_path.replace(output_path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
 
 
 def _write_jsonl_atomic(output_path: Path, records: list[dict]) -> None:

@@ -62,6 +62,7 @@ ignore = [
 "books_of_time/config/*.py" = ["RUF002", "RUF003"]
 "books_of_time/db/*.py" = ["RUF002", "RUF003"]
 "books_of_time/schemas/*.py" = ["RUF002", "RUF003"]
+"books_of_time/reports/event_report.py" = ["RUF001"]
 
 [tool.ruff.format]
 # 与项目现有风格保持一致

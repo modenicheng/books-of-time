@@ -26,6 +26,11 @@ from books_of_time.analysis.replay import (
     VideoMetricReplayAnalyzer,
     VideoMetricReplayPoint,
 )
+from books_of_time.analysis.report import (
+    EventReport,
+    EventReportGenerator,
+    EventReportOptions,
+)
 from books_of_time.analysis.stance import (
     StanceEvidenceAnalyzer,
     StanceEvidenceSummary,
@@ -47,6 +52,9 @@ __all__ = [
     "CommentVisibilityReplayEvent",
     "EventPropagationReplayAnalyzer",
     "EventPropagationReplayRecord",
+    "EventReport",
+    "EventReportGenerator",
+    "EventReportOptions",
     "HotCommentReplayAnalyzer",
     "HotCommentReplaySnapshot",
     "HotCommentTurnoverAnalyzer",
