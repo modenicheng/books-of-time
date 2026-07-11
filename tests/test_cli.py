@@ -61,6 +61,19 @@ def test_collect_latest_comments_parser_accepts_overrides() -> None:
     assert args.max_scan_seconds == 12
 
 
+def test_raw_minio_migration_parser_is_dry_run_by_default() -> None:
+    dry_run = build_parser().parse_args(
+        ["raw", "migrate-minio", "--limit", "25", "--after-id", "100"]
+    )
+    execute = build_parser().parse_args(["raw", "migrate-minio", "--execute"])
+
+    assert dry_run.raw_command == "migrate-minio"
+    assert dry_run.execute is False
+    assert dry_run.limit == 25
+    assert dry_run.after_id == 100
+    assert execute.execute is True
+
+
 def test_service_parser_supports_runtime_and_operations_commands() -> None:
     run_args = build_parser().parse_args(
         ["service", "run", "--max-worker-iterations", "1"]

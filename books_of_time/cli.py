@@ -65,7 +65,15 @@ from books_of_time.reports.event_report import (
 from books_of_time.service.health import ServiceHealthChecker
 from books_of_time.service.host import ServiceHost
 from books_of_time.service.models import ServiceHealthReport
-from books_of_time.storage.factory import build_raw_payload_store
+from books_of_time.storage.factory import (
+    build_minio_raw_payload_store,
+    build_raw_payload_store,
+)
+from books_of_time.storage.filesystem import RawPayloadFileStore
+from books_of_time.storage.migration import (
+    RawMigrationSummary,
+    RawPayloadMigrationService,
+)
 from books_of_time.task_orchestrator.discovery import DiscoveryScheduler
 from books_of_time.task_orchestrator.discovery_loop import (
     DiscoveryLoop,
@@ -149,6 +157,10 @@ def build_parser() -> argparse.ArgumentParser:
     raw_inspect = raw_sub.add_parser("inspect")
     raw_inspect.add_argument("raw_payload_id", type=int)
     raw_inspect.add_argument("--preview-bytes", type=int, default=1200)
+    raw_migrate = raw_sub.add_parser("migrate-minio")
+    raw_migrate.add_argument("--execute", action="store_true")
+    raw_migrate.add_argument("--limit", type=int, default=100)
+    raw_migrate.add_argument("--after-id", type=int, default=0)
 
     worker = subparsers.add_parser("worker")
     worker_sub = worker.add_subparsers(dest="worker_command", required=True)
@@ -728,6 +740,19 @@ async def _run(args: argparse.Namespace) -> None:
 
     if args.command == "raw" and args.raw_command == "inspect":
         await _inspect_raw_payload(cfg, args.raw_payload_id, args.preview_bytes)
+        return
+
+    if args.command == "raw" and args.raw_command == "migrate-minio":
+        summary = await _migrate_raw_to_minio(
+            cfg,
+            execute=args.execute,
+            limit=args.limit,
+            after_id=args.after_id,
+        )
+        if args.execute and summary.failed_count:
+            raise RuntimeError(
+                f"Raw migration completed with {summary.failed_count} failed rows"
+            )
         return
 
     if args.command == "worker" and args.worker_command == "run-once":
@@ -2150,6 +2175,56 @@ async def _inspect_raw_payload(
         raw.parser_version,
     )
     logger.info("raw preview=%s", preview)
+
+
+async def _migrate_raw_to_minio(
+    cfg: dict,
+    *,
+    execute: bool,
+    limit: int,
+    after_id: int,
+    minio_client=None,
+) -> RawMigrationSummary:
+    storage_cfg = cfg.get("storage", {})
+    if not isinstance(storage_cfg, dict):
+        raise ValueError("Configuration section storage must be a mapping")
+    engine = build_engine(cfg)
+    try:
+        service = RawPayloadMigrationService(
+            session_factory=build_session_factory(cfg, engine=engine),
+            source=RawPayloadFileStore(storage_cfg.get("raw_dir", "./data/raw")),
+            destination=build_minio_raw_payload_store(
+                cfg,
+                minio_client=minio_client,
+            ),
+        )
+        summary = await service.migrate(
+            execute=execute,
+            limit=limit,
+            after_id=after_id,
+        )
+    finally:
+        await engine.dispose()
+
+    for result in summary.results:
+        log = logger.warning if result.status == "failed" else logger.info
+        log(
+            "Raw migration id=%s status=%s source=%s target=%s error=%s",
+            result.raw_payload_id,
+            result.status,
+            result.source_uri,
+            result.target_uri,
+            result.error,
+        )
+    logger.info(
+        "Raw migration execute=%s candidates=%s migrated=%s skipped=%s failed=%s",
+        summary.execute,
+        summary.candidate_count,
+        summary.migrated_count,
+        summary.skipped_count,
+        summary.failed_count,
+    )
+    return summary
 
 
 async def _list_tasks(cfg: dict, status: str | None, limit: int) -> None:

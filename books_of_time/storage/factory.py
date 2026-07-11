@@ -22,20 +22,34 @@ def build_raw_payload_store(
     if backend != "minio":
         raise ValueError(f"Unsupported raw storage backend: {backend}")
 
-    minio_cfg = storage.get("minio", {})
-    if not isinstance(minio_cfg, dict):
-        raise ValueError("Configuration section storage.minio must be a mapping")
-    client = minio_client or _build_minio_client(minio_cfg)
-    minio_store = MinioRawPayloadStore(
-        client=client,
-        bucket=str(minio_cfg.get("bucket", "books-of-time-raw")),
-        prefix=str(minio_cfg.get("prefix", "raw")),
-        create_bucket=bool(minio_cfg.get("create_bucket", False)),
+    minio_store = build_minio_raw_payload_store(
+        cfg,
+        minio_client=minio_client,
     )
     filesystem_store = RawPayloadFileStore(storage.get("raw_dir", "./data/raw"))
     return RawPayloadStoreRouter(
         primary=minio_store,
         readers={"file": filesystem_store, "s3": minio_store},
+    )
+
+
+def build_minio_raw_payload_store(
+    cfg: dict[str, Any],
+    *,
+    minio_client: Any | None = None,
+) -> MinioRawPayloadStore:
+    storage = cfg.get("storage", {})
+    if not isinstance(storage, dict):
+        raise ValueError("Configuration section storage must be a mapping")
+    minio_cfg = storage.get("minio", {})
+    if not isinstance(minio_cfg, dict):
+        raise ValueError("Configuration section storage.minio must be a mapping")
+    client = minio_client or _build_minio_client(minio_cfg)
+    return MinioRawPayloadStore(
+        client=client,
+        bucket=str(minio_cfg.get("bucket", "books-of-time-raw")),
+        prefix=str(minio_cfg.get("prefix", "raw")),
+        create_bucket=bool(minio_cfg.get("create_bucket", False)),
     )
 
 
