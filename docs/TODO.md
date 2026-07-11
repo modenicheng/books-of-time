@@ -277,3 +277,29 @@
 2. [x] P2 Event Archive：事件目标池调度、事件级覆盖率和基础时间线。
 3. [x] 补全 Important Replies 的点赞增长、争议关键词和最近出现优先级。
 4. [x] 在可用 Docker daemon 上执行镜像 build，并完成 Windows Ctrl+C、PostgreSQL service run 和容器连接宿主机 PostgreSQL 环境烟测。
+
+## Completion Audit Follow-up
+
+上一轮复选框清零只证明既有清单已执行，不等于 ROADMAP 的整个项目已经完成。按最终验收标准补入以下缺口：
+
+### P1: Basic Data Management
+
+- [ ] 支持更新事件名称、游戏、描述、状态、时间窗和时区，并保留稳定 slug。
+- [ ] 支持列出、停用和恢复事件 target；keyword target 状态同步到版本化关键词，UID 停用后不再参与 discovery。
+- [ ] 支持停用和恢复事件视频关联，历史采集与证据不删除。
+- [ ] 为事件、target 和视频生命周期操作提供 CLI、边界校验与 repository 测试。
+
+### P4: Window-Accurate Reports
+
+- [ ] 事件 coverage summary 支持 `since` / `until`，报告的数据覆盖与失败窗口严格限定在报告时间窗内。
+- [ ] 报告允许按 BVID 和关键词缩小分析范围，并在输出中记录实际筛选条件。
+
+### P5: Operational Completion
+
+- [ ] 增加可配置失败告警规则和持久化去重状态，覆盖 worker 心跳、任务积压、失败率和连续调度失败；默认只记录日志，不绑定外部通知服务。
+- [ ] 增加 raw payload filesystem -> MinIO 迁移/校验 CLI，复制后校验 hash，数据库 URI 仅在目标对象验证成功后更新，并支持 dry-run。
+
+### End-to-End Acceptance
+
+- [ ] 提供可重复的真实 Bilibili API smoke：BV 入队、视频指标、热门评论、latest frontier、图片下载、coverage、raw inspect 全链路。
+- [ ] 用真实采集数据创建事件并生成 timeline、分析输出和 evidence-backed report，记录命令、产物及覆盖限制。
