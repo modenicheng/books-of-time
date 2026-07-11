@@ -15,9 +15,18 @@ database:
   echo: false  # SQL 日志（调试时设为 true）
 
 storage:
+  # 仅控制 raw payload；media 始终保存到本地 media_dir。
   backend: filesystem
   raw_dir: ./data/raw
   media_dir: ./data/media
+  minio:
+    endpoint: ""
+    access_key: ""
+    secret_key: ""
+    bucket: books-of-time-raw
+    prefix: raw
+    secure: true
+    create_bucket: false
 
 accounts:
   enabled: true

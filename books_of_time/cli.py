@@ -64,7 +64,7 @@ from books_of_time.reports.event_report import (
 from books_of_time.service.health import ServiceHealthChecker
 from books_of_time.service.host import ServiceHost
 from books_of_time.service.models import ServiceHealthReport
-from books_of_time.storage.filesystem import RawPayloadFileStore
+from books_of_time.storage.factory import build_raw_payload_store
 from books_of_time.task_orchestrator.discovery import DiscoveryScheduler
 from books_of_time.task_orchestrator.discovery_loop import (
     DiscoveryLoop,
@@ -814,7 +814,7 @@ def _build_service_health_checker(cfg: dict, session_factory) -> ServiceHealthCh
     service_cfg = cfg.get("service", {})
     return ServiceHealthChecker(
         session_factory=session_factory,
-        raw_dir=storage_cfg.get("raw_dir", "./data/raw"),
+        raw_store=build_raw_payload_store(cfg),
         media_dir=storage_cfg.get("media_dir", "./data/media"),
         heartbeat_timeout_seconds=float(
             service_cfg.get("heartbeat_timeout_seconds", 30)
@@ -1784,8 +1784,7 @@ async def _inspect_raw_payload(
         logger.info("Raw payload not found: %s", raw_payload_id)
         return
 
-    raw_dir = Path(cfg.get("storage", {}).get("raw_dir", "./data/raw"))
-    body = RawPayloadFileStore(raw_dir).read_uri(raw.storage_uri)
+    body = build_raw_payload_store(cfg).read_uri(raw.storage_uri)
     clamped_preview_bytes = min(max(preview_bytes, 0), 10000)
     preview = body[:clamped_preview_bytes].decode("utf-8", errors="replace")
 

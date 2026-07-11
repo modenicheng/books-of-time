@@ -28,7 +28,7 @@ from books_of_time.media.storage import MediaStore
 from books_of_time.platforms.bilibili.client import BilibiliPlatformClient
 from books_of_time.service.coordinator import ScheduledJobCoordinator
 from books_of_time.service.scheduled_jobs import build_default_scheduled_jobs
-from books_of_time.storage.filesystem import RawPayloadFileStore
+from books_of_time.storage.factory import build_raw_payload_store
 from books_of_time.task_orchestrator.video_snapshot_scheduler import (
     VideoSnapshotScheduler,
 )
@@ -123,9 +123,8 @@ def build_worker(
     effective_session_factory = session_factory or build_session_factory(cfg)
     effective_client = client or build_bilibili_client(cfg)
     storage_cfg = cfg.get("storage", {})
-    raw_dir = Path(storage_cfg.get("raw_dir", "./data/raw"))
     media_dir = Path(storage_cfg.get("media_dir", "./data/media"))
-    raw_store = RawPayloadFileStore(raw_dir)
+    raw_store = build_raw_payload_store(cfg)
     scheduler_cfg = cfg.get("scheduler", {})
     latest_comments_cfg = cfg.get("latest_comments", {})
     watchlist_policy = WatchlistPolicy.from_config(cfg.get("watchlist"))

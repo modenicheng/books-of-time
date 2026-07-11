@@ -16,7 +16,7 @@ from books_of_time.http.errors import RequestFailure
 from books_of_time.http.rate_limiter import TokenBucketRateLimiter
 from books_of_time.media.hasher import MediaHasher
 from books_of_time.media.storage import MediaStore
-from books_of_time.storage.filesystem import RawPayloadFileStore
+from books_of_time.storage.base import RawPayloadStore
 
 
 class MediaAssetCollector:
@@ -46,7 +46,7 @@ class MediaDownloader:
         http_client: RawHttpClient,
         rate_limiter: TokenBucketRateLimiter | None,
         media_store: MediaStore,
-        raw_store: RawPayloadFileStore,
+        raw_store: RawPayloadStore,
         run_id: str,
         hasher: MediaHasher | None = None,
     ) -> None:

@@ -257,7 +257,7 @@
 
 ## P5: Operations And Scaling
 
-- [ ] 支持 raw storage backend 抽象：filesystem / MinIO。
+- [x] 支持 raw storage backend 抽象：filesystem / MinIO；worker、raw inspect 和 doctor 共用后端工厂，media 保持本地文件系统。
 - [ ] 为 comment observations 设计月分区。
 - [ ] 为大时间表建立 BRIN 索引。
 - [ ] 增加数据库维护脚本。

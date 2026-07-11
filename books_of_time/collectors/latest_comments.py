@@ -35,7 +35,7 @@ from books_of_time.parsers.comments import (
     ParsedCommentPage,
     parse_latest_comment_page,
 )
-from books_of_time.storage.filesystem import RawPayloadFileStore
+from books_of_time.storage.base import RawPayloadStore
 
 SleepFunc = Callable[[float], None | Awaitable[None]]
 MonotonicFunc = Callable[[], float]
@@ -54,7 +54,7 @@ class LatestCommentCollector:
         self,
         *,
         client: LatestCommentsClient,
-        raw_store: RawPayloadFileStore,
+        raw_store: RawPayloadStore,
         run_id: str,
         max_scan_seconds: float = 55,
         page_retry_attempts: int = 3,

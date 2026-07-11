@@ -24,7 +24,7 @@ from books_of_time.parsers.video import (
     parse_video_info_snapshot,
     parse_video_stats,
 )
-from books_of_time.storage.filesystem import RawPayloadFileStore
+from books_of_time.storage.base import RawPayloadStore
 
 
 class VideoStatsClient(Protocol):
@@ -46,7 +46,7 @@ class VideoStatsCollector:
         self,
         *,
         client: VideoStatsClient,
-        raw_store: RawPayloadFileStore,
+        raw_store: RawPayloadStore,
         run_id: str,
         snapshot_scheduler: SnapshotScheduler | None = None,
     ) -> None:

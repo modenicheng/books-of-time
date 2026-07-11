@@ -63,7 +63,7 @@ from books_of_time.parsers.video import (
     ParsedVideoInfoSnapshot,
     ParsedVideoStats,
 )
-from books_of_time.storage.filesystem import StoredRawPayload
+from books_of_time.storage.base import StoredRawPayload
 
 
 class CollectionTaskRepository:

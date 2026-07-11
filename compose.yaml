@@ -13,6 +13,14 @@ services:
       BOT_SERVICE_ROLES: "${BOT_SERVICE_ROLES:-worker,scheduler}"
       BOT_RAW_DIR: /var/lib/books-of-time/raw
       BOT_MEDIA_DIR: /var/lib/books-of-time/media
+      BOT_RAW_STORAGE_BACKEND: "${BOT_RAW_STORAGE_BACKEND:-filesystem}"
+      BOT_MINIO_ENDPOINT: "${BOT_MINIO_ENDPOINT:-}"
+      BOT_MINIO_ACCESS_KEY: "${BOT_MINIO_ACCESS_KEY:-}"
+      BOT_MINIO_SECRET_KEY: "${BOT_MINIO_SECRET_KEY:-}"
+      BOT_MINIO_BUCKET: "${BOT_MINIO_BUCKET:-books-of-time-raw}"
+      BOT_MINIO_PREFIX: "${BOT_MINIO_PREFIX:-raw}"
+      BOT_MINIO_SECURE: "${BOT_MINIO_SECURE:-true}"
+      BOT_MINIO_CREATE_BUCKET: "${BOT_MINIO_CREATE_BUCKET:-false}"
       BOT_ACCOUNT_ENABLED: "${BOT_ACCOUNT_ENABLED:-true}"
       BOT_ACCOUNT_ID: "${BOT_ACCOUNT_ID:-default}"
       BOT_ACCOUNT_CREDENTIALS_PATH: /var/lib/books-of-time/accounts/credentials.enc

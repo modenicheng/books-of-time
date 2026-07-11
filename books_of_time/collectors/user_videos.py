@@ -15,7 +15,7 @@ from books_of_time.parsers.discovery import (
     DISCOVERY_PARSER_VERSION,
     parse_user_video_list,
 )
-from books_of_time.storage.filesystem import RawPayloadFileStore
+from books_of_time.storage.base import RawPayloadStore
 from books_of_time.task_orchestrator.discovery import (
     DiscoveryScheduler,
     EventDiscoveryLink,
@@ -31,7 +31,7 @@ class UserVideosCollector:
         self,
         *,
         client: UserVideosClient,
-        raw_store: RawPayloadFileStore,
+        raw_store: RawPayloadStore,
         run_id: str,
         session_factory: async_sessionmaker[AsyncSession],
     ) -> None:

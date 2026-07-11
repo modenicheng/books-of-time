@@ -126,6 +126,36 @@ async def test_service_doctor_reports_unwritable_storage_without_raising(
 
 
 @pytest.mark.asyncio
+async def test_service_doctor_probes_configured_raw_backend(tmp_path: Path) -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    raw_store = _ProbeRawStore()
+    checker = ServiceHealthChecker(
+        session_factory=async_sessionmaker(engine, expire_on_commit=False),
+        raw_store=raw_store,
+        media_dir=tmp_path / "media",
+    )
+
+    report = await checker.doctor()
+    raw_check = next(check for check in report.checks if check.name == "raw_storage")
+
+    assert raw_check.ok is True
+    assert raw_check.detail == "remote raw bucket reachable"
+    assert raw_store.probe_count == 1
+    await engine.dispose()
+
+
+class _ProbeRawStore:
+    def __init__(self) -> None:
+        self.probe_count = 0
+
+    def probe(self) -> str:
+        self.probe_count += 1
+        return "remote raw bucket reachable"
+
+
+@pytest.mark.asyncio
 async def test_service_status_summarizes_instances_tasks_and_backoffs(
     tmp_path: Path,
 ) -> None:

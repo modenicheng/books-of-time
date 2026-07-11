@@ -21,6 +21,10 @@ def test_compose_runs_only_application_with_external_database() -> None:
     assert environment["BOT_CONFIG"] == "/app/config/config.yaml.example"
     assert environment["BOT_RAW_DIR"] == "/var/lib/books-of-time/raw"
     assert environment["BOT_MEDIA_DIR"] == "/var/lib/books-of-time/media"
+    assert environment["BOT_RAW_STORAGE_BACKEND"] == (
+        "${BOT_RAW_STORAGE_BACKEND:-filesystem}"
+    )
+    assert "minio" not in compose["services"]
     assert environment["BOT_ACCOUNT_CREDENTIALS_PATH"] == (
         "/var/lib/books-of-time/accounts/credentials.enc"
     )

@@ -65,6 +65,7 @@ def load_config(
     cfg: dict[str, Any] = dict(loaded)
     database = _mapping_section(cfg, "database")
     storage = _mapping_section(cfg, "storage")
+    minio = _mapping_value(storage, "minio")
     service = _mapping_section(cfg, "service")
     accounts = _mapping_section(cfg, "accounts")
 
@@ -74,6 +75,26 @@ def load_config(
         storage["raw_dir"] = value
     if value := effective_environ.get("BOT_MEDIA_DIR"):
         storage["media_dir"] = value
+    if value := effective_environ.get("BOT_RAW_STORAGE_BACKEND"):
+        storage["backend"] = value.strip().casefold()
+    for environment_name, config_key in (
+        ("BOT_MINIO_ENDPOINT", "endpoint"),
+        ("BOT_MINIO_ACCESS_KEY", "access_key"),
+        ("BOT_MINIO_SECRET_KEY", "secret_key"),
+        ("BOT_MINIO_BUCKET", "bucket"),
+        ("BOT_MINIO_PREFIX", "prefix"),
+    ):
+        if value := effective_environ.get(environment_name):
+            minio[config_key] = value
+    for environment_name, config_key in (
+        ("BOT_MINIO_SECURE", "secure"),
+        ("BOT_MINIO_CREATE_BUCKET", "create_bucket"),
+    ):
+        if environment_name in effective_environ:
+            minio[config_key] = _parse_bool_override(
+                environment_name,
+                effective_environ[environment_name],
+            )
     if value := effective_environ.get("BOT_INSTANCE_ID"):
         service["instance_id"] = value
     if value := effective_environ.get("BOT_SERVICE_ROLES"):
@@ -106,6 +127,13 @@ def _mapping_section(cfg: dict[str, Any], key: str) -> dict[str, Any]:
     value = cfg.setdefault(key, {})
     if not isinstance(value, dict):
         raise ValueError(f"配置段 {key} 必须是映射")
+    return value
+
+
+def _mapping_value(parent: dict[str, Any], key: str) -> dict[str, Any]:
+    value = parent.setdefault(key, {})
+    if not isinstance(value, dict):
+        raise ValueError(f"配置项 {key} 必须是映射")
     return value
 
 

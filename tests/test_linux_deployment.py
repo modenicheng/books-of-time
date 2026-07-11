@@ -31,6 +31,7 @@ def test_linux_environment_example_uses_external_database_and_local_storage() ->
     assert "BOT_DATABASE_URL=postgresql+asyncpg://" in environment
     assert "BOT_RAW_DIR=/var/lib/books-of-time/raw" in environment
     assert "BOT_MEDIA_DIR=/var/lib/books-of-time/media" in environment
+    assert "BOT_RAW_STORAGE_BACKEND=filesystem" in environment
     assert (
         "BOT_ACCOUNT_CREDENTIALS_PATH=/var/lib/books-of-time/accounts/credentials.enc"
         in environment
@@ -58,6 +59,8 @@ def test_deployment_guide_covers_supported_runtime_paths() -> None:
         "备份",
         "回滚",
         "docs/LOGIN.md",
+        "BOT_RAW_STORAGE_BACKEND=minio",
+        "图片仍写入本地",
     ):
         assert required in guide
 

@@ -1,19 +1,13 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from uuid import uuid4
 
 import zstandard
 
-
-@dataclass(frozen=True)
-class StoredRawPayload:
-    storage_uri: str
-    payload_hash_hex: str
-    compressed_size: int
-    uncompressed_size: int
+from books_of_time.storage.base import StoredRawPayload
 
 
 class RawPayloadFileStore:
@@ -57,3 +51,12 @@ class RawPayloadFileStore:
         path = Path(storage_uri.removeprefix("file://"))
         compressed = path.read_bytes()
         return zstandard.ZstdDecompressor().decompress(compressed)
+
+    def probe(self) -> str:
+        self.raw_dir.mkdir(parents=True, exist_ok=True)
+        probe_path = self.raw_dir / f".books-of-time-raw-{uuid4().hex}"
+        try:
+            probe_path.write_bytes(b"ok")
+        finally:
+            probe_path.unlink(missing_ok=True)
+        return f"writable: {self.raw_dir}"

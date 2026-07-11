@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -21,6 +22,8 @@ from books_of_time.service.models import (
     ServiceInstanceSummary,
     ServiceStatusSnapshot,
 )
+from books_of_time.storage.base import RawPayloadStore
+from books_of_time.storage.filesystem import RawPayloadFileStore
 
 
 class ServiceHealthChecker:
@@ -28,13 +31,16 @@ class ServiceHealthChecker:
         self,
         *,
         session_factory: async_sessionmaker[AsyncSession],
-        raw_dir: str | Path,
         media_dir: str | Path,
+        raw_dir: str | Path | None = None,
+        raw_store: RawPayloadStore | None = None,
         heartbeat_timeout_seconds: float = 30,
         expected_schema_revision: str | None = None,
     ) -> None:
         self.session_factory = session_factory
-        self.raw_dir = Path(raw_dir)
+        if raw_store is None and raw_dir is None:
+            raise ValueError("raw_dir is required when raw_store is not provided")
+        self.raw_store = raw_store or RawPayloadFileStore(raw_dir)
         self.media_dir = Path(media_dir)
         self.heartbeat_timeout_seconds = heartbeat_timeout_seconds
         self.expected_schema_revision = expected_schema_revision
@@ -43,7 +49,7 @@ class ServiceHealthChecker:
         checks = [await self._database_check()]
         if self.expected_schema_revision is not None:
             checks.append(await self._schema_revision_check())
-        checks.append(self._storage_check("raw_storage", self.raw_dir))
+        checks.append(await self._raw_storage_check())
         checks.append(self._storage_check("media_storage", self.media_dir))
         return ServiceHealthReport(tuple(checks))
 
@@ -186,6 +192,16 @@ class ServiceHealthChecker:
         finally:
             if probe_path is not None:
                 probe_path.unlink(missing_ok=True)
+
+    async def _raw_storage_check(self) -> ServiceCheck:
+        try:
+            return ServiceCheck(
+                name="raw_storage",
+                ok=True,
+                detail=await asyncio.to_thread(self.raw_store.probe),
+            )
+        except Exception as exc:
+            return self._failed_check("raw_storage", exc)
 
     async def _task_count(
         self,

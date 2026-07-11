@@ -1,6 +1,6 @@
 # Books of Time Deployment
 
-Books of Time 是长期运行的应用服务。PostgreSQL 由宿主机或局域网现有实例提供，应用不会启动数据库容器，也不会在正常启动时自动迁移 schema。raw payload、media asset 与加密账号凭据始终写入本地持久目录。登录操作见 [LOGIN](LOGIN.md)，对应仓库路径为 `docs/LOGIN.md`。
+Books of Time 是长期运行的应用服务。PostgreSQL 由宿主机或局域网现有实例提供，应用不会启动数据库容器，也不会在正常启动时自动迁移 schema。media asset 与加密账号凭据始终写入本地持久目录；raw payload 默认写本地文件系统，也可单独切换到已有 MinIO。登录操作见 [LOGIN](LOGIN.md)，对应仓库路径为 `docs/LOGIN.md`。
 
 ## Deployment Contract
 
@@ -72,6 +72,23 @@ docker compose ps
 ```
 
 默认绑定 `${BOT_DATA_DIR}/raw`、`${BOT_DATA_DIR}/media` 和 `${BOT_DATA_DIR}/accounts`。Linux 上应提前创建目录并让容器用户可写；不要把本地 `config/config.yaml` 或账号密钥放进镜像。
+
+### Optional MinIO For Raw Payloads
+
+MinIO 只用于 raw payload，项目不会启动 MinIO 容器，图片仍写入本地 `BOT_MEDIA_DIR`。连接已有 MinIO 时设置：
+
+```text
+BOT_RAW_STORAGE_BACKEND=minio
+BOT_MINIO_ENDPOINT=minio.example.internal:9000
+BOT_MINIO_ACCESS_KEY=...
+BOT_MINIO_SECRET_KEY=...
+BOT_MINIO_BUCKET=books-of-time-raw
+BOT_MINIO_PREFIX=raw
+BOT_MINIO_SECURE=true
+BOT_MINIO_CREATE_BUCKET=false
+```
+
+推荐预先创建 bucket 并授予应用账号最小的 bucket read/write 权限。只有明确允许应用创建 bucket 时才将 `BOT_MINIO_CREATE_BUCKET` 设为 `true`。`service doctor` 会探测实际 raw 后端；切换后，历史 `file://` 记录不会自动迁移，迁移必须连同 PostgreSQL 中的 `storage_uri` 一起规划。
 
 查看状态：
 
@@ -153,7 +170,7 @@ uv run python main.py task list --status failed
 uv run python main.py task retry-failed
 ```
 
-`health` 检查数据库、Alembic revision、本地目录和服务心跳。`status` 展示实例、队列积压、最老待处理任务和活动请求退避。
+`health` 检查数据库、Alembic revision、实际 raw 后端、本地 media 目录和服务/worker 心跳。`status` 展示实例、队列积压、最老待处理任务和活动请求退避。
 
 ## Backup Checklist
 

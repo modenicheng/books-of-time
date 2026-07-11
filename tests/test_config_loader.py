@@ -39,6 +39,14 @@ accounts:
             "BOT_DATABASE_URL": "postgresql+asyncpg://host/books",
             "BOT_RAW_DIR": "/archive/raw",
             "BOT_MEDIA_DIR": "/archive/media",
+            "BOT_RAW_STORAGE_BACKEND": "minio",
+            "BOT_MINIO_ENDPOINT": "minio.internal:9000",
+            "BOT_MINIO_ACCESS_KEY": "access",
+            "BOT_MINIO_SECRET_KEY": "secret",
+            "BOT_MINIO_BUCKET": "books-raw",
+            "BOT_MINIO_PREFIX": "evidence/raw",
+            "BOT_MINIO_SECURE": "false",
+            "BOT_MINIO_CREATE_BUCKET": "true",
             "BOT_INSTANCE_ID": "collector-a",
             "BOT_SERVICE_ROLES": "worker, scheduler,",
             "BOT_SHUTDOWN_GRACE_SECONDS": "45.5",
@@ -54,6 +62,16 @@ accounts:
     assert cfg["database"]["url"] == "postgresql+asyncpg://host/books"
     assert cfg["storage"]["raw_dir"] == "/archive/raw"
     assert cfg["storage"]["media_dir"] == "/archive/media"
+    assert cfg["storage"]["backend"] == "minio"
+    assert cfg["storage"]["minio"] == {
+        "endpoint": "minio.internal:9000",
+        "access_key": "access",
+        "secret_key": "secret",
+        "bucket": "books-raw",
+        "prefix": "evidence/raw",
+        "secure": False,
+        "create_bucket": True,
+    }
     assert cfg["service"]["instance_id"] == "collector-a"
     assert cfg["service"]["roles"] == ["worker", "scheduler"]
     assert cfg["service"]["shutdown_grace_seconds"] == 45.5

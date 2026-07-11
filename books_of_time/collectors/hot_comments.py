@@ -22,7 +22,7 @@ from books_of_time.parsers.comments import (
     ParsedCommentPage,
     parse_hot_comment_page,
 )
-from books_of_time.storage.filesystem import RawPayloadFileStore
+from books_of_time.storage.base import RawPayloadStore
 
 
 class HotCommentsClient(Protocol):
@@ -36,7 +36,7 @@ class HotCommentCollector:
         self,
         *,
         client: HotCommentsClient,
-        raw_store: RawPayloadFileStore,
+        raw_store: RawPayloadStore,
         run_id: str,
         watchlist_policy: WatchlistPolicy | None = None,
     ) -> None:

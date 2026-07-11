@@ -22,7 +22,7 @@ from books_of_time.parsers.comments import (
     ParsedCommentPage,
     parse_comment_replies_page,
 )
-from books_of_time.storage.filesystem import RawPayloadFileStore
+from books_of_time.storage.base import RawPayloadStore
 
 
 class ReplyCommentsClient(Protocol):
@@ -43,7 +43,7 @@ class ReplyCommentCollector:
         self,
         *,
         client: ReplyCommentsClient,
-        raw_store: RawPayloadFileStore,
+        raw_store: RawPayloadStore,
         run_id: str,
         watchlist_policy: WatchlistPolicy | None = None,
     ) -> None:
