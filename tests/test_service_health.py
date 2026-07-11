@@ -79,6 +79,36 @@ async def test_service_health_requires_fresh_running_heartbeat(tmp_path: Path) -
 
 
 @pytest.mark.asyncio
+async def test_service_health_requires_fresh_worker_role(tmp_path: Path) -> None:
+    engine, session_factory, checker = await _build_checker(tmp_path)
+    now = datetime(2026, 7, 10, 2, 30, tzinfo=UTC)
+
+    async with session_factory() as session:
+        repo = ServiceInstanceRepository(session)
+        await repo.register(
+            instance_id="scheduler-only",
+            hostname="collector-host",
+            pid=322,
+            version="0.1.0",
+            roles=["scheduler"],
+            now=now,
+        )
+        await repo.mark_running("scheduler-only", now=now)
+        await session.commit()
+
+    report = await checker.health(now=now + timedelta(seconds=10))
+    service = next(
+        check for check in report.checks if check.name == "service_heartbeat"
+    )
+    worker = next(check for check in report.checks if check.name == "worker_heartbeat")
+
+    assert service.ok is True
+    assert worker.ok is False
+    assert report.ok is False
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_service_doctor_reports_unwritable_storage_without_raising(
     tmp_path: Path,
 ) -> None:

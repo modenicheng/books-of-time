@@ -51,11 +51,15 @@ class ServiceHealthChecker:
         doctor = await self.doctor()
         try:
             async with self.session_factory() as session:
-                is_fresh = await ServiceInstanceRepository(
-                    session
-                ).has_fresh_running_instance(
+                repository = ServiceInstanceRepository(session)
+                is_fresh = await repository.has_fresh_running_instance(
                     now=now,
                     timeout_seconds=self.heartbeat_timeout_seconds,
+                )
+                worker_is_fresh = await repository.has_fresh_running_instance(
+                    now=now,
+                    timeout_seconds=self.heartbeat_timeout_seconds,
+                    role="worker",
                 )
             heartbeat = ServiceCheck(
                 name="service_heartbeat",
@@ -66,9 +70,19 @@ class ServiceHealthChecker:
                     else "no fresh running service instance"
                 ),
             )
+            worker_heartbeat = ServiceCheck(
+                name="worker_heartbeat",
+                ok=worker_is_fresh,
+                detail=(
+                    "fresh running worker instance found"
+                    if worker_is_fresh
+                    else "no fresh running worker instance"
+                ),
+            )
         except Exception as exc:
             heartbeat = self._failed_check("service_heartbeat", exc)
-        return ServiceHealthReport((*doctor.checks, heartbeat))
+            worker_heartbeat = self._failed_check("worker_heartbeat", exc)
+        return ServiceHealthReport((*doctor.checks, heartbeat, worker_heartbeat))
 
     async def status(
         self,

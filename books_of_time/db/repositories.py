@@ -572,18 +572,20 @@ class ServiceInstanceRepository:
         *,
         now: datetime,
         timeout_seconds: float,
+        role: str | None = None,
     ) -> bool:
         cutoff = now - timedelta(seconds=max(timeout_seconds, 0))
-        instance_id = await self.session.scalar(
-            select(ServiceInstance.instance_id)
+        instances = await self.session.scalars(
+            select(ServiceInstance)
             .where(
                 ServiceInstance.status == "running",
                 ServiceInstance.heartbeat_at >= cutoff,
             )
             .order_by(ServiceInstance.heartbeat_at.desc())
-            .limit(1)
         )
-        return instance_id is not None
+        if role is None:
+            return next(iter(instances), None) is not None
+        return any(role in instance.roles for instance in instances)
 
     async def _transition(
         self,
