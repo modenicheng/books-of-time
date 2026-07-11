@@ -42,3 +42,13 @@ uv run python main.py event set-video-status ghost-picture-war BV1xx411c7mD acti
 ```
 
 视频关联停用后不会进入 active-video 分析范围；报告仍可列出这条历史关联并标记 `active=false`。其采集任务、observation、状态事件、媒体和 raw payload 不会删除。
+
+## Windowed Coverage
+
+```bash
+uv run python main.py event coverage ghost-picture-war \
+  --since 2026-07-10T00:00:00+08:00 \
+  --until 2026-07-18T00:00:00+08:00
+```
+
+不传时间参数时查询事件当前全部 coverage；传入时必须同时提供 `--since` 和 `--until`。有界汇总只包含 `finished_at` 位于 `[since, until)` 的采集记录，事件报告始终使用其报告时间窗执行同口径汇总。

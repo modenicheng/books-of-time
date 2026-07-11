@@ -291,7 +291,7 @@
 
 ### P4: Window-Accurate Reports
 
-- [ ] 事件 coverage summary 支持 `since` / `until`，报告的数据覆盖与失败窗口严格限定在报告时间窗内。
+- [x] 事件 coverage summary 支持 `since` / `until`，CLI 和报告均按 `finished_at` 的 `[since, until)` 汇总，窗外失败不会污染报告覆盖结论。
 - [ ] 报告允许按 BVID 和关键词缩小分析范围，并在输出中记录实际筛选条件。
 
 ### P5: Operational Completion
