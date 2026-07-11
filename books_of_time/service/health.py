@@ -12,12 +12,14 @@ from books_of_time.db.migrations import get_current_schema_revision
 from books_of_time.db.models import (
     CollectionCoverageStat,
     CollectionTask,
+    OperationalAlertState,
     RequestBackoffState,
     ServiceInstance,
 )
 from books_of_time.db.repositories import ServiceInstanceRepository
 from books_of_time.domain.enums import TaskStatus
 from books_of_time.service.models import (
+    OperationalAlertSummary,
     RequestFailureWindow,
     ServiceCheck,
     ServiceHealthReport,
@@ -126,6 +128,18 @@ class ServiceHealthChecker:
                 or 0
             )
             request_failures = await self._request_failure_window(session, now=now)
+            alert_rows = list(
+                await session.scalars(
+                    select(OperationalAlertState)
+                    .where(OperationalAlertState.status == "active")
+                    .order_by(
+                        OperationalAlertState.severity.asc(),
+                        OperationalAlertState.last_triggered_at.desc(),
+                        OperationalAlertState.alert_key.asc(),
+                    )
+                    .limit(instance_limit)
+                )
+            )
 
         instances = tuple(
             ServiceInstanceSummary(
@@ -151,6 +165,18 @@ class ServiceHealthChecker:
             oldest_pending_at=_as_utc(oldest_pending_at),
             active_backoffs=active_backoffs,
             request_failures=request_failures,
+            active_alerts=tuple(
+                OperationalAlertSummary(
+                    alert_key=row.alert_key,
+                    alert_type=row.alert_type,
+                    severity=row.severity,
+                    summary=row.summary,
+                    first_triggered_at=_as_utc(row.first_triggered_at),
+                    last_triggered_at=_as_utc(row.last_triggered_at),
+                    occurrence_count=row.occurrence_count,
+                )
+                for row in alert_rows
+            ),
         )
 
     async def _database_check(self) -> ServiceCheck:

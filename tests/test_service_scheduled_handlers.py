@@ -237,6 +237,7 @@ def test_default_scheduled_jobs_include_independent_terminal_job() -> None:
         ScheduledJobKind.UID_DISCOVERY,
         ScheduledJobKind.VIDEO_SNAPSHOT_SWEEP,
         ScheduledJobKind.DAILY_TERMINAL_SNAPSHOT,
+        ScheduledJobKind.OPERATIONAL_ALERT_EVALUATION,
     }
     uid_definition = next(
         definition

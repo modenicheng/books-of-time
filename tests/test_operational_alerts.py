@@ -13,9 +13,14 @@ from books_of_time.db.repositories import (
 )
 from books_of_time.domain.enums import ScheduledJobKind, TaskKind, TaskStatus
 from books_of_time.service.alerts import (
+    AlertEvaluationSummary,
     AlertTransition,
     OperationalAlertEvaluator,
     OperationalAlertPolicy,
+)
+from books_of_time.service.scheduled_jobs import (
+    OperationalAlertScheduleHandler,
+    build_default_scheduled_jobs,
 )
 
 
@@ -146,6 +151,66 @@ def test_operational_alert_policy_validates_thresholds() -> None:
         OperationalAlertPolicy(request_failure_rate=1.1)
     with pytest.raises(ValueError, match="threshold"):
         OperationalAlertPolicy(pending_task_threshold=0)
+
+
+class FakeEvaluator:
+    def __init__(self) -> None:
+        self.calls = []
+
+    async def evaluate(self, session, *, now: datetime) -> AlertEvaluationSummary:
+        self.calls.append((session, now))
+        return AlertEvaluationSummary(4, 1, 0, 1)
+
+
+@pytest.mark.asyncio
+async def test_operational_alert_schedule_handler_delegates_in_job_transaction() -> (
+    None
+):
+    evaluator = FakeEvaluator()
+    handler = OperationalAlertScheduleHandler(evaluator)
+    now = datetime(2026, 7, 11, 8, 0, tzinfo=UTC)
+    session = object()
+
+    await handler.handle(None, session, now=now)
+
+    assert evaluator.calls == [(session, now)]
+
+
+def test_default_schedule_wires_configured_operational_alert_evaluation() -> None:
+    definitions, handlers = build_default_scheduled_jobs(
+        {
+            "operations": {
+                "alerts": {
+                    "enabled": True,
+                    "evaluation_seconds": 45,
+                    "pending_task_threshold": 25,
+                }
+            },
+            "discovery": {"matrix_uids": []},
+        }
+    )
+    definition = next(
+        item
+        for item in definitions
+        if item.job_kind == ScheduledJobKind.OPERATIONAL_ALERT_EVALUATION
+    )
+    handler = handlers[ScheduledJobKind.OPERATIONAL_ALERT_EVALUATION]
+
+    assert definition.job_key == "operational-alert-evaluation"
+    assert definition.schedule_seconds == 45
+    assert isinstance(handler, OperationalAlertScheduleHandler)
+    assert handler.evaluator.policy.pending_task_threshold == 25
+
+    disabled_definitions, disabled_handlers = build_default_scheduled_jobs(
+        {
+            "operations": {"alerts": {"enabled": False}},
+            "discovery": {"matrix_uids": []},
+        }
+    )
+    assert ScheduledJobKind.OPERATIONAL_ALERT_EVALUATION not in {
+        item.job_kind for item in disabled_definitions
+    }
+    assert ScheduledJobKind.OPERATIONAL_ALERT_EVALUATION not in disabled_handlers
 
 
 def _coverage(

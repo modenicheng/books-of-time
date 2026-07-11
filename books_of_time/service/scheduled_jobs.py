@@ -12,6 +12,10 @@ from books_of_time.domain.enums import ScheduledJobKind, TaskKind
 from books_of_time.http.client import RawHttpClient
 from books_of_time.http.rate_limiter import RateLimiter
 from books_of_time.platforms.bilibili.client import BilibiliPlatformClient
+from books_of_time.service.alerts import (
+    OperationalAlertEvaluator,
+    OperationalAlertPolicy,
+)
 from books_of_time.service.coordinator import (
     ScheduledJobDefinition,
     ScheduledJobHandler,
@@ -25,6 +29,27 @@ from books_of_time.task_orchestrator.video_snapshot_scheduler import (
 )
 
 logger = get_logger(__name__)
+
+
+class OperationalAlertScheduleHandler:
+    def __init__(self, evaluator: OperationalAlertEvaluator | None = None) -> None:
+        self.evaluator = evaluator or OperationalAlertEvaluator()
+
+    async def handle(
+        self,
+        job: ScheduledJob,
+        session: AsyncSession,
+        *,
+        now: datetime,
+    ) -> None:
+        summary = await self.evaluator.evaluate(session, now=now)
+        logger.info(
+            "Operational alerts evaluated=%s active=%s resolved=%s notifications=%s",
+            summary.evaluated_count,
+            summary.triggered_count,
+            summary.resolved_count,
+            summary.notification_count,
+        )
 
 
 class UidDiscoveryScheduleHandler:
@@ -182,6 +207,32 @@ def build_default_scheduled_jobs(
         ScheduledJobKind.VIDEO_SNAPSHOT_SWEEP: VideoSnapshotSweepScheduleHandler(),
         ScheduledJobKind.DAILY_TERMINAL_SNAPSHOT: (TerminalSnapshotScheduleHandler()),
     }
+    operations_cfg = cfg.get("operations", {})
+    if not isinstance(operations_cfg, dict):
+        raise ValueError("Configuration section operations must be a mapping")
+    alerts_cfg = operations_cfg.get("alerts", {})
+    if not isinstance(alerts_cfg, dict):
+        raise ValueError("Configuration section operations.alerts must be a mapping")
+    if bool(alerts_cfg.get("enabled", True)):
+        definitions.append(
+            ScheduledJobDefinition(
+                job_key="operational-alert-evaluation",
+                job_kind=ScheduledJobKind.OPERATIONAL_ALERT_EVALUATION,
+                schedule_seconds=max(
+                    int(alerts_cfg.get("evaluation_seconds", 60)),
+                    1,
+                ),
+                priority=70,
+                payload={},
+            )
+        )
+        handlers[ScheduledJobKind.OPERATIONAL_ALERT_EVALUATION] = (
+            OperationalAlertScheduleHandler(
+                OperationalAlertEvaluator(
+                    policy=OperationalAlertPolicy.from_config(alerts_cfg)
+                )
+            )
+        )
     account_cfg = cfg.get("accounts", {})
     if (
         bool(account_cfg.get("enabled", True))

@@ -86,6 +86,19 @@ service:
   request_failure_window_seconds: 3600
   shutdown_grace_seconds: 60
 
+operations:
+  alerts:
+    enabled: true
+    evaluation_seconds: 60
+    worker_heartbeat_timeout_seconds: 90
+    pending_task_threshold: 1000
+    oldest_pending_seconds: 900
+    request_failure_window_seconds: 3600
+    request_failure_min_pages: 20
+    request_failure_rate: 0.25
+    scheduled_job_failure_threshold: 3
+    repeat_notification_seconds: 3600
+
 latest_comments:
   max_scan_seconds: 55
   page_retry_attempts: 3

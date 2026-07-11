@@ -52,6 +52,17 @@ class RequestFailureWindow:
 
 
 @dataclass(frozen=True)
+class OperationalAlertSummary:
+    alert_key: str
+    alert_type: str
+    severity: str
+    summary: str
+    first_triggered_at: datetime
+    last_triggered_at: datetime
+    occurrence_count: int
+
+
+@dataclass(frozen=True)
 class ServiceStatusSnapshot:
     instances: tuple[ServiceInstanceSummary, ...]
     pending_tasks: int
@@ -60,3 +71,4 @@ class ServiceStatusSnapshot:
     oldest_pending_at: datetime | None
     active_backoffs: int
     request_failures: RequestFailureWindow
+    active_alerts: tuple[OperationalAlertSummary, ...]

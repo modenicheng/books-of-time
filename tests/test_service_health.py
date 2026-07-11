@@ -5,7 +5,11 @@ import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from books_of_time.db.base import Base
-from books_of_time.db.models import CollectionCoverageStat, RequestBackoffState
+from books_of_time.db.models import (
+    CollectionCoverageStat,
+    OperationalAlertState,
+    RequestBackoffState,
+)
 from books_of_time.db.repositories import (
     CollectionTaskRepository,
     ServiceInstanceRepository,
@@ -238,6 +242,24 @@ async def test_service_status_summarizes_instances_tasks_and_backoffs(
                 ),
             ]
         )
+        session.add(
+            OperationalAlertState(
+                alert_key="task_backlog",
+                alert_type="task_backlog",
+                severity="warning",
+                status="active",
+                summary="Collection task backlog exceeded its threshold",
+                details={"pending_count": 1},
+                first_triggered_at=now - timedelta(minutes=2),
+                last_evaluated_at=now,
+                last_triggered_at=now,
+                last_notified_at=now,
+                resolved_at=None,
+                occurrence_count=2,
+                created_at=now - timedelta(minutes=2),
+                updated_at=now,
+            )
+        )
         await session.commit()
 
     status = await checker.status(now=now, instance_limit=5)
@@ -254,6 +276,10 @@ async def test_service_status_summarizes_instances_tasks_and_backoffs(
     assert status.request_failures.request_errors == 2
     assert status.request_failures.parse_errors == 1
     assert status.request_failures.request_failure_rate == 0.2
+    assert len(status.active_alerts) == 1
+    assert status.active_alerts[0].alert_key == "task_backlog"
+    assert status.active_alerts[0].severity == "warning"
+    assert status.active_alerts[0].occurrence_count == 2
     await engine.dispose()
 
 

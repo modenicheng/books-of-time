@@ -161,6 +161,7 @@ async def test_run_service_finishes_finite_sqlite_smoke(tmp_path) -> None:
         ScheduledJobKind.VIDEO_SNAPSHOT_SWEEP,
         ScheduledJobKind.DAILY_TERMINAL_SNAPSHOT,
         ScheduledJobKind.ACCOUNT_COOKIE_REFRESH,
+        ScheduledJobKind.OPERATIONAL_ALERT_EVALUATION,
     }
 
 

@@ -928,6 +928,18 @@ async def _show_service_status(cfg: dict, *, limit: int) -> None:
             else None,
             instance.last_error_type,
         )
+    for alert in status.active_alerts:
+        logger.warning(
+            "Operational alert key=%s type=%s severity=%s occurrences=%s "
+            "first_triggered_at=%s last_triggered_at=%s summary=%s",
+            alert.alert_key,
+            alert.alert_type,
+            alert.severity,
+            alert.occurrence_count,
+            alert.first_triggered_at.isoformat(),
+            alert.last_triggered_at.isoformat(),
+            alert.summary,
+        )
 
 
 def _build_service_health_checker(cfg: dict, session_factory) -> ServiceHealthChecker:
