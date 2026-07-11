@@ -122,9 +122,21 @@ def test_event_parser_supports_archive_management_commands() -> None:
     assert videos.limit == 10
     assert videos.all is False
 
-    coverage = cli.build_parser().parse_args(["event", "coverage", "ghost-picture-war"])
+    coverage = cli.build_parser().parse_args(
+        [
+            "event",
+            "coverage",
+            "ghost-picture-war",
+            "--since",
+            "2026-07-10T00:00:00Z",
+            "--until",
+            "2026-07-11T00:00:00Z",
+        ]
+    )
     assert coverage.event_command == "coverage"
     assert coverage.event_reference == "ghost-picture-war"
+    assert coverage.since == "2026-07-10T00:00:00Z"
+    assert coverage.until == "2026-07-11T00:00:00Z"
 
     export = cli.build_parser().parse_args(
         [
@@ -251,7 +263,16 @@ async def test_event_cli_helpers_create_event_and_seed_video(tmp_path) -> None:
     coverage = await cli._show_event_coverage(
         cfg,
         event_reference="ghost-picture-war",
+        since="2026-07-10T00:00:00Z",
+        until="2026-07-11T00:00:00Z",
     )
+    with pytest.raises(ValueError, match="together"):
+        await cli._show_event_coverage(
+            cfg,
+            event_reference="ghost-picture-war",
+            since="2026-07-10T00:00:00Z",
+            until=None,
+        )
     output_path = tmp_path / "exports" / "timeline.jsonl"
     exported = await cli._export_event_timeline(
         cfg,

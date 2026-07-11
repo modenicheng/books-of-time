@@ -267,6 +267,8 @@ def build_parser() -> argparse.ArgumentParser:
     event_video_status.add_argument("status", choices=["active", "inactive"])
     event_coverage = event_sub.add_parser("coverage")
     event_coverage.add_argument("event_reference")
+    event_coverage.add_argument("--since")
+    event_coverage.add_argument("--until")
     event_export = event_sub.add_parser("export-timeline")
     event_export.add_argument("event_reference")
     event_export.add_argument("--output", required=True)
@@ -502,7 +504,12 @@ async def _run(args: argparse.Namespace) -> None:
         return
 
     if args.command == "event" and args.event_command == "coverage":
-        await _show_event_coverage(cfg, event_reference=args.event_reference)
+        await _show_event_coverage(
+            cfg,
+            event_reference=args.event_reference,
+            since=args.since,
+            until=args.until,
+        )
         return
 
     if args.command == "event" and args.event_command == "export-timeline":
@@ -1355,14 +1362,25 @@ async def _show_event_coverage(
     cfg: dict,
     *,
     event_reference: str,
+    since: str | None = None,
+    until: str | None = None,
 ) -> EventCoverageSummary:
+    if (since is None) != (until is None):
+        raise ValueError("Event coverage since and until must be provided together")
+    since_at = _parse_event_datetime(since)
+    until_at = _parse_event_datetime(until)
     session_factory = build_session_factory(cfg)
     async with session_factory() as session:
-        summary = await EventRepository(session).get_coverage_summary(event_reference)
+        summary = await EventRepository(session).get_coverage_summary(
+            event_reference,
+            since=since_at,
+            until=until_at,
+        )
     logger.info(
         "event_coverage event=%s videos=%s rows=%s statuses=%s/%s/%s "
         "pages=%s items=%s raw=%s errors=parse:%s,request:%s "
-        "truncated=%s corrupted=%s first_started_at=%s last_finished_at=%s",
+        "truncated=%s corrupted=%s since=%s until=%s "
+        "first_started_at=%s last_finished_at=%s",
         summary.event_slug,
         _format_ratio(
             summary.videos_with_coverage,
@@ -1384,6 +1402,8 @@ async def _show_event_coverage(
         summary.request_errors,
         summary.truncated_count,
         summary.corrupted_count,
+        since_at.isoformat() if since_at is not None else None,
+        until_at.isoformat() if until_at is not None else None,
         summary.first_started_at.isoformat()
         if summary.first_started_at is not None
         else None,
