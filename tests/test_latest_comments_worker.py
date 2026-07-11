@@ -117,6 +117,56 @@ class ManualClock:
         return value
 
 
+@pytest.mark.parametrize(
+    ("last_scan_status", "last_scan_truncated", "failed_attempts", "expected"),
+    [
+        ("incremental_complete", False, 0, "reached"),
+        ("frontier_missing", False, 0, "missing_after_seen"),
+        ("paused", True, 0, "not_reached"),
+        ("corrupted", True, 3, "unknown_due_to_fetch_error"),
+    ],
+)
+def test_incremental_coverage_distinguishes_frontier_outcomes(
+    tmp_path,
+    last_scan_status: str,
+    last_scan_truncated: bool,
+    failed_attempts: int,
+    expected: str,
+) -> None:
+    collector = LatestCommentCollector(
+        client=FakeLatestClient({}),
+        raw_store=RawPayloadFileStore(tmp_path),
+        run_id="frontier-outcome-test",
+    )
+    state = FrontierState(
+        target_type="video",
+        target_id="BV1abc",
+        frontier_type="latest_comments",
+        frontier_rpid=4001,
+        last_scan_status=last_scan_status,
+        last_scan_truncated=last_scan_truncated,
+        extra={
+            "baseline_status": "baseline_complete",
+            "failed_attempts": failed_attempts,
+        },
+    )
+
+    draft = collector._build_coverage_draft(
+        CollectionTask(
+            kind=TaskKind.FETCH_LATEST_COMMENTS,
+            target_type="video",
+            target_id="BV1abc",
+            payload={},
+        ),
+        state,
+        raw_pages_saved=0,
+        comments_observed=0,
+        raw_payloads_saved=0,
+    )
+
+    assert draft.extra["frontier_outcome"] == expected
+
+
 async def build_worker_with_task(
     tmp_path,
     client,

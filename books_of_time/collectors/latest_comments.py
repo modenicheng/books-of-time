@@ -190,6 +190,7 @@ class LatestCommentCollector:
     ) -> CoverageDraft:
         status = state.last_scan_status or ""
         reason = self._coverage_reason(state)
+        frontier_outcome = self._frontier_outcome(state)
         return CoverageDraft(
             task_kind=TaskKind.FETCH_LATEST_COMMENTS,
             target_type=task.target_type,
@@ -207,8 +208,22 @@ class LatestCommentCollector:
             extra={
                 "baseline_status": state.extra.get("baseline_status"),
                 "last_scan_status": state.last_scan_status,
+                "frontier_outcome": frontier_outcome,
             },
         )
+
+    def _frontier_outcome(self, state: FrontierState) -> str | None:
+        if state.extra.get("baseline_status") != "baseline_complete":
+            return None
+        if state.last_scan_status == "incremental_complete":
+            return "reached"
+        if state.last_scan_status == "frontier_missing":
+            return "missing_after_seen"
+        if int(state.extra.get("failed_attempts") or 0) > 0:
+            return "unknown_due_to_fetch_error"
+        if state.last_scan_status in {"paused", "corrupted"}:
+            return "not_reached"
+        return None
 
     def _coverage_reason(self, state: FrontierState) -> str:
         status = state.last_scan_status
