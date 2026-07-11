@@ -41,9 +41,11 @@ from books_of_time.domain.enums import (
     TaskStatus,
 )
 from books_of_time.domain.events import (
+    EVENT_TARGET_TYPES,
     EventTimelineRow,
     normalize_event_slug,
     normalize_event_target,
+    normalize_event_timezone,
     validate_event_status,
     validate_event_window,
 )
@@ -64,6 +66,15 @@ from books_of_time.parsers.video import (
     ParsedVideoStats,
 )
 from books_of_time.storage.base import StoredRawPayload
+
+_UNSET = object()
+
+
+def _optional_text(value: object) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    return normalized or None
 
 
 class CollectionTaskRepository:
@@ -630,6 +641,7 @@ class EventRepository:
             raise ValueError("Event name cannot be empty")
         validate_event_window(start_at, end_at)
         validate_event_status(status)
+        normalized_timezone = normalize_event_timezone(timezone)
         if await self.session.scalar(
             select(Event.id).where(Event.slug == normalized_slug)
         ):
@@ -645,11 +657,57 @@ class EventRepository:
             status=status,
             start_at=start_at,
             end_at=end_at,
-            timezone=timezone.strip() or "Asia/Shanghai",
+            timezone=normalized_timezone,
             created_at=now,
             updated_at=now,
         )
         self.session.add(event)
+        await self.session.flush()
+        return event
+
+    async def update_event(
+        self,
+        reference: int | str,
+        *,
+        now: datetime,
+        name: str | object = _UNSET,
+        game: str | None | object = _UNSET,
+        description: str | None | object = _UNSET,
+        status: str | object = _UNSET,
+        start_at: datetime | None | object = _UNSET,
+        end_at: datetime | None | object = _UNSET,
+        timezone: str | object = _UNSET,
+    ) -> Event:
+        event = await self.resolve_event(reference)
+        next_name = event.name if name is _UNSET else str(name).strip()
+        if not next_name:
+            raise ValueError("Event name cannot be empty")
+        next_game = event.game if game is _UNSET else _optional_text(game)
+        next_description = (
+            event.description if description is _UNSET else _optional_text(description)
+        )
+        next_status = (
+            event.status if status is _UNSET else validate_event_status(str(status))
+        )
+        next_start = event.start_at if start_at is _UNSET else start_at
+        next_end = event.end_at if end_at is _UNSET else end_at
+        next_timezone = (
+            event.timezone
+            if timezone is _UNSET
+            else normalize_event_timezone(str(timezone))
+        )
+        assert next_start is None or isinstance(next_start, datetime)
+        assert next_end is None or isinstance(next_end, datetime)
+        validate_event_window(next_start, next_end)
+
+        event.name = next_name
+        event.game = next_game
+        event.description = next_description
+        event.status = next_status
+        event.start_at = next_start
+        event.end_at = next_end
+        event.timezone = next_timezone
+        event.updated_at = now
         await self.session.flush()
         return event
 
@@ -755,6 +813,72 @@ class EventRepository:
                 )
         return target
 
+    async def list_targets(
+        self,
+        event_id: int | str,
+        *,
+        active_only: bool = False,
+        target_type: str | None = None,
+        limit: int = 1000,
+    ) -> list[EventTarget]:
+        _validate_limit(limit)
+        if target_type is not None and target_type not in EVENT_TARGET_TYPES:
+            raise ValueError(f"Unsupported event target type: {target_type}")
+        event = await self.resolve_event(event_id)
+        stmt = select(EventTarget).where(EventTarget.event_id == event.id)
+        if active_only:
+            stmt = stmt.where(EventTarget.active.is_(True))
+        if target_type is not None:
+            stmt = stmt.where(EventTarget.target_type == target_type)
+        rows = await self.session.scalars(
+            stmt.order_by(
+                EventTarget.priority.desc(),
+                EventTarget.target_type.asc(),
+                EventTarget.id.asc(),
+            ).limit(limit)
+        )
+        return list(rows)
+
+    async def set_target_active(
+        self,
+        event_id: int | str,
+        target_id: int,
+        *,
+        active: bool,
+        now: datetime,
+    ) -> EventTarget:
+        event = await self.resolve_event(event_id)
+        target = await self.session.scalar(
+            select(EventTarget).where(
+                EventTarget.id == target_id,
+                EventTarget.event_id == event.id,
+            )
+        )
+        if target is None:
+            raise LookupError(f"Event target not found: {target_id}")
+        target.active = active
+        target.updated_at = now
+
+        if target.target_type == "keyword":
+            keywords = await self.session.scalars(
+                select(EventKeyword).where(EventKeyword.source_target_id == target.id)
+            )
+            for keyword in keywords:
+                keyword.active = active
+                keyword.updated_at = now
+        elif target.target_type == "seed_bvid":
+            videos = await self.session.scalars(
+                select(EventVideo).where(
+                    EventVideo.event_id == event.id,
+                    EventVideo.source_target_id == target.id,
+                )
+            )
+            for video in videos:
+                video.active = active
+                video.updated_at = now
+        await self.session.flush()
+        return target
+
     async def attach_video(
         self,
         *,
@@ -815,6 +939,24 @@ class EventRepository:
             )
         )
         return list(rows)
+
+    async def set_video_active(
+        self,
+        event_id: int | str,
+        bvid: str,
+        *,
+        active: bool,
+        now: datetime,
+    ) -> EventVideo:
+        event = await self.resolve_event(event_id)
+        normalized_bvid = normalize_event_target("seed_bvid", bvid)
+        video = await self.session.get(EventVideo, (event.id, normalized_bvid))
+        if video is None:
+            raise LookupError(f"Event video not found: {normalized_bvid}")
+        video.active = active
+        video.updated_at = now
+        await self.session.flush()
+        return video
 
     async def list_active_uid_targets(
         self,

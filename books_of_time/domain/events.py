@@ -4,6 +4,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 EVENT_TARGET_TYPES = frozenset({"uid", "keyword", "seed_bvid", "game"})
 EVENT_STATUSES = frozenset({"planned", "active", "closed", "archived"})
@@ -76,3 +77,14 @@ def validate_event_status(status: str) -> str:
     if status not in EVENT_STATUSES:
         raise ValueError(f"Unsupported event status: {status}")
     return status
+
+
+def normalize_event_timezone(value: str) -> str:
+    normalized = value.strip()
+    if not normalized:
+        raise ValueError("Event timezone cannot be empty")
+    try:
+        ZoneInfo(normalized)
+    except ZoneInfoNotFoundError as exc:
+        raise ValueError(f"Unknown event timezone: {normalized}") from exc
+    return normalized
