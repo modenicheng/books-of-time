@@ -27,6 +27,7 @@ _POST_BASELINE_TABLES = {
     "event_keywords",
     "comment_analysis_flags",
     "request_budget_states",
+    "operational_alert_states",
 }
 
 

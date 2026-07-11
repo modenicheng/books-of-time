@@ -22,7 +22,7 @@ async def test_schema_revision_helpers_read_expected_and_current_head(
     tmp_path: Path,
 ) -> None:
     expected = get_expected_schema_revision()
-    assert expected == "0006_request_budget_states"
+    assert expected == "0007_operational_alert_states"
 
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as connection:
@@ -192,6 +192,28 @@ def test_request_budget_revision_is_static() -> None:
     assert "Base.metadata" not in source
 
 
+def test_operational_alert_revision_is_static_and_extends_job_kind() -> None:
+    revision_path = (
+        Path(__file__).resolve().parents[1]
+        / "alembic"
+        / "versions"
+        / "0007_operational_alert_states.py"
+    )
+    source = revision_path.read_text(encoding="utf-8")
+
+    assert (
+        'down_revision: str | Sequence[str] | None = "0006_request_budget_states"'
+        in source
+    )
+    assert "ADD VALUE IF NOT EXISTS 'operational_alert_evaluation'" in source
+    assert 'op.create_table(\n        "operational_alert_states"' in source
+    assert 'sa.PrimaryKeyConstraint("alert_key")' in source
+    assert 'sa.text("detected_at DESC")' in source
+    assert 'comment="记录创建时间"' in source
+    assert 'comment="记录最后更新时间"' in source
+    assert "Base.metadata" not in source
+
+
 def test_large_time_indexes_compile_as_postgresql_brin() -> None:
     expected = {
         "idx_raw_payloads_captured_brin",
@@ -280,6 +302,7 @@ async def test_adopt_legacy_schema_repairs_known_drift_and_upgrades(
         "event_keywords",
         "comment_analysis_flags",
         "request_budget_states",
+        "operational_alert_states",
     }
     baseline_tables = [
         table

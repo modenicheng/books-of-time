@@ -782,6 +782,42 @@ Index(
 Index("idx_scheduled_jobs_lease", ScheduledJob.lease_until)
 
 
+class OperationalAlertState(TimestampMixin, Base):
+    __tablename__ = "operational_alert_states"
+
+    alert_key: Mapped[str] = mapped_column(Text, primary_key=True)
+    alert_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    severity: Mapped[str] = mapped_column(String(16), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    summary: Mapped[str] = mapped_column(String(500), nullable=False)
+    details: Mapped[dict[str, Any]] = mapped_column(
+        json_dict_type,
+        nullable=False,
+        default=dict,
+    )
+    first_triggered_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    last_evaluated_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    last_triggered_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    last_notified_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    resolved_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    occurrence_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=1,
+    )
+
+
+Index(
+    "idx_operational_alert_states_status_severity",
+    OperationalAlertState.status,
+    OperationalAlertState.severity,
+)
+Index(
+    "idx_operational_alert_states_type",
+    OperationalAlertState.alert_type,
+)
+
+
 class Event(TimestampMixin, Base):
     __tablename__ = "events"
 
