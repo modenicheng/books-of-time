@@ -928,7 +928,15 @@ class EventRepository:
     async def build_timeline(
         self,
         reference: int | str,
+        *,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        max_records: int | None = None,
     ) -> list[EventTimelineRow]:
+        if since is not None and until is not None and until <= since:
+            raise ValueError("until must be after since")
+        if max_records is not None and not 1 <= max_records <= 2_000_000:
+            raise ValueError("max_records must be between 1 and 2000000")
         event = await self.resolve_event(reference)
         event_videos = list(
             await self.session.scalars(
@@ -941,23 +949,33 @@ class EventRepository:
             return []
 
         bvids = [video.bvid for video in event_videos]
-        metrics = list(
-            await self.session.scalars(
-                select(VideoMetricSnapshot).where(VideoMetricSnapshot.bvid.in_(bvids))
-            )
+        metric_stmt = select(VideoMetricSnapshot).where(
+            VideoMetricSnapshot.bvid.in_(bvids)
         )
-        state_events = list(
-            await self.session.scalars(
-                select(CommentStateEvent).where(CommentStateEvent.bvid.in_(bvids))
-            )
+        state_stmt = select(CommentStateEvent).where(CommentStateEvent.bvid.in_(bvids))
+        visibility_stmt = select(CommentVisibilityEvent).where(
+            CommentVisibilityEvent.bvid.in_(bvids)
         )
-        visibility_events = list(
-            await self.session.scalars(
-                select(CommentVisibilityEvent).where(
-                    CommentVisibilityEvent.bvid.in_(bvids)
-                )
+        if since is not None:
+            metric_stmt = metric_stmt.where(VideoMetricSnapshot.captured_at >= since)
+            state_stmt = state_stmt.where(CommentStateEvent.created_at >= since)
+            visibility_stmt = visibility_stmt.where(
+                CommentVisibilityEvent.created_at >= since
             )
-        )
+        if until is not None:
+            metric_stmt = metric_stmt.where(VideoMetricSnapshot.captured_at < until)
+            state_stmt = state_stmt.where(CommentStateEvent.created_at < until)
+            visibility_stmt = visibility_stmt.where(
+                CommentVisibilityEvent.created_at < until
+            )
+        if max_records is not None:
+            query_limit = max_records + 1
+            metric_stmt = metric_stmt.limit(query_limit)
+            state_stmt = state_stmt.limit(query_limit)
+            visibility_stmt = visibility_stmt.limit(query_limit)
+        metrics = list(await self.session.scalars(metric_stmt))
+        state_events = list(await self.session.scalars(state_stmt))
+        visibility_events = list(await self.session.scalars(visibility_stmt))
 
         rows = [
             EventTimelineRow(
@@ -976,6 +994,8 @@ class EventRepository:
                 },
             )
             for video in event_videos
+            if (since is None or video.first_seen_at >= since)
+            and (until is None or video.first_seen_at < until)
         ]
         rows.extend(
             EventTimelineRow(
@@ -1052,6 +1072,10 @@ class EventRepository:
             for visibility_event in visibility_events
         )
         rows.sort(key=lambda row: (row.timestamp, row.record_type, row.source_key))
+        if max_records is not None and len(rows) > max_records:
+            raise ValueError(
+                f"Event timeline exceeds max_records={max_records}; narrow the window"
+            )
         return rows
 
     async def resolve_active_uid_target(

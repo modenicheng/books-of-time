@@ -81,6 +81,19 @@ async def test_event_timeline_is_ordered_and_preserves_evidence_references() -> 
         await session.commit()
 
         rows = await repository.build_timeline("event-a")
+        bounded = await repository.build_timeline(
+            "event-a",
+            since=now + timedelta(minutes=1),
+            until=now + timedelta(minutes=3),
+            max_records=10,
+        )
+        with pytest.raises(ValueError, match="max_records=1"):
+            await repository.build_timeline(
+                "event-a",
+                since=now + timedelta(minutes=1),
+                until=now + timedelta(minutes=3),
+                max_records=1,
+            )
 
     assert [row.record_type for row in rows] == [
         "event_video_associated",
@@ -104,6 +117,10 @@ async def test_event_timeline_is_ordered_and_preserves_evidence_references() -> 
     assert rows[2].data["current_comment_observation_id"] == 302
     assert rows[3].data["missing_reason"] == "missing_after_seen"
     assert rows[3].as_dict()["timestamp"] == "2026-07-10T10:03:00+00:00"
+    assert [row.record_type for row in bounded] == [
+        "video_metric_snapshot",
+        "comment_state_event",
+    ]
     await engine.dispose()
 
 
