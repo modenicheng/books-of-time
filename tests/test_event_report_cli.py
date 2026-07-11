@@ -23,6 +23,10 @@ def test_event_report_cli_parser_exposes_evidence_report_options() -> None:
             "30",
             "--top-n",
             "10",
+            "--bvid",
+            "BV1xx411c7mD",
+            "--keyword",
+            "控评",
             "--output",
             "report.md",
             "--json-output",
@@ -33,6 +37,8 @@ def test_event_report_cli_parser_exposes_evidence_report_options() -> None:
     assert args.event_command == "report"
     assert args.bucket_minutes == 30
     assert args.top_n == 10
+    assert args.bvid == "BV1xx411c7mD"
+    assert args.keyword == "控评"
     assert args.json_output == "report.json"
 
 
@@ -69,6 +75,8 @@ async def test_event_report_cli_writes_markdown_and_structured_json(tmp_path) ->
         template_min_text_chars=8,
         max_videos=100,
         max_records=200_000,
+        bvid=None,
+        keyword=None,
         output_path=markdown_path,
         json_output_path=json_path,
     )
@@ -78,3 +86,4 @@ async def test_event_report_cli_writes_markdown_and_structured_json(tmp_path) ->
     structured = json.loads(json_path.read_text(encoding="utf-8"))
     assert structured["schema_version"] == "event-report-v1"
     assert structured["event"]["slug"] == "event-a"
+    assert structured["filters"] == {"bvid": None, "keyword": None}

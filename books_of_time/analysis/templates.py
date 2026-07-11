@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from difflib import SequenceMatcher
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from books_of_time.db.models import CommentEntity, EventVideo
@@ -81,6 +81,8 @@ class TemplateCandidateAnalyzer:
         min_text_chars: int = 8,
         max_comments: int = 5000,
         max_comparisons: int = 100_000,
+        bvid: str | None = None,
+        keyword: str | None = None,
     ) -> list[TemplateCandidate]:
         since_utc = _aware_utc(since, "since")
         until_utc = _aware_utc(until, "until")
@@ -108,20 +110,34 @@ class TemplateCandidateAnalyzer:
                 .order_by(EventVideo.bvid.asc())
             )
         )
+        if bvid is not None:
+            if bvid not in bvids:
+                raise ValueError(f"Video is not active in event {event.slug}: {bvid}")
+            bvids = [bvid]
         if not bvids:
             return []
 
+        comment_stmt = select(CommentEntity).where(
+            CommentEntity.bvid.in_(bvids),
+            CommentEntity.first_seen_at >= since_utc,
+            CommentEntity.first_seen_at < until_utc,
+            CommentEntity.first_content.is_not(None),
+        )
+        if keyword is not None:
+            normalized_keyword = " ".join(keyword.strip().split()).casefold()
+            if not normalized_keyword:
+                raise ValueError("Template keyword filter cannot be empty")
+            comment_stmt = comment_stmt.where(
+                func.lower(CommentEntity.first_content).contains(
+                    normalized_keyword,
+                    autoescape=True,
+                )
+            )
         comments = list(
             await self.session.scalars(
-                select(CommentEntity)
-                .where(
-                    CommentEntity.bvid.in_(bvids),
-                    CommentEntity.first_seen_at >= since_utc,
-                    CommentEntity.first_seen_at < until_utc,
-                    CommentEntity.first_content.is_not(None),
-                )
-                .order_by(CommentEntity.first_seen_at.asc(), CommentEntity.rpid.asc())
-                .limit(max_comments + 1)
+                comment_stmt.order_by(
+                    CommentEntity.first_seen_at.asc(), CommentEntity.rpid.asc()
+                ).limit(max_comments + 1)
             )
         )
         if len(comments) > max_comments:

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from books_of_time.analysis.hot_turnover import HotCommentTurnoverAnalyzer
@@ -17,12 +17,14 @@ from books_of_time.analysis.templates import (
 from books_of_time.analysis.turning_points import TurningPointAnalyzer
 from books_of_time.db.models import (
     CommentObservation,
+    EventKeyword,
     EventVideo,
     RawPageObservation,
     VideoInfoSnapshot,
     VideoMetricSnapshot,
 )
 from books_of_time.db.repositories import EventRepository
+from books_of_time.domain.events import normalize_event_target
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,12 +39,15 @@ class EventReportOptions:
     template_min_text_chars: int = 8
     max_videos: int = 100
     max_records: int = 5000
+    bvid: str | None = None
+    keyword: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class EventReport:
     generated_at: datetime
     window: dict[str, str]
+    filters: dict[str, str | None]
     event: dict[str, Any]
     coverage: dict[str, Any]
     key_timeline: tuple[dict[str, Any], ...]
@@ -58,6 +63,7 @@ class EventReport:
             "schema_version": "event-report-v1",
             "generated_at": self.generated_at.isoformat(),
             "window": self.window,
+            "filters": self.filters,
             "event": self.event,
             "coverage": self.coverage,
             "key_timeline": list(self.key_timeline),
@@ -75,6 +81,9 @@ class EventReport:
             "",
             "## 事件概述",
             _markdown_json(self.event),
+            "",
+            "## 筛选条件",
+            _markdown_json(self.filters),
             "",
             "## 数据覆盖",
             _markdown_json(self.coverage),
@@ -141,11 +150,27 @@ class EventReportGenerator:
         )
         _check_limit("event videos", event_videos, selected.max_videos)
         active_bvids = [video.bvid for video in event_videos if video.active]
+        selected_bvid = None
+        if selected.bvid is not None:
+            selected_bvid = normalize_event_target("seed_bvid", selected.bvid)
+            if selected_bvid not in active_bvids:
+                raise ValueError(
+                    f"Video is not active in event {event.slug}: {selected_bvid}"
+                )
+            active_bvids = [selected_bvid]
+            event_videos = [
+                video for video in event_videos if video.bvid == selected_bvid
+            ]
+        selected_keyword = await self._resolve_keyword_filter(
+            event.id,
+            selected.keyword,
+        )
         coverage = _coverage_dict(
             await repository.get_coverage_summary(
                 event.id,
                 since=since_utc,
                 until=until_utc,
+                bvids=tuple(active_bvids) if selected_bvid is not None else None,
             )
         )
         coverage["window"] = {
@@ -161,6 +186,7 @@ class EventReportGenerator:
                 since=since_utc,
                 until=until_utc,
                 max_records=selected.max_records,
+                bvid=selected_bvid,
             )
         ]
         turning_points = await TurningPointAnalyzer(self.session).analyze(
@@ -173,6 +199,8 @@ class EventReportGenerator:
             turnover_threshold=selected.turnover_threshold,
             top_n=selected.hot_top_n,
             max_records=selected.max_records,
+            bvid=selected_bvid,
+            keyword=selected_keyword,
         )
         timeline_records.extend(point.as_dict() for point in turning_points)
         timeline_records.sort(key=_timeline_sort_key)
@@ -184,6 +212,7 @@ class EventReportGenerator:
             since_utc,
             until_utc,
             selected.max_records,
+            selected_keyword,
         )
         core_videos = tuple(await self._core_videos(event_videos, until_utc))
         hot_changes = tuple(
@@ -203,6 +232,8 @@ class EventReportGenerator:
                 selected.bucket_seconds,
                 observations,
                 selected.max_records,
+                selected_bvid,
+                selected_keyword,
             )
         )
         template_clusters = tuple(
@@ -211,6 +242,8 @@ class EventReportGenerator:
                 since_utc,
                 until_utc,
                 selected,
+                selected_bvid,
+                selected_keyword,
             )
         )
         report_sections: tuple[Any, ...] = (
@@ -225,6 +258,7 @@ class EventReportGenerator:
         return EventReport(
             generated_at=datetime.now(UTC),
             window={"since": since_utc.isoformat(), "until": until_utc.isoformat()},
+            filters={"bvid": selected_bvid, "keyword": selected_keyword},
             event={
                 "id": event.id,
                 "slug": event.slug,
@@ -246,25 +280,53 @@ class EventReportGenerator:
             evidence_index=evidence_index,
         )
 
+    async def _resolve_keyword_filter(
+        self,
+        event_id: int,
+        keyword: str | None,
+    ) -> str | None:
+        if keyword is None:
+            return None
+        normalized = normalize_event_target("keyword", keyword)
+        exists = await self.session.scalar(
+            select(EventKeyword.id).where(
+                EventKeyword.event_id == event_id,
+                EventKeyword.normalized_keyword == normalized,
+                EventKeyword.active.is_(True),
+            )
+        )
+        if exists is None:
+            raise ValueError(f"Keyword is not active in event: {normalized}")
+        return normalized
+
     async def _observations(
         self,
         bvids: list[str],
         since: datetime,
         until: datetime,
         max_records: int,
+        keyword: str | None,
     ) -> list[CommentObservation]:
         if not bvids:
             return []
+        stmt = select(CommentObservation).where(
+            CommentObservation.bvid.in_(bvids),
+            CommentObservation.captured_at >= since,
+            CommentObservation.captured_at < until,
+        )
+        if keyword is not None:
+            stmt = stmt.where(
+                CommentObservation.content.is_not(None),
+                func.lower(CommentObservation.content).contains(
+                    keyword,
+                    autoescape=True,
+                ),
+            )
         rows = list(
             await self.session.scalars(
-                select(CommentObservation)
-                .where(
-                    CommentObservation.bvid.in_(bvids),
-                    CommentObservation.captured_at >= since,
-                    CommentObservation.captured_at < until,
-                )
-                .order_by(CommentObservation.captured_at.asc(), CommentObservation.id)
-                .limit(max_records + 1)
+                stmt.order_by(
+                    CommentObservation.captured_at.asc(), CommentObservation.id
+                ).limit(max_records + 1)
             )
         )
         _check_limit("comment observations", rows, max_records)
@@ -395,12 +457,16 @@ class EventReportGenerator:
         bucket_seconds: int,
         observations: list[CommentObservation],
         max_records: int,
+        bvid: str | None,
+        keyword: str | None,
     ) -> list[dict[str, Any]]:
         points = await KeywordTrendAnalyzer(self.session).analyze(
             event_reference=event_id,
             since=since,
             until=until,
             bucket_seconds=bucket_seconds,
+            bvid=bvid,
+            keyword=keyword,
         )
         _check_limit("keyword trends", points, max_records)
         records: list[dict[str, Any]] = []
@@ -429,6 +495,8 @@ class EventReportGenerator:
         since: datetime,
         until: datetime,
         options: EventReportOptions,
+        bvid: str | None,
+        keyword: str | None,
     ) -> list[dict[str, Any]]:
         candidates = await TemplateCandidateAnalyzer(self.session).analyze(
             event_reference=event_id,
@@ -438,6 +506,8 @@ class EventReportGenerator:
             min_similarity=options.template_min_similarity,
             min_text_chars=options.template_min_text_chars,
             max_comments=max(2, min(options.max_records, 50_000)),
+            bvid=bvid,
+            keyword=keyword,
         )
         _check_limit("template candidates", candidates, options.max_records)
         return _cluster_candidates(candidates)

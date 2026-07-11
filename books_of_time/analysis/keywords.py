@@ -93,6 +93,7 @@ class KeywordTrendAnalyzer:
         until: datetime,
         bucket_seconds: int,
         bvid: str | None = None,
+        keyword: str | None = None,
     ) -> list[KeywordTrendPoint]:
         since_utc = _require_aware(since, name="since").astimezone(UTC)
         until_utc = _require_aware(until, name="until").astimezone(UTC)
@@ -138,6 +139,17 @@ class KeywordTrendAnalyzer:
                 )
             )
         )
+        if keyword is not None:
+            normalized_keyword = " ".join(keyword.strip().split()).casefold()
+            keywords = [
+                item
+                for item in keywords
+                if item.normalized_keyword == normalized_keyword
+            ]
+            if not keywords:
+                raise ValueError(
+                    f"Keyword is not active in event {event.slug}: {normalized_keyword}"
+                )
         if not keywords:
             return []
 

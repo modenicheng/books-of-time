@@ -983,6 +983,7 @@ class EventRepository:
         *,
         since: datetime | None = None,
         until: datetime | None = None,
+        bvids: tuple[str, ...] | None = None,
     ) -> EventCoverageSummary:
         if since is not None and until is not None and until <= since:
             raise ValueError("until must be after since")
@@ -991,6 +992,8 @@ class EventRepository:
             EventVideo.event_id == event.id,
             EventVideo.active.is_(True),
         )
+        if bvids is not None:
+            active_bvids = active_bvids.where(EventVideo.bvid.in_(bvids))
         active_video_count = int(
             await self.session.scalar(
                 select(func.count()).select_from(active_bvids.subquery())
@@ -1074,18 +1077,18 @@ class EventRepository:
         since: datetime | None = None,
         until: datetime | None = None,
         max_records: int | None = None,
+        bvid: str | None = None,
     ) -> list[EventTimelineRow]:
         if since is not None and until is not None and until <= since:
             raise ValueError("until must be after since")
         if max_records is not None and not 1 <= max_records <= 2_000_000:
             raise ValueError("max_records must be between 1 and 2000000")
         event = await self.resolve_event(reference)
+        video_stmt = select(EventVideo).where(EventVideo.event_id == event.id)
+        if bvid is not None:
+            video_stmt = video_stmt.where(EventVideo.bvid == bvid)
         event_videos = list(
-            await self.session.scalars(
-                select(EventVideo)
-                .where(EventVideo.event_id == event.id)
-                .order_by(EventVideo.bvid.asc())
-            )
+            await self.session.scalars(video_stmt.order_by(EventVideo.bvid.asc()))
         )
         if not event_videos:
             return []

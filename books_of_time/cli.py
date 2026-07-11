@@ -348,6 +348,8 @@ def build_parser() -> argparse.ArgumentParser:
     event_report.add_argument("--template-min-text-chars", type=int, default=8)
     event_report.add_argument("--max-videos", type=int, default=100)
     event_report.add_argument("--max-records", type=int, default=5000)
+    event_report.add_argument("--bvid")
+    event_report.add_argument("--keyword")
     event_report.add_argument("--output", required=True)
     event_report.add_argument("--json-output")
 
@@ -638,6 +640,8 @@ async def _run(args: argparse.Namespace) -> None:
             template_min_text_chars=args.template_min_text_chars,
             max_videos=args.max_videos,
             max_records=args.max_records,
+            bvid=args.bvid,
+            keyword=args.keyword,
             output_path=Path(args.output),
             json_output_path=(
                 Path(args.json_output) if args.json_output is not None else None
@@ -1750,6 +1754,8 @@ async def _export_event_report(
     template_min_text_chars: int,
     max_videos: int,
     max_records: int,
+    bvid: str | None,
+    keyword: str | None,
     output_path: Path,
     json_output_path: Path | None,
 ) -> EventReport:
@@ -1774,6 +1780,8 @@ async def _export_event_report(
                 template_min_text_chars=template_min_text_chars,
                 max_videos=max_videos,
                 max_records=max_records,
+                bvid=bvid,
+                keyword=keyword,
             ),
         )
     _write_text_atomic(output_path, report.render_markdown())

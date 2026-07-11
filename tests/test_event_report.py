@@ -37,6 +37,20 @@ async def test_event_report_renders_all_sections_and_honest_empty_limits() -> No
             since=start,
             until=start + timedelta(hours=2),
         )
+        with pytest.raises(ValueError, match="not active"):
+            await EventReportGenerator(session).generate(
+                event_reference="empty-event",
+                since=start,
+                until=start + timedelta(hours=2),
+                options=EventReportOptions(bvid="BV1xx411c7mD"),
+            )
+        with pytest.raises(ValueError, match="Keyword is not active"):
+            await EventReportGenerator(session).generate(
+                event_reference="empty-event",
+                since=start,
+                until=start + timedelta(hours=2),
+                options=EventReportOptions(keyword="不存在"),
+            )
 
     assert report.event["name"] == "空事件"
     assert report.coverage["active_video_count"] == 0
@@ -84,6 +98,12 @@ async def test_event_report_preserves_raw_evidence_across_summary_sections() -> 
             event_id=event.id,
             target_type="keyword",
             target_value="控评",
+            now=start,
+        )
+        await repository.add_target(
+            event_id=event.id,
+            target_type="keyword",
+            target_value="删评",
             now=start,
         )
         for bvid in (left_bvid, right_bvid):
@@ -182,6 +202,19 @@ async def test_event_report_preserves_raw_evidence_across_summary_sections() -> 
                 hot_top_n=1,
             ),
         )
+        filtered = await EventReportGenerator(session).generate(
+            event_reference=event.id,
+            since=start,
+            until=start + timedelta(hours=2),
+            options=EventReportOptions(
+                bucket_seconds=3600,
+                template_min_similarity=0.9,
+                template_min_text_chars=8,
+                hot_top_n=1,
+                bvid=left_bvid,
+                keyword="控评",
+            ),
+        )
 
     assert report.coverage["coverage_row_count"] == 1
     assert report.coverage["video_coverage_ratio"] == 0.5
@@ -190,8 +223,10 @@ async def test_event_report_preserves_raw_evidence_across_summary_sections() -> 
     assert report.core_videos[0]["title"] == "核心视频"
     assert report.core_videos[0]["info_raw_payload_id"] == 801
     assert report.hot_comment_changes[0]["current_raw_payload_id"] == 902
-    assert report.keyword_trends[0]["keyword"] == "控评"
-    assert report.keyword_trends[0]["raw_payload_ids"] == [1001, 1002]
+    control_trend = next(
+        row for row in report.keyword_trends if row["keyword"] == "控评"
+    )
+    assert control_trend["raw_payload_ids"] == [1001, 1002]
     assert report.template_clusters[0]["member_rpids"] == [1001, 1002]
     assert report.template_clusters[0]["raw_payload_ids"] == [1001, 1002]
     evidence = {(row["kind"], row["id"]) for row in report.evidence_index}
@@ -203,6 +238,17 @@ async def test_event_report_preserves_raw_evidence_across_summary_sections() -> 
     assert "核心视频" in markdown
     assert "raw_payload:801" in markdown
     assert "candidate_only_not_proof_of_coordination" in markdown
+    assert filtered.filters == {"bvid": left_bvid, "keyword": "控评"}
+    assert filtered.coverage["active_video_count"] == 1
+    assert filtered.coverage["video_coverage_ratio"] == 1
+    assert [video["bvid"] for video in filtered.core_videos] == [left_bvid]
+    assert {row["keyword"] for row in filtered.keyword_trends} == {"控评"}
+    assert filtered.template_clusters == ()
+    assert all(row.get("bvid", left_bvid) == left_bvid for row in filtered.key_timeline)
+    assert filtered.as_dict()["filters"] == {
+        "bvid": left_bvid,
+        "keyword": "控评",
+    }
     await engine.dispose()
 
 

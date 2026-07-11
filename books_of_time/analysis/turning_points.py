@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 from itertools import pairwise
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from books_of_time.analysis.hot_turnover import HotCommentTurnoverAnalyzer
@@ -64,6 +64,8 @@ class TurningPointAnalyzer:
         turnover_threshold: float = 0.5,
         top_n: int = 20,
         max_records: int = 200_000,
+        bvid: str | None = None,
+        keyword: str | None = None,
     ) -> list[TurningPointSignal]:
         since_utc = _aware_utc(since, "since")
         until_utc = _aware_utc(until, "until")
@@ -96,35 +98,56 @@ class TurningPointAnalyzer:
                 .order_by(EventVideo.bvid.asc())
             )
         )
+        if bvid is not None:
+            if bvid not in bvids:
+                raise ValueError(f"Video is not active in event {event.slug}: {bvid}")
+            bvids = [bvid]
         if not bvids:
             return []
 
+        normalized_keyword = None
+        if keyword is not None:
+            normalized_keyword = " ".join(keyword.strip().split()).casefold()
+            if not normalized_keyword:
+                raise ValueError("Turning point keyword filter cannot be empty")
+        entity_stmt = select(CommentEntity).where(
+            CommentEntity.bvid.in_(bvids),
+            CommentEntity.first_seen_at >= since_utc,
+            CommentEntity.first_seen_at < until_utc,
+        )
+        observation_stmt = select(CommentObservation).where(
+            CommentObservation.bvid.in_(bvids),
+            CommentObservation.captured_at >= since_utc,
+            CommentObservation.captured_at < until_utc,
+            CommentObservation.content.is_not(None),
+        )
+        if normalized_keyword is not None:
+            entity_stmt = entity_stmt.where(
+                CommentEntity.first_content.is_not(None),
+                func.lower(CommentEntity.first_content).contains(
+                    normalized_keyword,
+                    autoescape=True,
+                ),
+            )
+            observation_stmt = observation_stmt.where(
+                func.lower(CommentObservation.content).contains(
+                    normalized_keyword,
+                    autoescape=True,
+                )
+            )
         entities = list(
             await self.session.scalars(
-                select(CommentEntity)
-                .where(
-                    CommentEntity.bvid.in_(bvids),
-                    CommentEntity.first_seen_at >= since_utc,
-                    CommentEntity.first_seen_at < until_utc,
-                )
-                .order_by(CommentEntity.first_seen_at.asc(), CommentEntity.rpid.asc())
-                .limit(max_records + 1)
+                entity_stmt.order_by(
+                    CommentEntity.first_seen_at.asc(), CommentEntity.rpid.asc()
+                ).limit(max_records + 1)
             )
         )
         observations = list(
             await self.session.scalars(
-                select(CommentObservation)
-                .where(
-                    CommentObservation.bvid.in_(bvids),
-                    CommentObservation.captured_at >= since_utc,
-                    CommentObservation.captured_at < until_utc,
-                    CommentObservation.content.is_not(None),
-                )
-                .order_by(
+                observation_stmt.order_by(
                     CommentObservation.captured_at.asc(),
                     CommentObservation.id.asc(),
-                )
-                .limit(max_records + 1)
+                ).limit(max_records + 1)
             )
         )
         if len(entities) > max_records or len(observations) > max_records:
@@ -151,6 +174,7 @@ class TurningPointAnalyzer:
                 observations=observations,
                 spike_multiplier=spike_multiplier,
                 min_count=min_count,
+                keyword=normalized_keyword,
             )
         )
         signals.extend(
@@ -240,6 +264,7 @@ class TurningPointAnalyzer:
         observations: list[CommentObservation],
         spike_multiplier: float,
         min_count: int,
+        keyword: str | None,
     ) -> list[TurningPointSignal]:
         keywords = _latest_keywords(
             list(
@@ -257,6 +282,10 @@ class TurningPointAnalyzer:
                 )
             )
         )
+        if keyword is not None:
+            keywords = [item for item in keywords if item.normalized_keyword == keyword]
+            if not keywords:
+                raise ValueError(f"Keyword is not active in event: {keyword}")
         matches: dict[tuple[int, datetime], list[CommentObservation]] = defaultdict(
             list
         )
