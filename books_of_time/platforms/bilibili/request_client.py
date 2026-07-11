@@ -18,7 +18,7 @@ from bilibili_api.utils.network import (
 from books_of_time.domain.enums import BilibiliRequestType
 from books_of_time.http.client import FetchResult, RawHttpClient
 from books_of_time.http.errors import RequestFailure
-from books_of_time.http.rate_limiter import TokenBucketRateLimiter
+from books_of_time.http.rate_limiter import RateLimiter, acquire_rate_limits
 from books_of_time.platforms.bilibili.requests import classify_bilibili_request
 
 CLIENT_NAME = "books_of_time"
@@ -27,7 +27,7 @@ CLIENT_NAME = "books_of_time"
 @dataclass
 class BiliAPIRequestContext:
     http_client: RawHttpClient
-    rate_limiter: TokenBucketRateLimiter | None = None
+    rate_limiter: RateLimiter | None = None
     use_managed_cookies: bool = True
     captured_results: list[FetchResult] = field(default_factory=list)
 
@@ -60,7 +60,7 @@ def ensure_books_of_time_client_registered() -> None:
 def capture_bili_api_requests(
     *,
     http_client: RawHttpClient,
-    rate_limiter: TokenBucketRateLimiter | None,
+    rate_limiter: RateLimiter | None,
     use_managed_cookies: bool = True,
 ) -> Iterator[BiliAPIRequestContext]:
     ensure_books_of_time_client_registered()
@@ -193,11 +193,10 @@ class BooksOfTimeBiliAPIClient(BiliAPIClient):
 
 
 async def _acquire(
-    rate_limiter: TokenBucketRateLimiter | None,
+    rate_limiter: RateLimiter | None,
     request_type: BilibiliRequestType,
 ) -> None:
-    if rate_limiter is None:
-        return
-    await rate_limiter.acquire("global")
-    await rate_limiter.acquire("host:bilibili")
-    await rate_limiter.acquire(request_type.value)
+    await acquire_rate_limits(
+        rate_limiter,
+        ("global", "host:bilibili", request_type.value),
+    )

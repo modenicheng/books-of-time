@@ -267,7 +267,7 @@
 - [x] 评估 TimescaleDB：当前不引入，先使用原生分区/BRIN/显式聚合，并记录行数、查询 p95、CPU 与 retention 复评阈值。
 - [x] 评估 ClickHouse 分析副本：当前不引入；分析扫描、资源隔离或并发达到阈值后仅以 CDC 构建可重建只读副本。
 - [x] 评估 OpenSearch / Meilisearch：当前先用 PostgreSQL FTS/`pg_trgm`；出现用户搜索 SLA、容错或独立扩缩容需求后复评。
-- [ ] 在数据库级或独立协调层实现跨进程全局请求预算后，再拆分 scheduler/worker 多容器并支持 worker 副本。
+- [~] 已实现 PostgreSQL 行锁协调的跨进程 global/host/request-type 原子请求预算；待完成 scheduler/worker 多容器拆分与 worker 副本部署验收。
 
 ## Near-term Sprint
 

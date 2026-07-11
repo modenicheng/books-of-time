@@ -10,7 +10,7 @@ from books_of_time.db.models import ScheduledJob
 from books_of_time.db.repositories import CollectionTaskRepository, EventRepository
 from books_of_time.domain.enums import ScheduledJobKind, TaskKind
 from books_of_time.http.client import RawHttpClient
-from books_of_time.http.rate_limiter import TokenBucketRateLimiter
+from books_of_time.http.rate_limiter import RateLimiter
 from books_of_time.platforms.bilibili.client import BilibiliPlatformClient
 from books_of_time.service.coordinator import (
     ScheduledJobDefinition,
@@ -111,7 +111,7 @@ class AccountCookieRefreshScheduleHandler:
         *,
         manager: AccountManager,
         http_client: RawHttpClient,
-        rate_limiter: TokenBucketRateLimiter | None,
+        rate_limiter: RateLimiter | None,
         account_id: str,
     ) -> None:
         self.manager = manager

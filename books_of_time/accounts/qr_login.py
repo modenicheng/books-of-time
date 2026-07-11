@@ -11,7 +11,7 @@ from bilibili_api import login_v2
 from books_of_time.accounts.manager import AccountManager
 from books_of_time.accounts.models import CredentialSnapshot
 from books_of_time.http.client import RawHttpClient
-from books_of_time.http.rate_limiter import TokenBucketRateLimiter
+from books_of_time.http.rate_limiter import RateLimiter
 from books_of_time.platforms.bilibili.request_client import (
     capture_bili_api_requests,
 )
@@ -45,7 +45,7 @@ class QrLoginFlow:
         *,
         manager: AccountManager,
         http_client: RawHttpClient,
-        rate_limiter: TokenBucketRateLimiter | None,
+        rate_limiter: RateLimiter | None,
         qr_factory: Callable[[], QrLoginClient] = login_v2.QrCodeLogin,
         output: Callable[[str], None] = print,
         sleep: Callable[[float], Awaitable[None] | None] = asyncio.sleep,

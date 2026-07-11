@@ -25,6 +25,10 @@ postgresql+asyncpg://USER:PASSWORD@HOST:5432/books_of_time
 
 数据库必须允许应用所在主机访问。Docker 连接宿主机 PostgreSQL 时，需要让 PostgreSQL 监听 Docker bridge 可达地址，并在 `pg_hba.conf` 中仅允许实际 bridge 网段和目标用户/数据库。不要把数据库无条件开放到公网。
 
+服务连接 PostgreSQL 时，请求限流状态保存在 `request_budget_states`。同一数据库上的 scheduler、worker 和 worker 副本会在一个事务中同时保留 `global`、host 与 request type 三层令牌，因此共享同一请求预算；任一层额度不足都不会部分消耗其他层。各实例的 `rate_limit` 配置必须一致，配置漂移会令请求明确失败，避免静默扩大平台请求量。
+
+SQLite 仅用于 Windows 开发和单进程测试，继续使用进程内 token bucket，不提供跨进程预算保证。二维码登录是独立的一次性管理命令，也不依赖数据库预算表。
+
 ### New Database
 
 对空数据库运行下列任一入口，两者都会执行 Alembic `upgrade head`：

@@ -13,7 +13,7 @@ from books_of_time.db.repositories import RawPayloadRepository
 from books_of_time.domain.enums import BilibiliRequestType, TaskKind
 from books_of_time.http.client import RawHttpClient
 from books_of_time.http.errors import RequestFailure
-from books_of_time.http.rate_limiter import TokenBucketRateLimiter
+from books_of_time.http.rate_limiter import RateLimiter, acquire_rate_limits
 from books_of_time.media.hasher import MediaHasher
 from books_of_time.media.storage import MediaStore
 from books_of_time.storage.base import RawPayloadStore
@@ -44,7 +44,7 @@ class MediaDownloader:
         self,
         *,
         http_client: RawHttpClient,
-        rate_limiter: TokenBucketRateLimiter | None,
+        rate_limiter: RateLimiter | None,
         media_store: MediaStore,
         raw_store: RawPayloadStore,
         run_id: str,
@@ -151,11 +151,14 @@ class MediaDownloader:
         await session.flush()
 
     async def _acquire_rate_limits(self) -> None:
-        if self.rate_limiter is None:
-            return
-        await self.rate_limiter.acquire("global")
-        await self.rate_limiter.acquire("host:bilibili")
-        await self.rate_limiter.acquire(BilibiliRequestType.MEDIA_IMAGE.value)
+        await acquire_rate_limits(
+            self.rate_limiter,
+            (
+                "global",
+                "host:bilibili",
+                BilibiliRequestType.MEDIA_IMAGE.value,
+            ),
+        )
 
 
 def _content_type(headers: dict[str, str] | None) -> str | None:

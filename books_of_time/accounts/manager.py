@@ -17,7 +17,7 @@ from books_of_time.accounts.storage import EncryptedFileCredentialStore
 
 if TYPE_CHECKING:
     from books_of_time.http.client import RawHttpClient
-    from books_of_time.http.rate_limiter import TokenBucketRateLimiter
+    from books_of_time.http.rate_limiter import RateLimiter
 
 _REQUIRED_LOGIN_COOKIES = frozenset(
     {"SESSDATA", "bili_jct", "DedeUserID", "ac_time_value"}
@@ -74,7 +74,7 @@ class AccountManager:
         self,
         *,
         http_client: RawHttpClient,
-        rate_limiter: TokenBucketRateLimiter | None,
+        rate_limiter: RateLimiter | None,
         now: datetime,
         account_id: str | None = None,
     ) -> AccountRefreshResult:

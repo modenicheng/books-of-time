@@ -698,6 +698,18 @@ Index(
 )
 
 
+class RequestBudgetState(Base):
+    __tablename__ = "request_budget_states"
+
+    budget_key: Mapped[str] = mapped_column(Text, primary_key=True)
+    tokens: Mapped[float] = mapped_column(Float, nullable=False)
+    refill_rate: Mapped[float] = mapped_column(Float, nullable=False)
+    burst: Mapped[int] = mapped_column(Integer, nullable=False)
+    last_refill_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+
+
 class ServiceInstance(TimestampMixin, Base):
     __tablename__ = "service_instances"
 

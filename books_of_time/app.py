@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -21,7 +22,12 @@ from books_of_time.collectors.video_stats import VideoStatsCollector
 from books_of_time.domain.enums import TaskKind
 from books_of_time.domain.watchlist import WatchlistPolicy
 from books_of_time.http.client import RawHttpClient
-from books_of_time.http.rate_limiter import RateLimitRule, TokenBucketRateLimiter
+from books_of_time.http.rate_limiter import (
+    DatabaseTokenBucketRateLimiter,
+    RateLimiter,
+    RateLimitRule,
+    TokenBucketRateLimiter,
+)
 from books_of_time.media.downloader import MediaAssetCollector, MediaDownloader
 from books_of_time.media.similarity import MediaSimilarityCollector
 from books_of_time.media.storage import MediaStore
@@ -55,15 +61,33 @@ def build_session_factory(
     return async_sessionmaker(effective_engine, expire_on_commit=False)
 
 
-def build_rate_limiter(cfg: dict[str, Any]) -> TokenBucketRateLimiter:
+def build_rate_limiter(
+    cfg: dict[str, Any],
+    *,
+    distributed: bool = True,
+    session_factory: async_sessionmaker[AsyncSession] | None = None,
+) -> RateLimiter:
     rules = {
         key: RateLimitRule(rps=float(value["rps"]), burst=int(value["burst"]))
         for key, value in cfg.get("rate_limit", {}).items()
     }
+    database_url = str(cfg.get("database", {}).get("url", ""))
+    if (
+        distributed
+        and database_url
+        and make_url(database_url).get_backend_name() == "postgresql"
+    ):
+        factory = session_factory or build_session_factory(cfg)
+        return DatabaseTokenBucketRateLimiter(factory, rules)
     return TokenBucketRateLimiter(rules)
 
 
-def build_bilibili_client(cfg: dict[str, Any]) -> BilibiliPlatformClient:
+def build_bilibili_client(
+    cfg: dict[str, Any],
+    *,
+    distributed_rate_limit: bool = True,
+    session_factory: async_sessionmaker[AsyncSession] | None = None,
+) -> BilibiliPlatformClient:
     http_cfg = cfg.get("http", {})
     cookie_provider = build_cookie_provider(cfg)
     return BilibiliPlatformClient(
@@ -74,7 +98,11 @@ def build_bilibili_client(cfg: dict[str, Any]) -> BilibiliPlatformClient:
             ),
             cookie_provider=cookie_provider,
         ),
-        rate_limiter=build_rate_limiter(cfg),
+        rate_limiter=build_rate_limiter(
+            cfg,
+            distributed=distributed_rate_limit,
+            session_factory=session_factory,
+        ),
     )
 
 
@@ -121,7 +149,10 @@ def build_worker(
     client: BilibiliPlatformClient | None = None,
 ) -> Worker:
     effective_session_factory = session_factory or build_session_factory(cfg)
-    effective_client = client or build_bilibili_client(cfg)
+    effective_client = client or build_bilibili_client(
+        cfg,
+        session_factory=effective_session_factory,
+    )
     storage_cfg = cfg.get("storage", {})
     media_dir = Path(storage_cfg.get("media_dir", "./data/media"))
     raw_store = build_raw_payload_store(cfg)
@@ -197,7 +228,10 @@ def build_service_coordinator(
     instance_id: str,
     client: BilibiliPlatformClient | None = None,
 ) -> ScheduledJobCoordinator:
-    effective_client = client or build_bilibili_client(cfg)
+    effective_client = client or build_bilibili_client(
+        cfg,
+        session_factory=session_factory,
+    )
     definitions, handlers = build_default_scheduled_jobs(
         cfg,
         account_manager=build_account_manager(cfg),

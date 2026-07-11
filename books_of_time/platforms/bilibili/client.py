@@ -5,7 +5,7 @@ from bilibili_api.user import VideoOrder
 
 from books_of_time.domain.enums import BilibiliRequestType
 from books_of_time.http.client import FetchResult, RawHttpClient
-from books_of_time.http.rate_limiter import TokenBucketRateLimiter
+from books_of_time.http.rate_limiter import RateLimiter
 from books_of_time.platforms.bilibili.request_client import capture_bili_api_requests
 
 
@@ -14,7 +14,7 @@ class BilibiliPlatformClient:
         self,
         *,
         http_client: RawHttpClient,
-        rate_limiter: TokenBucketRateLimiter | None = None,
+        rate_limiter: RateLimiter | None = None,
     ) -> None:
         self.http_client = http_client
         self.rate_limiter = rate_limiter

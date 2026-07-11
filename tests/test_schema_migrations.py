@@ -22,7 +22,7 @@ async def test_schema_revision_helpers_read_expected_and_current_head(
     tmp_path: Path,
 ) -> None:
     expected = get_expected_schema_revision()
-    assert expected == "0005_brin_time_indexes"
+    assert expected == "0006_request_budget_states"
 
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as connection:
@@ -175,6 +175,23 @@ def test_brin_time_index_revision_is_postgresql_only_and_static() -> None:
     assert "Base.metadata" not in source
 
 
+def test_request_budget_revision_is_static() -> None:
+    revision_path = (
+        Path(__file__).resolve().parents[1]
+        / "alembic"
+        / "versions"
+        / "0006_request_budget_states.py"
+    )
+    source = revision_path.read_text(encoding="utf-8")
+
+    assert (
+        'down_revision: str | Sequence[str] | None = "0005_brin_time_indexes"' in source
+    )
+    assert 'op.create_table(\n        "request_budget_states"' in source
+    assert 'sa.PrimaryKeyConstraint("budget_key")' in source
+    assert "Base.metadata" not in source
+
+
 def test_large_time_indexes_compile_as_postgresql_brin() -> None:
     expected = {
         "idx_raw_payloads_captured_brin",
@@ -262,6 +279,7 @@ async def test_adopt_legacy_schema_repairs_known_drift_and_upgrades(
         "event_videos",
         "event_keywords",
         "comment_analysis_flags",
+        "request_budget_states",
     }
     baseline_tables = [
         table

@@ -26,6 +26,7 @@ _POST_BASELINE_TABLES = {
     "event_videos",
     "event_keywords",
     "comment_analysis_flags",
+    "request_budget_states",
 }
 
 

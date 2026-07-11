@@ -707,7 +707,7 @@ async def _run_service(
         await engine.dispose()
         raise RuntimeError("Service startup checks failed")
 
-    client = build_bilibili_client(cfg)
+    client = build_bilibili_client(cfg, session_factory=session_factory)
     instance_prefix = str(service_cfg.get("instance_id") or socket.gethostname())
     instance_id = f"{instance_prefix}-{os.getpid()}-{uuid4().hex[:8]}"
     run_id = f"service-{datetime.now(UTC):%Y%m%dT%H%M%SZ}-{uuid4().hex[:8]}"
@@ -946,7 +946,7 @@ async def _login_qr(
     account_id: str,
     timeout_seconds: float,
 ) -> CredentialSnapshot:
-    client = build_bilibili_client(cfg)
+    client = build_bilibili_client(cfg, distributed_rate_limit=False)
     return await QrLoginFlow(
         manager=build_account_manager(cfg),
         http_client=client.http_client,
