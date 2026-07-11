@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from books_of_time.db.migrations import get_current_schema_revision
 from books_of_time.db.models import (
+    CollectionCoverageStat,
     CollectionTask,
     RequestBackoffState,
     ServiceInstance,
@@ -17,6 +18,7 @@ from books_of_time.db.models import (
 from books_of_time.db.repositories import ServiceInstanceRepository
 from books_of_time.domain.enums import TaskStatus
 from books_of_time.service.models import (
+    RequestFailureWindow,
     ServiceCheck,
     ServiceHealthReport,
     ServiceInstanceSummary,
@@ -35,6 +37,7 @@ class ServiceHealthChecker:
         raw_dir: str | Path | None = None,
         raw_store: RawPayloadStore | None = None,
         heartbeat_timeout_seconds: float = 30,
+        request_failure_window_seconds: int = 3600,
         expected_schema_revision: str | None = None,
     ) -> None:
         self.session_factory = session_factory
@@ -43,6 +46,11 @@ class ServiceHealthChecker:
         self.raw_store = raw_store or RawPayloadFileStore(raw_dir)
         self.media_dir = Path(media_dir)
         self.heartbeat_timeout_seconds = heartbeat_timeout_seconds
+        if not 60 <= request_failure_window_seconds <= 604_800:
+            raise ValueError(
+                "request_failure_window_seconds must be between 60 and 604800"
+            )
+        self.request_failure_window_seconds = request_failure_window_seconds
         self.expected_schema_revision = expected_schema_revision
 
     async def doctor(self) -> ServiceHealthReport:
@@ -117,6 +125,7 @@ class ServiceHealthChecker:
                 )
                 or 0
             )
+            request_failures = await self._request_failure_window(session, now=now)
 
         instances = tuple(
             ServiceInstanceSummary(
@@ -141,6 +150,7 @@ class ServiceHealthChecker:
             failed_tasks=failed,
             oldest_pending_at=_as_utc(oldest_pending_at),
             active_backoffs=active_backoffs,
+            request_failures=request_failures,
         )
 
     async def _database_check(self) -> ServiceCheck:
@@ -215,6 +225,35 @@ class ServiceHealthChecker:
                 )
             )
             or 0
+        )
+
+    async def _request_failure_window(
+        self,
+        session: AsyncSession,
+        *,
+        now: datetime,
+    ) -> RequestFailureWindow:
+        since = now - timedelta(seconds=self.request_failure_window_seconds)
+        row = (
+            await session.execute(
+                select(
+                    func.count(CollectionCoverageStat.id),
+                    func.sum(CollectionCoverageStat.pages_requested),
+                    func.sum(CollectionCoverageStat.request_errors),
+                    func.sum(CollectionCoverageStat.parse_errors),
+                ).where(
+                    CollectionCoverageStat.finished_at >= since,
+                    CollectionCoverageStat.finished_at <= now,
+                )
+            )
+        ).one()
+        return RequestFailureWindow(
+            since_at=since,
+            until_at=now,
+            coverage_runs=int(row[0] or 0),
+            pages_requested=int(row[1] or 0),
+            request_errors=int(row[2] or 0),
+            parse_errors=int(row[3] or 0),
         )
 
     def _failed_check(self, name: str, exc: Exception) -> ServiceCheck:

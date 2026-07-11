@@ -782,7 +782,8 @@ async def _show_service_status(cfg: dict, *, limit: int) -> None:
 
     logger.info(
         "Service queue pending=%s running=%s failed=%s oldest_pending_at=%s "
-        "active_backoffs=%s",
+        "active_backoffs=%s request_window_since=%s pages_requested=%s "
+        "request_errors=%s request_failure_rate=%s parse_errors=%s",
         status.pending_tasks,
         status.running_tasks,
         status.failed_tasks,
@@ -790,6 +791,11 @@ async def _show_service_status(cfg: dict, *, limit: int) -> None:
         if status.oldest_pending_at is not None
         else None,
         status.active_backoffs,
+        status.request_failures.since_at.isoformat(),
+        status.request_failures.pages_requested,
+        status.request_failures.request_errors,
+        status.request_failures.request_failure_rate,
+        status.request_failures.parse_errors,
     )
     for instance in status.instances:
         logger.info(
@@ -818,6 +824,9 @@ def _build_service_health_checker(cfg: dict, session_factory) -> ServiceHealthCh
         media_dir=storage_cfg.get("media_dir", "./data/media"),
         heartbeat_timeout_seconds=float(
             service_cfg.get("heartbeat_timeout_seconds", 30)
+        ),
+        request_failure_window_seconds=int(
+            service_cfg.get("request_failure_window_seconds", 3600)
         ),
         expected_schema_revision=get_expected_schema_revision(),
     )

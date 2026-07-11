@@ -36,6 +36,22 @@ class ServiceInstanceSummary:
 
 
 @dataclass(frozen=True)
+class RequestFailureWindow:
+    since_at: datetime
+    until_at: datetime
+    coverage_runs: int
+    pages_requested: int
+    request_errors: int
+    parse_errors: int
+
+    @property
+    def request_failure_rate(self) -> float | None:
+        if self.pages_requested == 0:
+            return None
+        return self.request_errors / self.pages_requested
+
+
+@dataclass(frozen=True)
 class ServiceStatusSnapshot:
     instances: tuple[ServiceInstanceSummary, ...]
     pending_tasks: int
@@ -43,3 +59,4 @@ class ServiceStatusSnapshot:
     failed_tasks: int
     oldest_pending_at: datetime | None
     active_backoffs: int
+    request_failures: RequestFailureWindow

@@ -83,6 +83,7 @@ service:
   scheduler_lease_seconds: 60
   heartbeat_seconds: 10
   heartbeat_timeout_seconds: 30
+  request_failure_window_seconds: 3600
   shutdown_grace_seconds: 60
 
 latest_comments:

@@ -258,12 +258,12 @@
 ## P5: Operations And Scaling
 
 - [x] 支持 raw storage backend 抽象：filesystem / MinIO；worker、raw inspect 和 doctor 共用后端工厂，media 保持本地文件系统。
-- [ ] 为 comment observations 设计月分区。
+- [x] 为 comment observations 设计月分区：提供 UTC 月边界/DDL 生成器和 v2 双写、回填、校验、切换、DEFAULT 分区及 rollback 契约；现有单主键表不自动原地转换。
 - [ ] 为大时间表建立 BRIN 索引。
 - [ ] 增加数据库维护脚本。
-- [ ] 增加 worker health check。
-- [ ] 增加任务积压监控。
-- [ ] 增加请求失败率监控。
+- [x] 增加 worker health check：`service health` 独立验证新鲜 worker 角色心跳。
+- [x] 增加任务积压监控：`service status` 输出 pending/running/failed、最老 pending 时间与活跃退避。
+- [x] 增加请求失败率监控：`service status` 输出可配置滚动窗口内的请求页数、错误数、失败率与解析错误数。
 - [ ] 评估 TimescaleDB 是否必要。
 - [ ] 评估 ClickHouse 分析副本是否必要。
 - [ ] 评估 OpenSearch / Meilisearch 全文检索是否必要。

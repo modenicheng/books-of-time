@@ -170,7 +170,7 @@ uv run python main.py task list --status failed
 uv run python main.py task retry-failed
 ```
 
-`health` 检查数据库、Alembic revision、实际 raw 后端、本地 media 目录和服务/worker 心跳。`status` 展示实例、队列积压、最老待处理任务和活动请求退避。
+`health` 检查数据库、Alembic revision、实际 raw 后端、本地 media 目录和服务/worker 心跳。`status` 展示实例、队列积压、最老待处理任务、活动请求退避，以及最近 `service.request_failure_window_seconds` 秒内的请求页数、请求错误数、失败率和解析错误数。失败率用于观测，不直接触发 health 失败。
 
 ## Backup Checklist
 

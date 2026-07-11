@@ -7,6 +7,7 @@ from books_of_time.service.coordinator import (
 from books_of_time.service.health import ServiceHealthChecker
 from books_of_time.service.host import ServiceHost
 from books_of_time.service.models import (
+    RequestFailureWindow,
     ServiceCheck,
     ServiceHealthReport,
     ServiceInstanceSummary,
@@ -14,6 +15,7 @@ from books_of_time.service.models import (
 )
 
 __all__ = [
+    "RequestFailureWindow",
     "ScheduledJobCoordinator",
     "ScheduledJobDefinition",
     "ServiceCheck",

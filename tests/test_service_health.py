@@ -5,7 +5,7 @@ import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from books_of_time.db.base import Base
-from books_of_time.db.models import RequestBackoffState
+from books_of_time.db.models import CollectionCoverageStat, RequestBackoffState
 from books_of_time.db.repositories import (
     CollectionTaskRepository,
     ServiceInstanceRepository,
@@ -220,6 +220,24 @@ async def test_service_status_summarizes_instances_tasks_and_backoffs(
                 updated_at=now,
             )
         )
+        session.add_all(
+            [
+                _coverage_stat(
+                    run_id="recent",
+                    now=now - timedelta(minutes=10),
+                    pages_requested=10,
+                    request_errors=2,
+                    parse_errors=1,
+                ),
+                _coverage_stat(
+                    run_id="old",
+                    now=now - timedelta(hours=2),
+                    pages_requested=10,
+                    request_errors=9,
+                    parse_errors=3,
+                ),
+            ]
+        )
         await session.commit()
 
     status = await checker.status(now=now, instance_limit=5)
@@ -231,4 +249,43 @@ async def test_service_status_summarizes_instances_tasks_and_backoffs(
     assert status.failed_tasks == 1
     assert status.oldest_pending_at == now - timedelta(minutes=5)
     assert status.active_backoffs == 1
+    assert status.request_failures.coverage_runs == 1
+    assert status.request_failures.pages_requested == 10
+    assert status.request_failures.request_errors == 2
+    assert status.request_failures.parse_errors == 1
+    assert status.request_failures.request_failure_rate == 0.2
     await engine.dispose()
+
+
+def _coverage_stat(
+    *,
+    run_id: str,
+    now: datetime,
+    pages_requested: int,
+    request_errors: int,
+    parse_errors: int,
+) -> CollectionCoverageStat:
+    return CollectionCoverageStat(
+        collection_task_id=1,
+        run_id=run_id,
+        task_kind=TaskKind.FETCH_VIDEO_STATS,
+        target_type="video",
+        target_id=f"BV-{run_id}",
+        started_at=now - timedelta(seconds=5),
+        finished_at=now,
+        status="succeeded",
+        pages_requested=pages_requested,
+        pages_succeeded=pages_requested - request_errors,
+        items_observed=0,
+        raw_payloads_saved=0,
+        parse_errors=parse_errors,
+        request_errors=request_errors,
+        frontier_reached=None,
+        frontier_missing=None,
+        truncated=False,
+        corrupted=False,
+        reason=None,
+        extra={},
+        created_at=now,
+        updated_at=now,
+    )
