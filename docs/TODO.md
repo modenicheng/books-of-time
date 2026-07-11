@@ -284,10 +284,10 @@
 
 ### P1: Basic Data Management
 
-- [ ] 支持更新事件名称、游戏、描述、状态、时间窗和时区，并保留稳定 slug。
-- [ ] 支持列出、停用和恢复事件 target；keyword target 状态同步到版本化关键词，UID 停用后不再参与 discovery。
-- [ ] 支持停用和恢复事件视频关联，历史采集与证据不删除。
-- [ ] 为事件、target 和视频生命周期操作提供 CLI、边界校验与 repository 测试。
+- [x] 支持更新事件名称、游戏、描述、状态、时间窗和时区，并保留稳定 slug。
+- [x] 支持列出、停用和恢复事件 target；keyword target 状态同步到版本化关键词，UID 停用后不再参与 discovery。
+- [x] 支持停用和恢复事件视频关联，历史采集与证据不删除。
+- [x] 为事件、target 和视频生命周期操作提供 CLI、边界校验、repository 测试和 `docs/EVENTS.md` 使用说明。
 
 ### P4: Window-Accurate Reports
 
