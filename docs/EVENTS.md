@@ -52,3 +52,16 @@ uv run python main.py event coverage ghost-picture-war \
 ```
 
 不传时间参数时查询事件当前全部 coverage；传入时必须同时提供 `--since` 和 `--until`。有界汇总只包含 `finished_at` 位于 `[since, until)` 的采集记录，事件报告始终使用其报告时间窗执行同口径汇总。
+
+## Filtered Reports
+
+```bash
+uv run python main.py event report ghost-picture-war \
+  --since 2026-07-10T00:00:00+08:00 \
+  --until 2026-07-18T00:00:00+08:00 \
+  --bvid BV1xx411c7mD --keyword "鬼图战争" \
+  --output reports/ghost-picture-war.md \
+  --json-output reports/ghost-picture-war.json
+```
+
+`--bvid` 和 `--keyword` 可单独使用，也可组合。筛选值必须属于事件当前 active 视频和关键词；筛选会下推到 coverage、timeline、转折信号、热门变化、关键词趋势和模板候选查询。Markdown 的“筛选条件”和 JSON 的 `filters` 字段会记录最终规范化值。
