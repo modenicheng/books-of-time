@@ -75,7 +75,7 @@ class DatabaseMaintenanceService:
             return plan
 
         results: list[MaintenanceAction] = []
-        for action in plan:
+        for index, action in enumerate(plan):
             if action.status == "skipped":
                 results.append(action)
                 continue
@@ -93,9 +93,15 @@ class DatabaseMaintenanceService:
                     reason=f"{type(exc).__name__}: {exc}"[:500],
                 )
                 results.append(failed)
-                raise RuntimeError(
-                    f"Database maintenance failed for {action.kind}:{action.target}"
-                ) from exc
+                results.extend(
+                    replace(
+                        remaining,
+                        status="skipped",
+                        reason="not run after previous maintenance failure",
+                    )
+                    for remaining in plan[index + 1 :]
+                )
+                break
             results.append(replace(action, status="executed"))
         return tuple(results)
 

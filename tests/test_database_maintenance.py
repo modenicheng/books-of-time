@@ -6,7 +6,10 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from books_of_time import cli
-from books_of_time.db.maintenance import DatabaseMaintenanceService
+from books_of_time.db.maintenance import (
+    DatabaseMaintenanceService,
+    MaintenanceAction,
+)
 
 
 def test_database_maintenance_parser_is_dry_run_by_default() -> None:
@@ -127,3 +130,41 @@ async def test_postgresql_plan_is_bounded_and_partition_safe() -> None:
     assert "comment_observations_y2026m12" in partition_sql[0]
     assert "comment_observations_y2027m02" in partition_sql[-1]
     assert all("CREATE TABLE IF NOT EXISTS" in statement for statement in partition_sql)
+
+
+@pytest.mark.asyncio
+async def test_maintenance_failure_is_returned_with_remaining_actions_skipped(
+    tmp_path,
+) -> None:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'failed.sqlite3'}")
+    service = _BrokenMaintenanceService(engine)
+
+    actions = await service.run(
+        now=datetime(2026, 12, 15, tzinfo=UTC),
+        execute=True,
+        vacuum=False,
+        months_ahead=0,
+    )
+
+    assert [action.status for action in actions] == ["failed", "skipped"]
+    assert "OperationalError" in (actions[0].reason or "")
+    assert actions[1].reason == "not run after previous maintenance failure"
+    await engine.dispose()
+
+
+class _BrokenMaintenanceService(DatabaseMaintenanceService):
+    def build_plan(self, **_kwargs) -> tuple[MaintenanceAction, ...]:
+        return (
+            MaintenanceAction(
+                kind="broken",
+                target="first",
+                sql="NOT VALID SQL",
+                status="planned",
+            ),
+            MaintenanceAction(
+                kind="analyze",
+                target="second",
+                sql="ANALYZE",
+                status="planned",
+            ),
+        )

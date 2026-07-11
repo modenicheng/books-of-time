@@ -880,6 +880,8 @@ async def _maintain_database(
             action.reason,
             action.sql,
         )
+    if any(action.status == "failed" for action in actions):
+        raise RuntimeError("Database maintenance failed; inspect the audit output")
     return actions
 
 
