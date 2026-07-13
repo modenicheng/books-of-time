@@ -1,13 +1,16 @@
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+from alembic.config import Config
 from sqlalchemy import text
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.schema import CreateIndex
 
+from alembic import command
 from books_of_time.db.base import Base
 from books_of_time.db.migrations import (
     get_current_schema_revision,
@@ -22,7 +25,7 @@ async def test_schema_revision_helpers_read_expected_and_current_head(
     tmp_path: Path,
 ) -> None:
     expected = get_expected_schema_revision()
-    assert expected == "0007_operational_alert_states"
+    assert expected == "0008_collection_evidence_foundations"
 
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as connection:
@@ -214,6 +217,52 @@ def test_operational_alert_revision_is_static_and_extends_job_kind() -> None:
     assert "Base.metadata" not in source
 
 
+def test_collection_evidence_revision_is_static() -> None:
+    revision_path = (
+        Path(__file__).resolve().parents[1]
+        / "alembic"
+        / "versions"
+        / "0008_collection_evidence_foundations.py"
+    )
+    source = revision_path.read_text(encoding="utf-8")
+
+    assert (
+        "down_revision: str | Sequence[str] | None = "
+        '"0007_operational_alert_states"' in source
+    )
+    assert 'op.create_table(\n        "known_video_sources"' in source
+    assert 'op.create_table(\n        "http_request_attempts"' in source
+    assert "Base.metadata" not in source
+
+
+def test_collection_evidence_revision_round_trip(tmp_path: Path) -> None:
+    database_path = tmp_path / "evidence-cycle.sqlite3"
+    config_path = _write_sqlite_config(
+        tmp_path / "evidence-cycle.yaml",
+        database_path,
+    )
+    alembic_config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
+    alembic_config.attributes["bot_config_path"] = str(config_path)
+    alembic_config.attributes["skip_logger_config"] = True
+
+    command.upgrade(alembic_config, "head")
+    assert _sqlite_table_exists(database_path, "known_video_sources")
+    assert _sqlite_table_exists(database_path, "http_request_attempts")
+    assert "platform_created_at" in _sqlite_columns(database_path, "comment_entities")
+
+    command.downgrade(alembic_config, "0007_operational_alert_states")
+    assert not _sqlite_table_exists(database_path, "known_video_sources")
+    assert not _sqlite_table_exists(database_path, "http_request_attempts")
+    assert "platform_created_at" not in _sqlite_columns(
+        database_path,
+        "comment_entities",
+    )
+
+    command.upgrade(alembic_config, "head")
+    assert _sqlite_table_exists(database_path, "known_video_sources")
+    assert _sqlite_table_exists(database_path, "http_request_attempts")
+
+
 def test_large_time_indexes_compile_as_postgresql_brin() -> None:
     expected = {
         "idx_raw_payloads_captured_brin",
@@ -303,6 +352,8 @@ async def test_adopt_legacy_schema_repairs_known_drift_and_upgrades(
         "comment_analysis_flags",
         "request_budget_states",
         "operational_alert_states",
+        "known_video_sources",
+        "http_request_attempts",
     }
     baseline_tables = [
         table
@@ -317,6 +368,21 @@ async def test_adopt_legacy_schema_repairs_known_drift_and_upgrades(
             )
         )
         await connection.execute(text("ALTER TABLE frontier_states DROP COLUMN extra"))
+        evidence_columns = (
+            "platform_created_at",
+            "author_level",
+            "author_official_type",
+            "author_official_description",
+            "author_vip_status",
+            "author_vip_type",
+            "author_is_senior_member",
+            "author_public_metadata_extra",
+        )
+        for table_name in ("comment_entities", "comment_observations"):
+            for column_name in evidence_columns:
+                await connection.execute(
+                    text(f"ALTER TABLE {table_name} DROP COLUMN {column_name}")
+                )
     await engine.dispose()
 
     await adopt_legacy_schema(str(config_path))
@@ -352,3 +418,18 @@ def _write_sqlite_config(path: Path, database_path: Path) -> Path:
     database_url = f"sqlite+aiosqlite:///{database_path.as_posix()}"
     path.write_text(f'database:\n  url: "{database_url}"\n', encoding="utf-8")
     return path
+
+
+def _sqlite_table_exists(database_path: Path, table_name: str) -> bool:
+    with sqlite3.connect(database_path) as connection:
+        row = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            (table_name,),
+        ).fetchone()
+    return row is not None
+
+
+def _sqlite_columns(database_path: Path, table_name: str) -> set[str]:
+    with sqlite3.connect(database_path) as connection:
+        rows = connection.execute(f'PRAGMA table_info("{table_name}")').fetchall()
+    return {str(row[1]) for row in rows}

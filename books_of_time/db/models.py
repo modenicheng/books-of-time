@@ -16,6 +16,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -124,6 +125,19 @@ class CommentEntity(TimestampMixin, Base):
     parent_rpid: Mapped[int | None] = mapped_column(BigInteger)
     author_mid: Mapped[int | None] = mapped_column(BigInteger)
     author_name: Mapped[str | None] = mapped_column(Text)
+    platform_created_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    author_level: Mapped[int | None] = mapped_column(Integer)
+    author_official_type: Mapped[int | None] = mapped_column(Integer)
+    author_official_description: Mapped[str | None] = mapped_column(Text)
+    author_vip_status: Mapped[int | None] = mapped_column(Integer)
+    author_vip_type: Mapped[int | None] = mapped_column(Integer)
+    author_is_senior_member: Mapped[bool | None] = mapped_column(Boolean)
+    author_public_metadata_extra: Mapped[dict[str, Any]] = mapped_column(
+        json_dict_type,
+        nullable=False,
+        default=dict,
+        server_default=text("'{}'"),
+    )
     first_content: Mapped[str | None] = mapped_column(Text)
     first_content_hash: Mapped[bytes] = mapped_column(LargeBinary(32), nullable=False)
     first_seen_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
@@ -157,6 +171,19 @@ class CommentObservation(Base):
     reply_count: Mapped[int | None] = mapped_column(BigInteger)
     author_mid: Mapped[int | None] = mapped_column(BigInteger)
     author_name: Mapped[str | None] = mapped_column(Text)
+    platform_created_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    author_level: Mapped[int | None] = mapped_column(Integer)
+    author_official_type: Mapped[int | None] = mapped_column(Integer)
+    author_official_description: Mapped[str | None] = mapped_column(Text)
+    author_vip_status: Mapped[int | None] = mapped_column(Integer)
+    author_vip_type: Mapped[int | None] = mapped_column(Integer)
+    author_is_senior_member: Mapped[bool | None] = mapped_column(Boolean)
+    author_public_metadata_extra: Mapped[dict[str, Any]] = mapped_column(
+        json_dict_type,
+        nullable=False,
+        default=dict,
+        server_default=text("'{}'"),
+    )
     is_deleted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     visibility: Mapped[str] = mapped_column(Text, nullable=False, default="visible")
     extra: Mapped[dict[str, Any]] = mapped_column(
@@ -698,6 +725,50 @@ Index(
 )
 
 
+class HttpRequestAttempt(Base):
+    __tablename__ = "http_request_attempts"
+
+    id: Mapped[int] = mapped_column(
+        bigint_pk_type, primary_key=True, autoincrement=True
+    )
+    collection_task_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        ForeignKey("collection_tasks.id", ondelete="SET NULL"),
+    )
+    snapshot_cohort_id: Mapped[int | None] = mapped_column(BigInteger)
+    snapshot_cohort_component_id: Mapped[int | None] = mapped_column(BigInteger)
+    status: Mapped[str] = mapped_column(String(24), nullable=False)
+    request_type: Mapped[BilibiliRequestType] = mapped_column(
+        Enum(BilibiliRequestType, values_callable=lambda x: [e.value for e in x]),
+        nullable=False,
+    )
+    attempt_started_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    request_started_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    request_finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    response_received_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    duration_ms: Mapped[int | None] = mapped_column(BigInteger)
+    method: Mapped[str] = mapped_column(String(12), nullable=False)
+    url_hash: Mapped[bytes] = mapped_column(LargeBinary(32), nullable=False)
+    params_hash: Mapped[bytes | None] = mapped_column(LargeBinary(32))
+    http_status: Mapped[int | None] = mapped_column(Integer)
+    error_type: Mapped[str | None] = mapped_column(String(64))
+    error_message: Mapped[str | None] = mapped_column(Text)
+    raw_payload_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        ForeignKey("raw_payloads.id", ondelete="SET NULL"),
+    )
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+
+
+Index(
+    "idx_http_request_attempts_status_time",
+    HttpRequestAttempt.status,
+    HttpRequestAttempt.attempt_started_at.desc(),
+)
+Index("idx_http_request_attempts_task", HttpRequestAttempt.collection_task_id)
+Index("idx_http_request_attempts_raw", HttpRequestAttempt.raw_payload_id)
+
+
 class RequestBudgetState(Base):
     __tablename__ = "request_budget_states"
 
@@ -983,6 +1054,59 @@ class KnownVideo(TimestampMixin, Base):
     source_mid: Mapped[str | None] = mapped_column(Text)
     pubdate: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
     first_seen_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+
+
+class KnownVideoSource(TimestampMixin, Base):
+    __tablename__ = "known_video_sources"
+    __table_args__ = (
+        UniqueConstraint(
+            "bvid",
+            "source_mid",
+            "pool_type",
+            "pool_id",
+            name="uq_known_video_sources_identity",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(
+        bigint_pk_type, primary_key=True, autoincrement=True
+    )
+    bvid: Mapped[str] = mapped_column(
+        Text,
+        ForeignKey("known_videos.bvid", ondelete="CASCADE"),
+        nullable=False,
+    )
+    source_mid: Mapped[str] = mapped_column(Text, nullable=False)
+    pool_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    pool_id: Mapped[str] = mapped_column(Text, nullable=False)
+    game_id: Mapped[str | None] = mapped_column(String(120))
+    official: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    monitored: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    first_seen_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    first_raw_page_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        ForeignKey("raw_page_observations.id", ondelete="SET NULL"),
+    )
+    last_raw_page_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        ForeignKey("raw_page_observations.id", ondelete="SET NULL"),
+    )
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+
+Index(
+    "idx_known_video_sources_bvid_active",
+    KnownVideoSource.bvid,
+    KnownVideoSource.active,
+)
+Index(
+    "idx_known_video_sources_game_flags",
+    KnownVideoSource.game_id,
+    KnownVideoSource.official,
+    KnownVideoSource.monitored,
+)
+Index("idx_known_video_sources_mid", KnownVideoSource.source_mid)
 
 
 class FrontierState(TimestampMixin, Base):

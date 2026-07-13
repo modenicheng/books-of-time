@@ -52,6 +52,7 @@
 - Create: `tests/test_evidence_models.py`
 - Create: `alembic/versions/0008_collection_evidence_foundations.py`
 - Modify: `books_of_time/db/models.py`
+- Modify: `books_of_time/db/schema.py`
 - Modify: `tests/test_schema_migrations.py`
 
 **Interfaces:**
@@ -59,7 +60,7 @@
 - Produces: Alembic head `0008_collection_evidence_foundations`.
 - Consumes: `UTCDateTime`, `json_dict_type`, `bigint_pk_type`, existing `KnownVideo`, `CommentEntity`, `CommentObservation`, `CollectionTask`, and `RawPayload`.
 
-- [ ] **Step 1: Write failing metadata and round-trip tests**
+- [x] **Step 1: Write failing metadata and round-trip tests**
 
 Create `tests/test_evidence_models.py` with an in-memory schema test that imports the two new models, inserts a `KnownVideo`, one `KnownVideoSource`, one `CollectionTask`, and one `HttpRequestAttempt`, then verifies:
 
@@ -75,7 +76,7 @@ assert CommentObservation.__table__.c.author_public_metadata_extra.nullable is F
 
 Add a second test that inserting the same `(bvid, source_mid, pool_type, pool_id)` twice raises `IntegrityError`.
 
-- [ ] **Step 2: Run tests to verify RED**
+- [x] **Step 2: Run tests to verify RED**
 
 Run:
 
@@ -85,7 +86,7 @@ uv run pytest tests/test_evidence_models.py -q
 
 Expected: collection fails because `KnownVideoSource` and `HttpRequestAttempt` do not exist.
 
-- [ ] **Step 3: Add ORM columns and models**
+- [x] **Step 3: Add ORM columns and models**
 
 Add these nullable/public fields to both comment tables, using the same names on entity and observation. The entity values mean first-known values and are only backfilled when NULL:
 
@@ -139,9 +140,13 @@ created_at
 
 Use status strings `started`, `succeeded`, `failed`, and `abandoned`; add indexes on `(status, attempt_started_at)`, `collection_task_id`, and `raw_payload_id`.
 
-- [ ] **Step 4: Add the static Alembic revision**
+- [x] **Step 4: Add the static Alembic revision**
 
 Create revision `0008_collection_evidence_foundations` with `down_revision = "0007_operational_alert_states"`. The upgrade must add the comment columns, create `known_video_sources` and `http_request_attempts`, then create the exact indexes above. The downgrade reverses indexes/tables first and comment columns last. Do not import `Base.metadata` or use autogenerate at runtime.
+
+Extend the exact `--adopt-legacy` allowlist with only these two post-baseline
+tables, their indexes, and the named comment columns. Unknown added/removed
+tables, columns, constraints, or types must still be rejected.
 
 Update the expected revision assertion and add a static-source test:
 
@@ -159,7 +164,7 @@ database and Alembic config. It upgrades to head, downgrades exactly to
 then upgrades to head again and asserts they return. Never point this test at
 the operator's configured database.
 
-- [ ] **Step 5: Verify schema GREEN**
+- [x] **Step 5: Verify schema GREEN**
 
 Run:
 
@@ -170,10 +175,10 @@ uv run ruff check books_of_time/db/models.py alembic/versions/0008_collection_ev
 
 Expected: all selected tests pass and Ruff reports `All checks passed!`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```powershell
-git add books_of_time/db/models.py alembic/versions/0008_collection_evidence_foundations.py tests/test_evidence_models.py tests/test_schema_migrations.py
+git add books_of_time/db/models.py books_of_time/db/schema.py alembic/versions/0008_collection_evidence_foundations.py tests/test_evidence_models.py tests/test_schema_migrations.py
 git commit -m "feat(db): add collection evidence foundations"
 ```
 

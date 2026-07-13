@@ -28,6 +28,30 @@ _POST_BASELINE_TABLES = {
     "comment_analysis_flags",
     "request_budget_states",
     "operational_alert_states",
+    "known_video_sources",
+    "http_request_attempts",
+}
+_POST_BASELINE_COLUMNS = {
+    "comment_entities": {
+        "platform_created_at",
+        "author_level",
+        "author_official_type",
+        "author_official_description",
+        "author_vip_status",
+        "author_vip_type",
+        "author_is_senior_member",
+        "author_public_metadata_extra",
+    },
+    "comment_observations": {
+        "platform_created_at",
+        "author_level",
+        "author_official_type",
+        "author_official_description",
+        "author_vip_status",
+        "author_vip_type",
+        "author_is_senior_member",
+        "author_public_metadata_extra",
+    },
 }
 
 
@@ -141,6 +165,10 @@ def _is_allowed_legacy_difference(difference: Any) -> bool:
         return difference[1].name in _POST_BASELINE_TABLES
     if operation == "add_index":
         return difference[1].table.name in _POST_BASELINE_TABLES
+    if operation == "add_column":
+        return difference[3].name in _POST_BASELINE_COLUMNS.get(
+            difference[2], set()
+        ) or _is_frontier_extra_difference(difference)
     return _is_frontier_extra_difference(difference)
 
 
