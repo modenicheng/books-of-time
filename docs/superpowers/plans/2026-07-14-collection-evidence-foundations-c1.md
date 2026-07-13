@@ -420,7 +420,7 @@ git commit -m "feat(discovery): preserve every video source association"
 - Produces: `record_response(...)`, `record_transport_failure(...)`, `attach_raw_payload(...)`, and `mark_abandoned(...)`.
 - Produces new optional `FetchResult` fields: `request_started_at`, `request_finished_at`, `response_received_at`, and `http_attempt_id`.
 
-- [ ] **Step 1: Write failing repository lifecycle tests**
+- [x] **Step 1: Write failing repository lifecycle tests**
 
 Cover these transitions:
 
@@ -434,7 +434,7 @@ started + collector abort -> abandoned
 
 Also assert URL and canonical params are SHA-256 hashes and plaintext URL/params do not appear in the row.
 
-- [ ] **Step 2: Run lifecycle test to verify RED**
+- [x] **Step 2: Run lifecycle test to verify RED**
 
 ```powershell
 uv run pytest tests/test_http_request_attempts.py -q
@@ -442,13 +442,13 @@ uv run pytest tests/test_http_request_attempts.py -q
 
 Expected: repository class is missing.
 
-- [ ] **Step 3: Implement repository methods**
+- [x] **Step 3: Implement repository methods**
 
 `begin` receives task ID, request type, method, URL, params, and timing. It stores only hashes and flushes before network I/O. `record_response` stores HTTP/timing fields but keeps status `started` until raw is linked. `attach_raw_payload` sets raw ID and terminal status. Error messages are stripped and bounded to 2000 characters.
 
 Extend `RawPayloadRepository.insert_from_fetch_result` with keyword `attempt_status: str = "succeeded"`; when `result.http_attempt_id` exists, attach the new raw row to that attempt in the same transaction.
 
-- [ ] **Step 4: Verify repository GREEN**
+- [x] **Step 4: Verify repository GREEN**
 
 ```powershell
 uv run pytest tests/test_http_request_attempts.py tests/test_comment_repositories.py tests/test_media_downloader.py -q
@@ -457,7 +457,7 @@ uv run ruff check books_of_time/db/repositories.py books_of_time/http/client.py 
 
 Expected: all selected tests pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add books_of_time/db/repositories.py books_of_time/http/client.py tests/test_http_request_attempts.py

@@ -24,6 +24,7 @@ from books_of_time.db.models import (
     EventTarget,
     EventVideo,
     FrontierState,
+    HttpRequestAttempt,
     ImportantCommentWatchlist,
     KnownVideoSource,
     RawPageObservation,
@@ -148,6 +149,118 @@ class KnownVideoSourceRepository:
 
         await self.session.flush()
         return rows
+
+
+class HttpRequestAttemptRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def begin(
+        self,
+        *,
+        collection_task_id: int | None,
+        request_type: BilibiliRequestType,
+        method: str,
+        url: str,
+        params: dict[str, Any] | None,
+        attempt_started_at: datetime,
+        request_started_at: datetime | None = None,
+    ) -> HttpRequestAttempt:
+        normalized_method = str(method).strip().upper()
+        if not normalized_method:
+            raise ValueError("HTTP attempt method must not be empty")
+        normalized_url = str(url).strip()
+        if not normalized_url:
+            raise ValueError("HTTP attempt URL must not be empty")
+        attempt = HttpRequestAttempt(
+            collection_task_id=collection_task_id,
+            status="started",
+            request_type=request_type,
+            attempt_started_at=attempt_started_at,
+            request_started_at=request_started_at,
+            method=normalized_method,
+            url_hash=hashlib.sha256(normalized_url.encode()).digest(),
+            params_hash=_hash_params(params),
+            created_at=attempt_started_at,
+        )
+        self.session.add(attempt)
+        await self.session.flush()
+        return attempt
+
+    async def record_response(
+        self,
+        attempt_id: int,
+        *,
+        http_status: int,
+        request_finished_at: datetime,
+        response_received_at: datetime,
+        error_type: str | None = None,
+        error_message: str | None = None,
+    ) -> HttpRequestAttempt:
+        attempt = await self._get(attempt_id)
+        attempt.http_status = int(http_status)
+        attempt.request_finished_at = request_finished_at
+        attempt.response_received_at = response_received_at
+        attempt.duration_ms = _attempt_duration_ms(attempt, request_finished_at)
+        attempt.error_type = _bounded_attempt_text(error_type, 64)
+        attempt.error_message = _bounded_attempt_text(error_message, 2000)
+        await self.session.flush()
+        return attempt
+
+    async def record_transport_failure(
+        self,
+        attempt_id: int,
+        *,
+        error_type: str,
+        error_message: str | None,
+        request_finished_at: datetime,
+    ) -> HttpRequestAttempt:
+        attempt = await self._get(attempt_id)
+        attempt.status = "failed"
+        attempt.request_finished_at = request_finished_at
+        attempt.duration_ms = _attempt_duration_ms(attempt, request_finished_at)
+        attempt.error_type = _bounded_attempt_text(error_type, 64)
+        attempt.error_message = _bounded_attempt_text(error_message, 2000)
+        attempt.raw_payload_id = None
+        await self.session.flush()
+        return attempt
+
+    async def attach_raw_payload(
+        self,
+        attempt_id: int,
+        *,
+        raw_payload_id: int,
+        status: str,
+    ) -> HttpRequestAttempt:
+        if status not in {"succeeded", "failed"}:
+            raise ValueError("HTTP attempt raw status must be succeeded or failed")
+        attempt = await self._get(attempt_id)
+        attempt.raw_payload_id = raw_payload_id
+        attempt.status = status
+        await self.session.flush()
+        return attempt
+
+    async def mark_abandoned(
+        self,
+        attempt_id: int,
+        *,
+        finished_at: datetime,
+        error_message: str | None = None,
+    ) -> HttpRequestAttempt:
+        attempt = await self._get(attempt_id)
+        attempt.status = "abandoned"
+        attempt.request_finished_at = finished_at
+        attempt.duration_ms = _attempt_duration_ms(attempt, finished_at)
+        attempt.error_type = "collector_abort"
+        attempt.error_message = _bounded_attempt_text(error_message, 2000)
+        await self.session.flush()
+        return attempt
+
+    async def _get(self, attempt_id: int) -> HttpRequestAttempt:
+        attempt = await self.session.get(HttpRequestAttempt, attempt_id)
+        if attempt is None:
+            raise LookupError(f"HTTP request attempt not found: {attempt_id}")
+        return attempt
 
 
 class CollectionTaskRepository:
@@ -1618,6 +1731,7 @@ class RawPayloadRepository:
         result: FetchResult,
         stored: StoredRawPayload,
         parser_version: str | None = None,
+        attempt_status: str = "succeeded",
     ) -> RawPayload:
         raw = RawPayload(
             captured_at=result.captured_at,
@@ -1635,6 +1749,12 @@ class RawPayloadRepository:
         )
         self.session.add(raw)
         await self.session.flush()
+        if result.http_attempt_id is not None:
+            await HttpRequestAttemptRepository(self.session).attach_raw_payload(
+                result.http_attempt_id,
+                raw_payload_id=raw.id,
+                status=attempt_status,
+            )
         return raw
 
 
@@ -2196,6 +2316,21 @@ def _hash_params(params: dict[str, Any] | None) -> bytes | None:
         return None
     canonical = json.dumps(params, ensure_ascii=False, sort_keys=True).encode()
     return hashlib.sha256(canonical).digest()
+
+
+def _attempt_duration_ms(
+    attempt: HttpRequestAttempt,
+    finished_at: datetime,
+) -> int:
+    started_at = attempt.request_started_at or attempt.attempt_started_at
+    return max(round((finished_at - started_at).total_seconds() * 1000), 0)
+
+
+def _bounded_attempt_text(value: object, limit: int) -> str | None:
+    normalized = _optional_text(value)
+    if normalized is None:
+        return None
+    return normalized[:limit]
 
 
 def _validate_limit(limit: int) -> None:

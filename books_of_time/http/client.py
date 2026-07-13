@@ -27,6 +27,10 @@ class FetchResult:
     captured_at: datetime
     response_headers: dict[str, str] | None = None
     response_cookies: dict[str, str] | None = None
+    request_started_at: datetime | None = None
+    request_finished_at: datetime | None = None
+    response_received_at: datetime | None = None
+    http_attempt_id: int | None = None
 
 
 class RawHttpClient:
