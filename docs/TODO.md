@@ -191,6 +191,22 @@
 - [x] 增加 Linux、Docker、Windows 共用的配置、权限说明和 `docs/LOGIN.md` 使用文档。
 - [x] 覆盖加密存储、原子更新、热加载、请求注入、匿名降级、QR 登录和自动刷新测试。
 
+## P1: Collection-First Snapshot Cohorts
+
+设计基线：`docs/superpowers/specs/2026-07-13-collection-snapshot-cohorts-design.md`。本主线优先保证不可逆采集完整、可恢复、可审计；机器人识别、玩家聚类、神经网络和 LLM/Agent 分析不进入当前采集实现。
+
+- [~] **C1 Evidence Foundations**：补齐评论平台时间与稳定公开作者字段、视频多来源/游戏归属、无响应 HTTP attempt 证据及可回溯迁移。
+- [ ] **C2 Cohort State And Policy**：建立 policy version、video collection state、snapshot cohort/component、schedule gap 模型和纯函数时间/评级/生命周期策略。
+- [ ] **C3 Persistent Planner And Shadow Mode**：增加 30 秒持久化 cohort planner、幂等组件任务、checkpoint 恢复和 shadow planning，不与旧 sweep 重复调度。
+- [ ] **C4 Hot Core And Deep Scans**：实现 S/A/B/C 常规多页热门采集、checkpoint 20/10/3/1 页目标、55 秒编号切片和 all-status slice 幂等键。
+- [ ] **C5 Latest Scan Runs And Automatic Baseline**：建立 scan run、CAS frontier、多锚点 baseline tail -> linked head sweep、增量 continuation 和单 BVID 活跃扫描约束。
+- [ ] **C6 Visibility And Reconciliation**：建立 visibility watchlist/check、10/30 分钟高优先级复核、两次独立证据确认删除及 100 页内全量/超限分段 reconciliation。
+- [ ] **C7 Capacity, Fairness And Storage Gates**：实现 15 分钟容量预测、游戏间 deficit round-robin、显式 miss/gap、raw storage 请求前熔断和新旧调度所有权迁移。
+- [ ] **C8 Activity Window Adaptation**：按游戏与工作日/周末学习 28 天 30 分钟桶窗口，使用曝光归一化、中位数、边界限制、版本化自动激活和回滚。
+- [ ] **C9 Integrity And Live Acceptance**：实现 raw/media/reference 完整性审计、20 个 S 过载模拟、shadow -> 单游戏 2 小时 -> 全游戏 24 小时验收及完整运维文档。
+
+每阶段必须独立满足：测试先行、Alembic upgrade/downgrade、Ruff、相关 PostgreSQL 集成测试、覆盖/失败语义可查询，并使用单独 Conventional Commit。C1-C9 全部完成前，本 P1 主线不标记完成。
+
 ## P2: Comment State Events
 
 - [x] 建立 `comment_state_events` 表。
@@ -280,6 +296,7 @@
 2. [x] P2 Event Archive：事件目标池调度、事件级覆盖率和基础时间线。
 3. [x] 补全 Important Replies 的点赞增长、争议关键词和最近出现优先级。
 4. [x] 在可用 Docker daemon 上执行镜像 build，并完成 Windows Ctrl+C、PostgreSQL service run 和容器连接宿主机 PostgreSQL 环境烟测。
+5. [~] P1 Collection-First Snapshot Cohorts：当前执行 C1 Evidence Foundations，随后按 C2-C9 分阶段验收。
 
 ## Completion Audit Follow-up
 
