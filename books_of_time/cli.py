@@ -54,7 +54,7 @@ from books_of_time.db.repositories import (
     VideoMetricSnapshotRepository,
 )
 from books_of_time.db.schema import adopt_legacy_schema, create_schema
-from books_of_time.domain.enums import TaskKind, TaskStatus
+from books_of_time.domain.enums import BilibiliRequestType, TaskKind, TaskStatus
 from books_of_time.domain.events import EVENT_STATUSES, EVENT_TARGET_TYPES
 from books_of_time.parsers.discovery import parse_user_video_list
 from books_of_time.reports.event_report import (
@@ -2157,8 +2157,11 @@ async def _inspect_raw_payload(
         return
 
     body = build_raw_payload_store(cfg).read_uri(raw.storage_uri)
-    clamped_preview_bytes = min(max(preview_bytes, 0), 10000)
-    preview = body[:clamped_preview_bytes].decode("utf-8", errors="replace")
+    preview = _format_raw_preview(
+        body,
+        request_type=raw.request_type,
+        preview_bytes=preview_bytes,
+    )
 
     logger.info(
         "raw id=%s request_type=%s captured_at=%s status_code=%s "
@@ -2175,6 +2178,20 @@ async def _inspect_raw_payload(
         raw.parser_version,
     )
     logger.info("raw preview=%s", preview)
+
+
+def _format_raw_preview(
+    body: bytes,
+    *,
+    request_type: BilibiliRequestType,
+    preview_bytes: int,
+) -> str:
+    clamped_preview_bytes = min(max(preview_bytes, 0), 10000)
+    preview = body[:clamped_preview_bytes]
+    if request_type == BilibiliRequestType.MEDIA_IMAGE:
+        return f"hex:{preview.hex()}"
+    text = preview.decode("utf-8", errors="backslashreplace")
+    return text.encode("ascii", errors="backslashreplace").decode("ascii")
 
 
 async def _migrate_raw_to_minio(

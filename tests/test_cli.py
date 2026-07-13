@@ -403,6 +403,28 @@ async def test_inspect_raw_payload_logs_metadata_and_preview(tmp_path, caplog) -
     assert "hello raw" in caplog.text
 
 
+def test_format_raw_preview_uses_ascii_hex_for_media_bytes() -> None:
+    preview = cli._format_raw_preview(
+        b"GIF89a\xff\x00\x80",
+        request_type=BilibiliRequestType.MEDIA_IMAGE,
+        preview_bytes=9,
+    )
+
+    assert preview == "hex:474946383961ff0080"
+    assert preview.isascii()
+
+
+def test_format_raw_preview_escapes_non_ascii_text() -> None:
+    preview = cli._format_raw_preview(
+        '{"message":"\u9b3c\u56fe\U0001f600"}'.encode(),
+        request_type=BilibiliRequestType.COMMENT_LATEST,
+        preview_bytes=100,
+    )
+
+    assert preview == '{"message":"\\u9b3c\\u56fe\\U0001f600"}'
+    assert preview.isascii()
+
+
 @pytest.mark.asyncio
 async def test_show_video_stats_logs_latest_snapshots(tmp_path, caplog) -> None:
     db_path = tmp_path / "video-stats.sqlite3"
