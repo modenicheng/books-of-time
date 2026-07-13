@@ -1,7 +1,12 @@
 from pathlib import Path
 
+import pytest
+
 from books_of_time.config import loader
 from books_of_time.config.loader import load_config
+from books_of_time.task_orchestrator.discovery_sources import (
+    resolve_discovery_uid_sources,
+)
 
 
 def test_default_config_path_points_to_repo_config_directory() -> None:
@@ -17,15 +22,102 @@ def test_example_config_monitors_primary_game_accounts_by_default() -> None:
 
     assert cfg["discovery"]["matrix_uids"] == []
     assert cfg["discovery"]["game_uid_pools"] == {
-        "genshin_impact": {"uids": [401742377]},
-        "wuthering_waves": {"uids": [1955897084]},
-        "honkai_star_rail": {"uids": [1340190821]},
-        "zenless_zone_zero": {"uids": [1636034895]},
-        "honkai_impact_3rd": {"uids": [27534330]},
-        "arknights_endfield": {"uids": [1265652806]},
-        "arknights": {"uids": [161775300]},
+        "genshin_impact": {
+            "game_id": "genshin_impact",
+            "official": True,
+            "monitored": True,
+            "uids": [401742377],
+        },
+        "wuthering_waves": {
+            "game_id": "wuthering_waves",
+            "official": True,
+            "monitored": True,
+            "uids": [1955897084],
+        },
+        "honkai_star_rail": {
+            "game_id": "honkai_star_rail",
+            "official": True,
+            "monitored": True,
+            "uids": [1340190821],
+        },
+        "zenless_zone_zero": {
+            "game_id": "zenless_zone_zero",
+            "official": True,
+            "monitored": True,
+            "uids": [1636034895],
+        },
+        "honkai_impact_3rd": {
+            "game_id": "honkai_impact_3rd",
+            "official": True,
+            "monitored": True,
+            "uids": [27534330],
+        },
+        "arknights_endfield": {
+            "game_id": "arknights_endfield",
+            "official": True,
+            "monitored": True,
+            "uids": [1265652806],
+        },
+        "arknights": {
+            "game_id": "arknights",
+            "official": True,
+            "monitored": True,
+            "uids": [161775300],
+        },
     }
     assert cfg["discovery"]["event_uid_pools"] == {}
+
+
+def test_discovery_source_resolution_applies_explicit_defaults() -> None:
+    sources = resolve_discovery_uid_sources(
+        {
+            "matrix_uids": [100],
+            "game_uid_pools": {"genshin": {"uids": [100]}},
+            "event_uid_pools": {"launch": {"uids": [200]}},
+        }
+    )
+
+    assert [source.as_payload() for source in sources] == [
+        {
+            "source_mid": "100",
+            "pool_type": "matrix",
+            "pool_id": "matrix",
+            "game_id": None,
+            "official": False,
+            "monitored": True,
+        },
+        {
+            "source_mid": "100",
+            "pool_type": "game",
+            "pool_id": "genshin",
+            "game_id": "genshin",
+            "official": True,
+            "monitored": True,
+        },
+        {
+            "source_mid": "200",
+            "pool_type": "event",
+            "pool_id": "launch",
+            "game_id": None,
+            "official": False,
+            "monitored": True,
+        },
+    ]
+
+
+@pytest.mark.parametrize("field", ["official", "monitored"])
+def test_discovery_source_resolution_rejects_string_booleans(field: str) -> None:
+    with pytest.raises(ValueError, match=field):
+        resolve_discovery_uid_sources(
+            {
+                "game_uid_pools": {
+                    "genshin": {
+                        "uids": [100],
+                        field: "false",
+                    }
+                }
+            }
+        )
 
 
 def test_load_config_applies_service_environment_overrides(tmp_path: Path) -> None:

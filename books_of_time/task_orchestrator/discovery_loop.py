@@ -44,7 +44,36 @@ class DiscoveryLoopResult:
 class DiscoveryUidSource:
     mid: str
     pool_type: str = "matrix"
-    pool_id: str | None = None
+    pool_id: str = "matrix"
+    game_id: str | None = None
+    official: bool = False
+    monitored: bool = True
+
+    def __post_init__(self) -> None:
+        for field_name in ("mid", "pool_type", "pool_id"):
+            value = str(getattr(self, field_name)).strip()
+            if not value:
+                raise ValueError(f"Discovery source {field_name} must not be empty")
+            object.__setattr__(self, field_name, value)
+        if self.game_id is not None:
+            game_id = str(self.game_id).strip()
+            if not game_id:
+                raise ValueError("Discovery source game_id must not be empty")
+            object.__setattr__(self, "game_id", game_id)
+        if not isinstance(self.official, bool):
+            raise ValueError("Discovery source official must be a boolean")
+        if not isinstance(self.monitored, bool):
+            raise ValueError("Discovery source monitored must be a boolean")
+
+    def as_payload(self) -> dict[str, str | bool | None]:
+        return {
+            "source_mid": self.mid,
+            "pool_type": self.pool_type,
+            "pool_id": self.pool_id,
+            "game_id": self.game_id,
+            "official": self.official,
+            "monitored": self.monitored,
+        }
 
 
 class DiscoveryLoop:
@@ -65,6 +94,9 @@ class DiscoveryLoop:
                     mid=str(source.mid),
                     pool_type=source.pool_type,
                     pool_id=source.pool_id,
+                    game_id=source.game_id,
+                    official=source.official,
+                    monitored=source.monitored,
                 )
                 for source in uid_sources
             ]
@@ -90,11 +122,13 @@ class DiscoveryLoop:
                     source_mid=source.mid,
                     source_pool_type=source.pool_type,
                     source_pool_id=source.pool_id,
+                    source_associations=[source.as_payload()],
                 )
                 async with self.session_factory() as session:
                     created = await self.scheduler.handle_discovered_videos(
                         session=session,
                         videos=videos,
+                        source_associations=[source.as_payload()],
                         now=effective_now,
                     )
                     await self.snapshot_scheduler.schedule_terminal_snapshots(

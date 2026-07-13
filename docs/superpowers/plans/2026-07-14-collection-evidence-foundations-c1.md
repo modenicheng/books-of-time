@@ -303,7 +303,7 @@ git commit -m "feat(comments): preserve platform and public author evidence"
 - Produces: `KnownVideoSourceRepository.upsert_for_video(...) -> list[KnownVideoSource]`.
 - Consumes legacy scalar `source_pool_type/source_pool_id` payloads as a fallback during migration.
 
-- [ ] **Step 1: Write failing source-resolution and merge tests**
+- [x] **Step 1: Write failing source-resolution and merge tests**
 
 Update the example-config expectation so every game pool is explicit:
 
@@ -317,7 +317,7 @@ genshin_impact:
 
 Add tests that two pools containing the same MID produce one discovery task with two `source_associations`, not a first-source-only payload. Assert matrix fallback uses `pool_id="matrix"`, `official=False`, `monitored=True`; a game pool defaults `game_id` to its pool key and both booleans to true.
 
-- [ ] **Step 2: Run source tests to verify RED**
+- [x] **Step 2: Run source tests to verify RED**
 
 ```powershell
 uv run pytest tests/test_config_loader.py tests/test_service_scheduled_handlers.py -q
@@ -325,7 +325,7 @@ uv run pytest tests/test_config_loader.py tests/test_service_scheduled_handlers.
 
 Expected: `DiscoveryUidSource` lacks source metadata and the handler keeps only one source via `setdefault`.
 
-- [ ] **Step 3: Implement normalized source payloads**
+- [x] **Step 3: Implement normalized source payloads**
 
 Extend `DiscoveryUidSource`:
 
@@ -359,11 +359,11 @@ not silently converted to official. YAML `official` and `monitored` values must
 already be booleans; reject strings such as `"false"` instead of applying
 Python truthiness.
 
-- [ ] **Step 4: Write failing persistence/provenance tests**
+- [x] **Step 4: Write failing persistence/provenance tests**
 
 Extend scheduler and worker tests to collect the same BVID twice from two associations. Assert two `KnownVideoSource` rows share the BVID, repeated discovery updates `last_seen_at/last_raw_page_id`, and only one video stats task exists. Assert `first_raw_page_id` is the discovery page that first observed each association.
 
-- [ ] **Step 5: Run persistence tests to verify RED**
+- [x] **Step 5: Run persistence tests to verify RED**
 
 ```powershell
 uv run pytest tests/test_discovery_scheduler.py tests/test_user_videos_worker.py -q
@@ -371,7 +371,7 @@ uv run pytest tests/test_discovery_scheduler.py tests/test_user_videos_worker.py
 
 Expected: `known_video_sources` remains empty.
 
-- [ ] **Step 6: Implement source upsert and collector propagation**
+- [x] **Step 6: Implement source upsert and collector propagation**
 
 Add repository method:
 
@@ -390,7 +390,7 @@ Normalize `pool_id` to a non-empty string, create rows with first/last provenanc
 
 Pass `raw_page_observation_id` and normalized associations into `DiscoveryScheduler.handle_discovered_videos`. Keep `KnownVideo.source_mid` as first-source compatibility data and never overwrite it. Update raw-page `extra` and downstream stats-task payload with the full association list.
 
-- [ ] **Step 7: Verify discovery GREEN**
+- [x] **Step 7: Verify discovery GREEN**
 
 ```powershell
 uv run pytest tests/test_config_loader.py tests/test_discovery_loop.py tests/test_discovery_scheduler.py tests/test_service_scheduled_handlers.py tests/test_user_videos_worker.py -q
@@ -399,7 +399,7 @@ uv run ruff check books_of_time/task_orchestrator books_of_time/service/schedule
 
 Expected: all selected tests pass and repeated MID/BVID discovery retains all associations.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```powershell
 git add books_of_time/task_orchestrator books_of_time/service/scheduled_jobs.py books_of_time/collectors/user_videos.py books_of_time/db/repositories.py config/config.yaml.example tests/test_config_loader.py tests/test_discovery_scheduler.py tests/test_service_scheduled_handlers.py tests/test_user_videos_worker.py

@@ -14,6 +14,7 @@ from books_of_time.db.models import (
     CollectionTask,
     EventVideo,
     KnownVideo,
+    KnownVideoSource,
     RawPageObservation,
     RawPayload,
     RequestBackoffState,
@@ -67,20 +68,29 @@ async def _runtime(tmp_path, client):
     return engine, session_factory, worker
 
 
-async def _enqueue_discovery(session_factory, *, now: datetime, suffix: str) -> None:
+async def _enqueue_discovery(
+    session_factory,
+    *,
+    now: datetime,
+    suffix: str,
+    source_associations: list[dict] | None = None,
+) -> None:
     async with session_factory() as session:
+        payload = {
+            "mid": "123",
+            "page": 1,
+            "source_pool_type": "game",
+            "source_pool_id": "example-game",
+            "reason": "scheduled_discovery",
+        }
+        if source_associations is not None:
+            payload["source_associations"] = source_associations
         await CollectionTaskRepository(session).enqueue(
             kind=TaskKind.DISCOVER_USER_VIDEOS,
             target_type="user",
             target_id="123",
             priority=110,
-            payload={
-                "mid": "123",
-                "page": 1,
-                "source_pool_type": "game",
-                "source_pool_id": "example-game",
-                "reason": "scheduled_discovery",
-            },
+            payload=payload,
             not_before=now,
             idempotency_key=f"discover-user-videos:123:{suffix}",
         )
@@ -111,17 +121,42 @@ async def test_user_videos_worker_archives_page_and_deduplicates_discovery(
 
     await _enqueue_discovery(session_factory, now=now, suffix="first")
     assert await worker.run_once(now=now) is True
+    second_seen = now + timedelta(seconds=1)
+    client.captured_at = second_seen
     await _enqueue_discovery(
         session_factory,
-        now=now + timedelta(seconds=1),
+        now=second_seen,
         suffix="second",
+        source_associations=[
+            {
+                "source_mid": "123",
+                "pool_type": "game",
+                "pool_id": "example-game",
+                "game_id": "example-game",
+                "official": False,
+                "monitored": True,
+            },
+            {
+                "source_mid": "123",
+                "pool_type": "event",
+                "pool_id": "target:9",
+                "game_id": None,
+                "official": False,
+                "monitored": True,
+            },
+        ],
     )
-    assert await worker.run_once(now=now + timedelta(seconds=1)) is True
+    assert await worker.run_once(now=second_seen) is True
 
     async with session_factory() as session:
         raw_payloads = list(await session.scalars(select(RawPayload)))
         raw_pages = list(await session.scalars(select(RawPageObservation)))
         known_videos = list(await session.scalars(select(KnownVideo)))
+        known_sources = list(
+            await session.scalars(
+                select(KnownVideoSource).order_by(KnownVideoSource.pool_type)
+            )
+        )
         tasks = list(await session.scalars(select(CollectionTask)))
         coverage = list(await session.scalars(select(CollectionCoverageStat)))
 
@@ -129,16 +164,38 @@ async def test_user_videos_worker_archives_page_and_deduplicates_discovery(
     assert client.calls == [("123", 1), ("123", 1)]
     assert len(raw_payloads) == 2
     assert all(
-        raw.parser_version == "bilibili-user-video-list-v1" for raw in raw_payloads
+        raw.parser_version == "bilibili-user-video-list-v2" for raw in raw_payloads
     )
     assert len(raw_pages) == 2
     assert all(page.target_type == "user" for page in raw_pages)
     assert all(page.target_id == "123" for page in raw_pages)
     assert all(page.item_count == 1 for page in raw_pages)
     assert [video.bvid for video in known_videos] == ["BV-DISCOVERED"]
+    assert [source.pool_type for source in known_sources] == ["event", "game"]
+    event_source, game_source = known_sources
+    assert event_source.first_raw_page_id == raw_pages[1].id
+    assert event_source.last_raw_page_id == raw_pages[1].id
+    assert game_source.first_raw_page_id == raw_pages[0].id
+    assert game_source.last_raw_page_id == raw_pages[1].id
+    assert game_source.last_seen_at == second_seen
     assert len(stats_tasks) == 1
     assert stats_tasks[0].payload["source_pool_type"] == "game"
     assert stats_tasks[0].payload["source_pool_id"] == "example-game"
+    assert stats_tasks[0].payload["source_associations"] == [
+        {
+            "source_mid": "123",
+            "pool_type": "game",
+            "pool_id": "example-game",
+            "game_id": "example-game",
+            "official": False,
+            "monitored": True,
+        }
+    ]
+    assert (
+        raw_pages[0].extra["source_associations"]
+        == (stats_tasks[0].payload["source_associations"])
+    )
+    assert len(raw_pages[1].extra["source_associations"]) == 2
     assert len(coverage) == 2
     assert coverage[0].items_observed == 1
     assert coverage[0].raw_payloads_saved == 1

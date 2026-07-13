@@ -148,17 +148,38 @@ discovery:
   matrix_uids: []
   game_uid_pools:
     genshin_impact:
+      game_id: genshin_impact
+      official: true
+      monitored: true
       uids: [401742377]  # 原神
     wuthering_waves:
+      game_id: wuthering_waves
+      official: true
+      monitored: true
       uids: [1955897084]  # 鸣潮
     honkai_star_rail:
+      game_id: honkai_star_rail
+      official: true
+      monitored: true
       uids: [1340190821]  # 崩坏：星穹铁道
     zenless_zone_zero:
+      game_id: zenless_zone_zero
+      official: true
+      monitored: true
       uids: [1636034895]  # 绝区零
     honkai_impact_3rd:
+      game_id: honkai_impact_3rd
+      official: true
+      monitored: true
       uids: [27534330]  # 崩坏3第一偶像爱酱
     arknights_endfield:
+      game_id: arknights_endfield
+      official: true
+      monitored: true
       uids: [1265652806]  # 明日方舟：终末地
     arknights:
+      game_id: arknights
+      official: true
+      monitored: true
       uids: [161775300]  # 明日方舟
   event_uid_pools: {}

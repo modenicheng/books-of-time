@@ -303,8 +303,8 @@ def test_resolve_discovery_uid_sources_includes_game_and_event_pools() -> None:
     )
 
     assert [(source.mid, source.pool_type, source.pool_id) for source in sources] == [
-        ("100", "matrix", None),
-        ("200", "matrix", None),
+        ("100", "matrix", "matrix"),
+        ("200", "matrix", "matrix"),
         ("300", "game", "genshin"),
         ("400", "game", "hsr"),
         ("500", "event", "version_42"),

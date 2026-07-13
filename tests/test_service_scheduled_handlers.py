@@ -47,6 +47,13 @@ async def test_uid_discovery_handler_enqueues_each_source_once_per_slot() -> Non
     handler = UidDiscoveryScheduleHandler(
         [
             DiscoveryUidSource(mid="100", pool_type="matrix"),
+            DiscoveryUidSource(
+                mid="100",
+                pool_type="game",
+                pool_id="game-a",
+                game_id="game-a",
+                official=True,
+            ),
             DiscoveryUidSource(mid="200", pool_type="event", pool_id="event-a"),
         ]
     )
@@ -65,6 +72,24 @@ async def test_uid_discovery_handler_enqueues_each_source_once_per_slot() -> Non
     assert len(tasks) == 2
     assert all(task.kind == TaskKind.DISCOVER_USER_VIDEOS for task in tasks)
     assert [task.target_id for task in tasks] == ["100", "200"]
+    assert tasks[0].payload["source_associations"] == [
+        {
+            "source_mid": "100",
+            "pool_type": "game",
+            "pool_id": "game-a",
+            "game_id": "game-a",
+            "official": True,
+            "monitored": True,
+        },
+        {
+            "source_mid": "100",
+            "pool_type": "matrix",
+            "pool_id": "matrix",
+            "game_id": None,
+            "official": False,
+            "monitored": True,
+        },
+    ]
     assert tasks[1].payload["source_pool_type"] == "event"
     assert tasks[1].payload["source_pool_id"] == "event-a"
     assert all(task.priority == 110 for task in tasks)
@@ -195,12 +220,14 @@ async def test_uid_discovery_handler_merges_active_event_targets_by_uid() -> Non
             event_id=first_event.id,
             target_type="uid",
             target_value="100",
+            extra={"role": "official"},
             now=now,
         )
         second_target = await repository.add_target(
             event_id=second_event.id,
             target_type="uid",
             target_value="100",
+            extra={"role": "major_creator"},
             now=now,
         )
         await repository.add_target(
@@ -221,7 +248,34 @@ async def test_uid_discovery_handler_merges_active_event_targets_by_uid() -> Non
 
     assert len(tasks) == 1
     assert tasks[0].target_id == "100"
-    assert tasks[0].payload["source_pool_type"] == "matrix"
+    assert tasks[0].payload["source_pool_type"] == "event"
+    assert tasks[0].payload["source_pool_id"] == f"target:{first_target.id}"
+    assert tasks[0].payload["source_associations"] == [
+        {
+            "source_mid": "100",
+            "pool_type": "event",
+            "pool_id": f"target:{first_target.id}",
+            "game_id": None,
+            "official": True,
+            "monitored": True,
+        },
+        {
+            "source_mid": "100",
+            "pool_type": "event",
+            "pool_id": f"target:{second_target.id}",
+            "game_id": None,
+            "official": False,
+            "monitored": True,
+        },
+        {
+            "source_mid": "100",
+            "pool_type": "matrix",
+            "pool_id": "matrix",
+            "game_id": None,
+            "official": False,
+            "monitored": True,
+        },
+    ]
     assert tasks[0].payload["event_links"] == [
         {"event_id": first_event.id, "target_id": first_target.id},
         {"event_id": second_event.id, "target_id": second_target.id},

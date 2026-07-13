@@ -19,6 +19,7 @@ from books_of_time.storage.base import RawPayloadStore
 from books_of_time.task_orchestrator.discovery import (
     DiscoveryScheduler,
     EventDiscoveryLink,
+    normalize_source_associations,
 )
 
 
@@ -60,12 +61,20 @@ class UserVideosCollector:
             parser_version=DISCOVERY_PARSER_VERSION,
         )
 
+        source_associations = normalize_source_associations(
+            source_mid=mid,
+            source_pool_type=task.payload.get("source_pool_type"),
+            source_pool_id=task.payload.get("source_pool_id"),
+            source_associations=task.payload.get("source_associations"),
+        )
+
         try:
             videos = parse_user_video_list(
                 json.loads(result.body),
                 source_mid=mid,
                 source_pool_type=task.payload.get("source_pool_type"),
                 source_pool_id=task.payload.get("source_pool_id"),
+                source_associations=source_associations,
             )
         except Exception as exc:
             raise ParseFailure(
@@ -90,6 +99,7 @@ class UserVideosCollector:
             extra={
                 "source_pool_type": task.payload.get("source_pool_type"),
                 "source_pool_id": task.payload.get("source_pool_id"),
+                "source_associations": source_associations,
                 "reason": task.payload.get("reason"),
                 "event_links": task.payload.get("event_links", []),
             },
@@ -106,6 +116,8 @@ class UserVideosCollector:
                 )
                 for item in task.payload.get("event_links", [])
             ],
+            source_associations=source_associations,
+            raw_page_observation_id=raw_page.id,
             now=result.captured_at,
         )
         return CoverageDraft(

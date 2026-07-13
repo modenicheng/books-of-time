@@ -25,6 +25,7 @@ from books_of_time.db.models import (
     EventVideo,
     FrontierState,
     ImportantCommentWatchlist,
+    KnownVideoSource,
     RawPageObservation,
     RawPayload,
     RequestBackoffState,
@@ -75,6 +76,78 @@ def _optional_text(value: object) -> str | None:
         return None
     normalized = str(value).strip()
     return normalized or None
+
+
+class KnownVideoSourceRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def upsert_for_video(
+        self,
+        *,
+        bvid: str,
+        associations: list[dict[str, Any]],
+        seen_at: datetime,
+        raw_page_observation_id: int | None,
+    ) -> list[KnownVideoSource]:
+        normalized_bvid = _optional_text(bvid)
+        if normalized_bvid is None:
+            raise ValueError("bvid must not be empty")
+
+        rows: list[KnownVideoSource] = []
+        seen_identities: set[tuple[str, str, str]] = set()
+        for association in associations:
+            source_mid = _optional_text(association.get("source_mid"))
+            pool_type = _optional_text(association.get("pool_type")) or "matrix"
+            pool_id = _optional_text(association.get("pool_id")) or pool_type
+            if source_mid is None:
+                raise ValueError("Discovery source source_mid must not be empty")
+            official = association.get("official", False)
+            monitored = association.get("monitored", True)
+            if not isinstance(official, bool):
+                raise ValueError("Discovery source official must be a boolean")
+            if not isinstance(monitored, bool):
+                raise ValueError("Discovery source monitored must be a boolean")
+            identity = (source_mid, pool_type, pool_id)
+            if identity in seen_identities:
+                continue
+            seen_identities.add(identity)
+
+            row = await self.session.scalar(
+                select(KnownVideoSource).where(
+                    KnownVideoSource.bvid == normalized_bvid,
+                    KnownVideoSource.source_mid == source_mid,
+                    KnownVideoSource.pool_type == pool_type,
+                    KnownVideoSource.pool_id == pool_id,
+                )
+            )
+            if row is None:
+                row = KnownVideoSource(
+                    bvid=normalized_bvid,
+                    source_mid=source_mid,
+                    pool_type=pool_type,
+                    pool_id=pool_id,
+                    game_id=_optional_text(association.get("game_id")),
+                    official=official,
+                    monitored=monitored,
+                    first_seen_at=seen_at,
+                    last_seen_at=seen_at,
+                    first_raw_page_id=raw_page_observation_id,
+                    last_raw_page_id=raw_page_observation_id,
+                    active=True,
+                    created_at=seen_at,
+                    updated_at=seen_at,
+                )
+                self.session.add(row)
+            else:
+                row.last_seen_at = seen_at
+                row.last_raw_page_id = raw_page_observation_id
+                row.active = True
+                row.updated_at = seen_at
+            rows.append(row)
+
+        await self.session.flush()
+        return rows
 
 
 class CollectionTaskRepository:

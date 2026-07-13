@@ -4,9 +4,16 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from books_of_time.db.models import Base, CollectionTask, EventVideo, KnownVideo
+from books_of_time.db.models import (
+    Base,
+    CollectionTask,
+    EventVideo,
+    KnownVideo,
+    KnownVideoSource,
+    RawPageObservation,
+)
 from books_of_time.db.repositories import EventRepository
-from books_of_time.domain.enums import TaskKind
+from books_of_time.domain.enums import BilibiliRequestType, TaskKind
 from books_of_time.task_orchestrator.discovery import (
     DiscoveredVideo,
     DiscoveryScheduler,
@@ -62,6 +69,120 @@ async def test_discovery_scheduler_records_new_video_and_enqueues_stats_task() -
         assert tasks[1].payload["reason"] == "delayed_discovery"
         assert tasks[1].priority == 90
 
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_discovery_scheduler_preserves_all_source_provenance() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    first_seen = datetime(2026, 7, 10, 10, 0, tzinfo=UTC)
+    second_seen = first_seen + timedelta(minutes=1)
+    game_source = {
+        "source_mid": "123",
+        "pool_type": "game",
+        "pool_id": "genshin",
+        "game_id": "genshin",
+        "official": True,
+        "monitored": True,
+    }
+    event_source = {
+        "source_mid": "123",
+        "pool_type": "event",
+        "pool_id": "target:9",
+        "game_id": None,
+        "official": False,
+        "monitored": True,
+    }
+    changed_game_source = {
+        **game_source,
+        "game_id": "conflicting-game",
+        "official": False,
+        "monitored": False,
+    }
+    scheduler = DiscoveryScheduler(session_factory=session_factory)
+
+    async with session_factory() as session:
+        first_page = RawPageObservation(
+            raw_payload_id=1,
+            captured_at=first_seen,
+            request_type=BilibiliRequestType.USER_VIDEO_LIST,
+            target_type="user",
+            target_id="123",
+            page_number=1,
+            cursor=None,
+            sort_mode="pubdate",
+            parser_version="test",
+            status="success",
+            item_count=1,
+            extra={},
+        )
+        second_page = RawPageObservation(
+            raw_payload_id=2,
+            captured_at=second_seen,
+            request_type=BilibiliRequestType.USER_VIDEO_LIST,
+            target_type="user",
+            target_id="123",
+            page_number=1,
+            cursor=None,
+            sort_mode="pubdate",
+            parser_version="test",
+            status="success",
+            item_count=1,
+            extra={},
+        )
+        session.add_all([first_page, second_page])
+        await session.flush()
+
+        video = DiscoveredVideo(
+            bvid="BV-SOURCES",
+            pubdate=first_seen - timedelta(seconds=30),
+            source_mid="123",
+        )
+        first_created = await scheduler.handle_discovered_videos(
+            session=session,
+            videos=[video],
+            source_associations=[game_source],
+            raw_page_observation_id=first_page.id,
+            now=first_seen,
+        )
+        second_created = await scheduler.handle_discovered_videos(
+            session=session,
+            videos=[video],
+            source_associations=[changed_game_source, event_source],
+            raw_page_observation_id=second_page.id,
+            now=second_seen,
+        )
+        await session.commit()
+
+    async with session_factory() as session:
+        known_video = await session.get(KnownVideo, "BV-SOURCES")
+        sources = list(
+            await session.scalars(
+                select(KnownVideoSource).order_by(KnownVideoSource.pool_type)
+            )
+        )
+        tasks = list(await session.scalars(select(CollectionTask)))
+
+    assert first_created == ["BV-SOURCES"]
+    assert second_created == []
+    assert known_video is not None
+    assert known_video.source_mid == "123"
+    assert len(tasks) == 1
+    assert [source.pool_type for source in sources] == ["event", "game"]
+    event_row, game_row = sources
+    assert event_row.first_raw_page_id == second_page.id
+    assert event_row.last_raw_page_id == second_page.id
+    assert event_row.first_seen_at == second_seen
+    assert game_row.first_raw_page_id == first_page.id
+    assert game_row.last_raw_page_id == second_page.id
+    assert game_row.first_seen_at == first_seen
+    assert game_row.last_seen_at == second_seen
+    assert game_row.game_id == "genshin"
+    assert game_row.official is True
+    assert game_row.monitored is True
     await engine.dispose()
 
 

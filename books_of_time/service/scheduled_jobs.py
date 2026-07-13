@@ -87,21 +87,43 @@ class UidDiscoveryScheduleHandler:
         focus_time = self.policy.focus_time_for(scheduled_slot)
         schedule_mode = "focus" if focus_slot is not None else "normal"
         task_priority = 120 if focus_slot is not None else 110
-        sources_by_mid: dict[str, DiscoveryUidSource] = {}
+        sources_by_mid: dict[
+            str,
+            dict[tuple[str, str, str, bool, bool], DiscoveryUidSource],
+        ] = {}
+
+        def add_source(source: DiscoveryUidSource) -> None:
+            identity = (
+                source.pool_type,
+                source.pool_id,
+                source.game_id or "",
+                source.official,
+                source.monitored,
+            )
+            sources_by_mid.setdefault(source.mid, {}).setdefault(identity, source)
+
         for source in self.sources:
-            sources_by_mid.setdefault(source.mid, source)
+            add_source(source)
         event_links_by_mid: dict[str, list[dict[str, int]]] = {}
         event_targets = await EventRepository(session).list_active_uid_targets(now=now)
         for target in event_targets:
-            sources_by_mid.setdefault(
-                target.normalized_value,
-                DiscoveryUidSource(mid=target.normalized_value, pool_type="event"),
+            add_source(
+                DiscoveryUidSource(
+                    mid=target.normalized_value,
+                    pool_type="event",
+                    pool_id=f"target:{target.id}",
+                    official=target.extra.get("role") == "official",
+                )
             )
             event_links_by_mid.setdefault(target.normalized_value, []).append(
                 {"event_id": target.event_id, "target_id": target.id}
             )
 
-        for source in sources_by_mid.values():
+        for mid in sorted(sources_by_mid):
+            associations = [
+                source for _identity, source in sorted(sources_by_mid[mid].items())
+            ]
+            source = associations[0]
             if focus_slot is None:
                 task_slots = [(None, scheduled_slot, now)]
             else:
@@ -146,6 +168,9 @@ class UidDiscoveryScheduleHandler:
                         "page": 1,
                         "source_pool_type": source.pool_type,
                         "source_pool_id": source.pool_id,
+                        "source_associations": [
+                            association.as_payload() for association in associations
+                        ],
                         "reason": "scheduled_discovery",
                         "scheduled_for": planned_at.isoformat(),
                         "scheduler_slot": scheduled_for,
