@@ -108,6 +108,34 @@ BOT_MINIO_CREATE_BUCKET=false
 
 推荐预先创建 bucket 并授予应用账号最小的 bucket read/write 权限。只有明确允许应用创建 bucket 时才将 `BOT_MINIO_CREATE_BUCKET` 设为 `true`。`service doctor` 会探测实际 raw 后端；切换后，历史 `file://` 记录不会自动迁移，迁移必须连同 PostgreSQL 中的 `storage_uri` 一起规划。
 
+### Migrate Existing Raw Payloads To MinIO
+
+迁移前保持 `BOT_RAW_STORAGE_BACKEND=filesystem`，同时配置上面的 MinIO 连接参数。先停止正式服务，备份 PostgreSQL 和 raw 目录，再执行默认 dry-run：
+
+```bash
+uv run python main.py raw migrate-minio --limit 100 --after-id 0
+```
+
+日志会逐条输出 `id`、`status`、源 URI、目标 URI 和错误，并在末尾汇总候选数量。dry-run 只列出当前批次的 `file://` 记录，不上传对象，也不修改数据库。
+
+审查计划后，以有界批次执行：
+
+```bash
+uv run python main.py raw migrate-minio --execute --limit 100 --after-id 0
+```
+
+记录本批最后一个 raw payload ID，并将其作为下一批的 `--after-id`。命令按 ID 升序选择仍为 `file://` 的记录，因此成功批次可以安全续跑；单条失败不会阻止其余候选迁移，但执行结束会返回非零退出码，失败 ID 应在修复源文件或对象存储问题后重新覆盖对应 ID 范围。
+
+每条记录都经过以下校验：
+
+1. 读取本地源文件，解压后核对数据库中的 SHA-256 和未压缩尺寸。
+2. 以确定性对象名上传 MinIO，再下载目标对象并重复核对 SHA-256 和尺寸。
+3. 仅在目标校验成功后，把 PostgreSQL `storage_uri` 更新为 `s3://` URI。
+
+迁移不会删除本地源文件。所有批次完成后，先抽样执行 `raw inspect <RAW_PAYLOAD_ID>`，再将 `BOT_RAW_STORAGE_BACKEND` 切换为 `minio` 并运行 `service doctor`。确认备份、对象数量、抽样证据和服务读取均正常后，才可在单独维护窗口清理旧 raw 文件；该清理不由迁移命令自动完成。
+
+若目标校验失败或命令中断，未提交记录仍保留原 `file://` URI。回滚应用后端时可把 `BOT_RAW_STORAGE_BACKEND` 改回 `filesystem`；已经写成 `s3://` 的数据库记录仍需要 MinIO 可读，不能通过切换配置自动恢复为本地 URI。
+
 查看状态：
 
 ```bash

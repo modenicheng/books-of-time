@@ -297,7 +297,7 @@
 ### P5: Operational Completion
 
 - [x] 增加可配置失败告警规则、周期调度和 `operational_alert_states` 去重/恢复状态，覆盖 worker 心跳、任务积压、失败率和连续调度失败；active 告警进入 `service status`，默认仅记录日志。
-- [ ] 增加 raw payload filesystem -> MinIO 迁移/校验 CLI，复制后校验 hash，数据库 URI 仅在目标对象验证成功后更新，并支持 dry-run。
+- [x] 增加 raw payload filesystem -> MinIO 迁移/校验 CLI，复制后校验 hash，数据库 URI 仅在目标对象验证成功后更新，并支持 dry-run。
 
 ### End-to-End Acceptance
 
