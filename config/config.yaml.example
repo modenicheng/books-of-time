@@ -147,8 +147,18 @@ analysis:
 discovery:
   matrix_uids: []
   game_uid_pools:
-    example_game:
-      uids: []
-  event_uid_pools:
-    example_event:
-      uids: []
+    genshin_impact:
+      uids: [401742377]  # 原神
+    wuthering_waves:
+      uids: [1955897084]  # 鸣潮
+    honkai_star_rail:
+      uids: [1340190821]  # 崩坏：星穹铁道
+    zenless_zone_zero:
+      uids: [1636034895]  # 绝区零
+    honkai_impact_3rd:
+      uids: [27534330]  # 崩坏3第一偶像爱酱
+    arknights_endfield:
+      uids: [1265652806]  # 明日方舟：终末地
+    arknights:
+      uids: [161775300]  # 明日方舟
+  event_uid_pools: {}

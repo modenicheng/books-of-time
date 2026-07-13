@@ -10,6 +10,24 @@ def test_default_config_path_points_to_repo_config_directory() -> None:
     )
 
 
+def test_example_config_monitors_primary_game_accounts_by_default() -> None:
+    config_path = Path(__file__).resolve().parents[1] / "config" / "config.yaml.example"
+
+    cfg = load_config(config_path, environ={})
+
+    assert cfg["discovery"]["matrix_uids"] == []
+    assert cfg["discovery"]["game_uid_pools"] == {
+        "genshin_impact": {"uids": [401742377]},
+        "wuthering_waves": {"uids": [1955897084]},
+        "honkai_star_rail": {"uids": [1340190821]},
+        "zenless_zone_zero": {"uids": [1636034895]},
+        "honkai_impact_3rd": {"uids": [27534330]},
+        "arknights_endfield": {"uids": [1265652806]},
+        "arknights": {"uids": [161775300]},
+    }
+    assert cfg["discovery"]["event_uid_pools"] == {}
+
+
 def test_load_config_applies_service_environment_overrides(tmp_path: Path) -> None:
     config_path = tmp_path / "config.yaml"
     config_path.write_text(

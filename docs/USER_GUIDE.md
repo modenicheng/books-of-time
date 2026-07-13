@@ -207,14 +207,26 @@ scheduler:
 
 ```yaml
 discovery:
-  matrix_uids: [12345]
+  matrix_uids: []
   game_uid_pools:
-    example_game:
-      uids: [23456, 34567]
-  event_uid_pools:
-    example_event:
-      uids: [45678]
+    genshin_impact:
+      uids: [401742377]
+    wuthering_waves:
+      uids: [1955897084]
+    honkai_star_rail:
+      uids: [1340190821]
+    zenless_zone_zero:
+      uids: [1636034895]
+    honkai_impact_3rd:
+      uids: [27534330]
+    arknights_endfield:
+      uids: [1265652806]
+    arknights:
+      uids: [161775300]
+  event_uid_pools: {}
 ```
+
+这些是模板内置的官方主账号。账号与 UID 对照、添加同游戏其他账号的方法见 [CONFIGURATION](CONFIGURATION.md#discovery-pools)。
 
 也可给 active 事件添加 UID target：
 

@@ -311,13 +311,23 @@ analysis:
 
 ```yaml
 discovery:
-  matrix_uids: [12345]
+  matrix_uids: []
   game_uid_pools:
-    game-a:
-      uids: [23456, 34567]
-  event_uid_pools:
-    event-a:
-      uids: [45678]
+    genshin_impact:
+      uids: [401742377]
+    wuthering_waves:
+      uids: [1955897084]
+    honkai_star_rail:
+      uids: [1340190821]
+    zenless_zone_zero:
+      uids: [1636034895]
+    honkai_impact_3rd:
+      uids: [27534330]
+    arknights_endfield:
+      uids: [1265652806]
+    arknights:
+      uids: [161775300]
+  event_uid_pools: {}
 ```
 
 - `matrix_uids`：通用矩阵账号。
@@ -326,6 +336,20 @@ discovery:
 - active 事件中的 UID target 会在 scheduler 运行时动态合并，不需要重复写入 YAML。
 
 pool 值既可写成 `{uids: [...]}`，也可直接写列表或单个 UID。服务每轮对同一 MID 去重。
+
+模板默认监测以下于 2026-07-13 经 B 站用户检索确认的官方主发布账号：
+
+| Pool ID | 游戏 | B 站账号 | MID |
+| --- | --- | --- | ---: |
+| `genshin_impact` | 原神 | 原神 | `401742377` |
+| `wuthering_waves` | 鸣潮 | 鸣潮 | `1955897084` |
+| `honkai_star_rail` | 崩坏：星穹铁道 | 崩坏星穹铁道 | `1340190821` |
+| `zenless_zone_zero` | 绝区零 | 绝区零 | `1636034895` |
+| `honkai_impact_3rd` | 崩坏三 | 崩坏3第一偶像爱酱 | `27534330` |
+| `arknights_endfield` | 终末地 | 明日方舟终末地 | `1265652806` |
+| `arknights` | 明日方舟 | 明日方舟 | `161775300` |
+
+默认池只收录每款游戏持续发布版本内容的核心账号，不自动加入动画项目、赛事、角色或同人运营账号。账号迁移或运营策略变化时，应重新检索并更新对应 pool；需要覆盖其他官方账号时，直接把 MID 追加到该 pool 的 `uids` 即可。
 
 ## Environment Variables
 
