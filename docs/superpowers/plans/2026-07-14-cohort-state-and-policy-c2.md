@@ -56,7 +56,7 @@
 - Produces nullable `snapshot_cohort_id` and `snapshot_cohort_component_id` on `CollectionTask` and `CollectionCoverageStat`.
 - Consumes existing `KnownVideo`, `CollectionTask`, `CollectionCoverageStat`, `UTCDateTime`, `json_dict_type`, and `bigint_pk_type`.
 
-- [ ] **Step 1: Write failing metadata and constraint tests**
+- [x] **Step 1: Write failing metadata and constraint tests**
 
 Create `tests/test_cohort_models.py`. Build an in-memory schema and assert these exact contracts:
 
@@ -72,7 +72,7 @@ assert CollectionCoverageStat.__table__.c.snapshot_cohort_component_id.nullable 
 
 Insert one complete graph using version `cohort-default-v1`, one known video, one state, one checkpoint cohort, one `video_metrics` component, and one gap. Assert defaults, UTC round trip, JSON round trip, and that duplicate `(cohort_id, component_kind)` and duplicate `cohort_key` raise `IntegrityError`.
 
-- [ ] **Step 2: Run model tests to verify RED**
+- [x] **Step 2: Run model tests to verify RED**
 
 ```powershell
 uv run pytest tests/test_cohort_models.py -q
@@ -80,7 +80,7 @@ uv run pytest tests/test_cohort_models.py -q
 
 Expected: import fails because the five C2 ORM classes do not exist.
 
-- [ ] **Step 3: Add exact ORM contracts**
+- [x] **Step 3: Add exact ORM contracts**
 
 Add models with these persisted fields:
 
@@ -121,7 +121,7 @@ Use string columns plus `CheckConstraint` for tier, lifecycle, cohort status, co
 
 Task and coverage cohort IDs are logical nullable references in C2, matching the repository's existing high-write reference style. C3 owns task creation; C5 adds scan-run/slice fields.
 
-- [ ] **Step 4: Add static Alembic revision and isolated round trip**
+- [x] **Step 4: Add static Alembic revision and isolated round trip**
 
 Create `0009_cohort_state_and_policy` with `down_revision="0008_collection_evidence_foundations"`. The migration must use explicit `op.create_table`, `op.add_column`, `op.create_index`, `op.drop_index`, `op.drop_column`, and `op.drop_table`; it must not import `Base.metadata`.
 
@@ -141,7 +141,7 @@ def test_cohort_state_revision_round_trip(tmp_path: Path) -> None:
 
 Update legacy adoption's exact table/column allowlist so only these known C2 additions may be absent. Never run downgrade against the configured user PostgreSQL database.
 
-- [ ] **Step 5: Verify schema GREEN**
+- [x] **Step 5: Verify schema GREEN**
 
 ```powershell
 uv run pytest tests/test_cohort_models.py tests/test_schema_migrations.py -q
@@ -150,7 +150,7 @@ uv run ruff check books_of_time/db/models.py books_of_time/db/schema.py tests/te
 
 Expected: model constraints and isolated migration round trip pass.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```powershell
 git add books_of_time/db/models.py books_of_time/db/schema.py alembic/versions/0009_cohort_state_and_policy.py tests/test_cohort_models.py tests/test_schema_migrations.py docs/superpowers/plans/2026-07-14-cohort-state-and-policy-c2.md

@@ -25,7 +25,7 @@ async def test_schema_revision_helpers_read_expected_and_current_head(
     tmp_path: Path,
 ) -> None:
     expected = get_expected_schema_revision()
-    assert expected == "0008_collection_evidence_foundations"
+    assert expected == "0009_cohort_state_and_policy"
 
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as connection:
@@ -263,6 +263,70 @@ def test_collection_evidence_revision_round_trip(tmp_path: Path) -> None:
     assert _sqlite_table_exists(database_path, "http_request_attempts")
 
 
+def test_cohort_state_revision_is_static() -> None:
+    revision_path = (
+        Path(__file__).resolve().parents[1]
+        / "alembic"
+        / "versions"
+        / "0009_cohort_state_and_policy.py"
+    )
+    source = revision_path.read_text(encoding="utf-8")
+
+    assert (
+        "down_revision: str | Sequence[str] | None = "
+        '"0008_collection_evidence_foundations"' in source
+    )
+    assert 'op.create_table(\n        "collection_policy_versions"' in source
+    assert 'op.create_table(\n        "snapshot_cohorts"' in source
+    assert 'op.add_column(\n        "collection_tasks"' in source
+    assert "Base.metadata" not in source
+
+
+def test_cohort_state_revision_round_trip(tmp_path: Path) -> None:
+    database_path = tmp_path / "cohort-state-cycle.sqlite3"
+    config_path = _write_sqlite_config(
+        tmp_path / "cohort-state-cycle.yaml",
+        database_path,
+    )
+    alembic_config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
+    alembic_config.attributes["bot_config_path"] = str(config_path)
+    alembic_config.attributes["skip_logger_config"] = True
+
+    command.upgrade(alembic_config, "head")
+    assert _sqlite_table_exists(database_path, "collection_policy_versions")
+    assert _sqlite_table_exists(database_path, "video_collection_states")
+    assert _sqlite_table_exists(database_path, "snapshot_cohorts")
+    assert _sqlite_table_exists(database_path, "snapshot_cohort_components")
+    assert _sqlite_table_exists(database_path, "collection_schedule_gaps")
+    assert "snapshot_cohort_id" in _sqlite_columns(
+        database_path,
+        "collection_tasks",
+    )
+    assert "snapshot_cohort_component_id" in _sqlite_columns(
+        database_path,
+        "collection_coverage_stats",
+    )
+
+    command.downgrade(alembic_config, "0008_collection_evidence_foundations")
+    assert not _sqlite_table_exists(database_path, "collection_policy_versions")
+    assert not _sqlite_table_exists(database_path, "snapshot_cohorts")
+    assert "snapshot_cohort_id" not in _sqlite_columns(
+        database_path,
+        "collection_tasks",
+    )
+    assert "snapshot_cohort_component_id" not in _sqlite_columns(
+        database_path,
+        "collection_coverage_stats",
+    )
+
+    command.upgrade(alembic_config, "head")
+    assert _sqlite_table_exists(database_path, "snapshot_cohorts")
+    assert "snapshot_cohort_id" in _sqlite_columns(
+        database_path,
+        "collection_tasks",
+    )
+
+
 def test_large_time_indexes_compile_as_postgresql_brin() -> None:
     expected = {
         "idx_raw_payloads_captured_brin",
@@ -354,6 +418,11 @@ async def test_adopt_legacy_schema_repairs_known_drift_and_upgrades(
         "operational_alert_states",
         "known_video_sources",
         "http_request_attempts",
+        "collection_policy_versions",
+        "video_collection_states",
+        "snapshot_cohorts",
+        "snapshot_cohort_components",
+        "collection_schedule_gaps",
     }
     baseline_tables = [
         table
@@ -380,6 +449,14 @@ async def test_adopt_legacy_schema_repairs_known_drift_and_upgrades(
         )
         for table_name in ("comment_entities", "comment_observations"):
             for column_name in evidence_columns:
+                await connection.execute(
+                    text(f"ALTER TABLE {table_name} DROP COLUMN {column_name}")
+                )
+        for table_name in ("collection_tasks", "collection_coverage_stats"):
+            for column_name in (
+                "snapshot_cohort_id",
+                "snapshot_cohort_component_id",
+            ):
                 await connection.execute(
                     text(f"ALTER TABLE {table_name} DROP COLUMN {column_name}")
                 )

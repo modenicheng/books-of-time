@@ -6,6 +6,7 @@ from typing import Any
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
     Enum,
     Float,
     ForeignKey,
@@ -582,6 +583,8 @@ class CollectionTask(TimestampMixin, Base):
     lease_until: Mapped[datetime | None] = mapped_column(UTCDateTime())
     retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     max_retries: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
+    snapshot_cohort_id: Mapped[int | None] = mapped_column(BigInteger)
+    snapshot_cohort_component_id: Mapped[int | None] = mapped_column(BigInteger)
 
 
 Index(
@@ -643,6 +646,8 @@ class CollectionCoverageStat(TimestampMixin, Base):
         bigint_pk_type, primary_key=True, autoincrement=True
     )
     collection_task_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    snapshot_cohort_id: Mapped[int | None] = mapped_column(BigInteger)
+    snapshot_cohort_component_id: Mapped[int | None] = mapped_column(BigInteger)
     run_id: Mapped[str] = mapped_column(Text, nullable=False)
     task_kind: Mapped[TaskKind] = mapped_column(
         Enum(TaskKind, values_callable=lambda x: [e.value for e in x]),
@@ -1107,6 +1112,387 @@ Index(
     KnownVideoSource.monitored,
 )
 Index("idx_known_video_sources_mid", KnownVideoSource.source_mid)
+
+
+class CollectionPolicyVersion(Base):
+    __tablename__ = "collection_policy_versions"
+    __table_args__ = (
+        CheckConstraint(
+            "scope_type IN ('global', 'game')",
+            name="ck_collection_policy_versions_scope_type",
+        ),
+        CheckConstraint(
+            "distinct_comment_count >= 0",
+            name="ck_collection_policy_versions_distinct_comments",
+        ),
+        CheckConstraint(
+            "complete_day_count >= 0",
+            name="ck_collection_policy_versions_complete_days",
+        ),
+        CheckConstraint(
+            "valid_exposure_minutes >= 0",
+            name="ck_collection_policy_versions_exposure_minutes",
+        ),
+        CheckConstraint(
+            "excluded_comment_count >= 0",
+            name="ck_collection_policy_versions_excluded_comments",
+        ),
+        CheckConstraint(
+            "training_window_end IS NULL OR training_window_start IS NULL "
+            "OR training_window_end > training_window_start",
+            name="ck_collection_policy_versions_training_window",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(
+        bigint_pk_type, primary_key=True, autoincrement=True
+    )
+    version: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    policy_kind: Mapped[str] = mapped_column(String(64), nullable=False)
+    scope_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    scope_id: Mapped[str] = mapped_column(Text, nullable=False)
+    timezone: Mapped[str] = mapped_column(String(64), nullable=False)
+    policy: Mapped[dict[str, Any]] = mapped_column(
+        json_dict_type,
+        nullable=False,
+        default=dict,
+    )
+    training_window_start: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    training_window_end: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    distinct_comment_count: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0
+    )
+    complete_day_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    valid_exposure_minutes: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0
+    )
+    excluded_comment_count: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0
+    )
+    exclusion_reasons: Mapped[dict[str, Any]] = mapped_column(
+        json_dict_type,
+        nullable=False,
+        default=dict,
+    )
+    algorithm: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(), nullable=False, server_default=func.now()
+    )
+    activated_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    superseded_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+
+Index(
+    "uq_collection_policy_versions_active_scope",
+    CollectionPolicyVersion.policy_kind,
+    CollectionPolicyVersion.scope_type,
+    CollectionPolicyVersion.scope_id,
+    unique=True,
+    sqlite_where=text("active = 1"),
+    postgresql_where=text("active"),
+)
+
+
+class VideoCollectionState(Base):
+    __tablename__ = "video_collection_states"
+    __table_args__ = (
+        CheckConstraint(
+            "desired_tier IN ('s', 'a', 'b', 'c')",
+            name="ck_video_collection_states_desired_tier",
+        ),
+        CheckConstraint(
+            "effective_tier IN ('s', 'a', 'b', 'c')",
+            name="ck_video_collection_states_effective_tier",
+        ),
+        CheckConstraint(
+            "candidate_downgrade_tier IS NULL "
+            "OR candidate_downgrade_tier IN ('s', 'a', 'b', 'c')",
+            name="ck_video_collection_states_candidate_tier",
+        ),
+        CheckConstraint(
+            "pinned_tier IS NULL OR pinned_tier IN ('s', 'a', 'b', 'c')",
+            name="ck_video_collection_states_pinned_tier",
+        ),
+        CheckConstraint(
+            "life_stage IN ('active', 'dormant', 'archived')",
+            name="ck_video_collection_states_life_stage",
+        ),
+        CheckConstraint(
+            "consecutive_downgrade_count >= 0",
+            name="ck_video_collection_states_downgrade_count",
+        ),
+        CheckConstraint(
+            "last_checkpoint_hours IS NULL OR last_checkpoint_hours > 0",
+            name="ck_video_collection_states_checkpoint_hours",
+        ),
+    )
+
+    bvid: Mapped[str] = mapped_column(
+        Text,
+        ForeignKey("known_videos.bvid", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    desired_tier: Mapped[str] = mapped_column(String(1), nullable=False, default="c")
+    effective_tier: Mapped[str] = mapped_column(String(1), nullable=False, default="c")
+    candidate_downgrade_tier: Mapped[str | None] = mapped_column(String(1))
+    consecutive_downgrade_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
+    pinned_tier: Mapped[str | None] = mapped_column(String(1))
+    life_stage: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="active"
+    )
+    schedule_anchor_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    next_due_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    last_planned_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    last_completed_cohort_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    last_checkpoint_hours: Mapped[int | None] = mapped_column(Integer)
+    policy_version: Mapped[str] = mapped_column(
+        Text,
+        ForeignKey("collection_policy_versions.version"),
+        nullable=False,
+    )
+    extra: Mapped[dict[str, Any]] = mapped_column(
+        json_dict_type,
+        nullable=False,
+        default=dict,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+Index("idx_video_collection_states_next_due", VideoCollectionState.next_due_at)
+Index(
+    "idx_video_collection_states_life_stage",
+    VideoCollectionState.life_stage,
+    VideoCollectionState.next_due_at,
+)
+
+
+class SnapshotCohort(Base):
+    __tablename__ = "snapshot_cohorts"
+    __table_args__ = (
+        CheckConstraint(
+            "desired_tier IN ('s', 'a', 'b', 'c')",
+            name="ck_snapshot_cohorts_desired_tier",
+        ),
+        CheckConstraint(
+            "effective_tier IN ('s', 'a', 'b', 'c')",
+            name="ck_snapshot_cohorts_effective_tier",
+        ),
+        CheckConstraint(
+            "status IN ('planned', 'shadow_planned', 'running', 'complete', "
+            "'partial', 'missed', 'corrupted', 'blocked', 'not_applicable')",
+            name="ck_snapshot_cohorts_status",
+        ),
+        CheckConstraint(
+            "age_checkpoint_hours IS NULL OR age_checkpoint_hours > 0",
+            name="ck_snapshot_cohorts_checkpoint_hours",
+        ),
+        CheckConstraint(
+            "expected_component_count >= 0",
+            name="ck_snapshot_cohorts_expected_components",
+        ),
+        CheckConstraint(
+            "completed_component_count >= 0",
+            name="ck_snapshot_cohorts_completed_components",
+        ),
+        CheckConstraint(
+            "completed_component_count <= expected_component_count",
+            name="ck_snapshot_cohorts_component_counts",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(
+        bigint_pk_type, primary_key=True, autoincrement=True
+    )
+    cohort_key: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    bvid: Mapped[str] = mapped_column(
+        Text,
+        ForeignKey("known_videos.bvid", ondelete="CASCADE"),
+        nullable=False,
+    )
+    scheduled_for: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    reason: Mapped[str] = mapped_column(String(64), nullable=False)
+    age_checkpoint_hours: Mapped[int | None] = mapped_column(Integer)
+    desired_tier: Mapped[str] = mapped_column(String(1), nullable=False)
+    effective_tier: Mapped[str] = mapped_column(String(1), nullable=False)
+    policy_version: Mapped[str] = mapped_column(
+        Text,
+        ForeignKey("collection_policy_versions.version"),
+        nullable=False,
+    )
+    deadline: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="planned")
+    status_reason: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    expected_component_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
+    completed_component_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
+    extra: Mapped[dict[str, Any]] = mapped_column(
+        json_dict_type,
+        nullable=False,
+        default=dict,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+Index(
+    "idx_snapshot_cohorts_bvid_scheduled",
+    SnapshotCohort.bvid,
+    SnapshotCohort.scheduled_for,
+)
+Index(
+    "idx_snapshot_cohorts_status_deadline",
+    SnapshotCohort.status,
+    SnapshotCohort.deadline,
+)
+
+
+class SnapshotCohortComponent(Base):
+    __tablename__ = "snapshot_cohort_components"
+    __table_args__ = (
+        UniqueConstraint(
+            "cohort_id",
+            "component_kind",
+            name="uq_snapshot_cohort_components_kind",
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'running', 'complete', 'partial', "
+            "'joined_active_task', 'missed_due_to_capacity', "
+            "'missed_due_to_service_gap', 'failed', 'corrupted', "
+            "'not_applicable', 'blocked')",
+            name="ck_snapshot_cohort_components_status",
+        ),
+        CheckConstraint(
+            "planned_pages >= 0",
+            name="ck_snapshot_cohort_components_planned_pages",
+        ),
+        CheckConstraint(
+            "requested_pages >= 0",
+            name="ck_snapshot_cohort_components_requested_pages",
+        ),
+        CheckConstraint(
+            "succeeded_pages >= 0",
+            name="ck_snapshot_cohort_components_succeeded_pages",
+        ),
+        CheckConstraint(
+            "items_observed >= 0",
+            name="ck_snapshot_cohort_components_items_observed",
+        ),
+        CheckConstraint(
+            "raw_payloads_saved >= 0",
+            name="ck_snapshot_cohort_components_raw_payloads",
+        ),
+        CheckConstraint(
+            "succeeded_pages <= requested_pages",
+            name="ck_snapshot_cohort_components_page_counts",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(
+        bigint_pk_type, primary_key=True, autoincrement=True
+    )
+    cohort_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("snapshot_cohorts.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    component_kind: Mapped[str] = mapped_column(String(64), nullable=False)
+    required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    scheduled_for: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    deadline: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    started_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    skew_seconds: Mapped[int | None] = mapped_column(Integer)
+    planned_pages: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    requested_pages: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    succeeded_pages: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    items_observed: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    raw_payloads_saved: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0
+    )
+    comment_scan_run_id: Mapped[int | None] = mapped_column(BigInteger)
+    failure_reason: Mapped[str | None] = mapped_column(Text)
+    extra: Mapped[dict[str, Any]] = mapped_column(
+        json_dict_type,
+        nullable=False,
+        default=dict,
+    )
+
+
+Index(
+    "idx_snapshot_cohort_components_status_deadline",
+    SnapshotCohortComponent.status,
+    SnapshotCohortComponent.deadline,
+)
+
+
+class CollectionScheduleGap(Base):
+    __tablename__ = "collection_schedule_gaps"
+    __table_args__ = (
+        UniqueConstraint(
+            "bvid",
+            "gap_start",
+            "gap_end",
+            "reason",
+            "policy_version",
+            name="uq_collection_schedule_gaps_identity",
+        ),
+        CheckConstraint(
+            "expected_cohort_count >= 0",
+            name="ck_collection_schedule_gaps_expected_count",
+        ),
+        CheckConstraint(
+            "gap_end > gap_start",
+            name="ck_collection_schedule_gaps_time_order",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(
+        bigint_pk_type, primary_key=True, autoincrement=True
+    )
+    bvid: Mapped[str] = mapped_column(
+        Text,
+        ForeignKey("known_videos.bvid", ondelete="CASCADE"),
+        nullable=False,
+    )
+    gap_start: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    gap_end: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    expected_cohort_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    reason: Mapped[str] = mapped_column(String(64), nullable=False)
+    service_instance_id: Mapped[str | None] = mapped_column(Text)
+    policy_version: Mapped[str] = mapped_column(
+        Text,
+        ForeignKey("collection_policy_versions.version"),
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(), nullable=False, server_default=func.now()
+    )
+
+
+Index(
+    "idx_collection_schedule_gaps_bvid_time",
+    CollectionScheduleGap.bvid,
+    CollectionScheduleGap.gap_start,
+    CollectionScheduleGap.gap_end,
+)
 
 
 class FrontierState(TimestampMixin, Base):

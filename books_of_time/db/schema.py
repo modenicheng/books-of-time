@@ -30,8 +30,21 @@ _POST_BASELINE_TABLES = {
     "operational_alert_states",
     "known_video_sources",
     "http_request_attempts",
+    "collection_policy_versions",
+    "video_collection_states",
+    "snapshot_cohorts",
+    "snapshot_cohort_components",
+    "collection_schedule_gaps",
 }
 _POST_BASELINE_COLUMNS = {
+    "collection_tasks": {
+        "snapshot_cohort_id",
+        "snapshot_cohort_component_id",
+    },
+    "collection_coverage_stats": {
+        "snapshot_cohort_id",
+        "snapshot_cohort_component_id",
+    },
     "comment_entities": {
         "platform_created_at",
         "author_level",
