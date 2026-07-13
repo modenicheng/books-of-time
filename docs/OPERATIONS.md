@@ -108,7 +108,7 @@ scheduler 启动时 bootstrap 以下稳定 job：
 
 | Job | 默认周期 | 作用 |
 | --- | --- | --- |
-| `uid-discovery` | `scheduler.discovery_scan_seconds`，默认 60 秒 | 仅在 10:00（含）到 22:00（不含）为静态/event UID 生成 discovery task；重点分钟提升任务优先级 |
+| `uid-discovery` | `scheduler.discovery_scan_seconds`，默认 60 秒 | 仅在 10:00（含）到 22:00（不含）为静态/event UID 生成 discovery task；每个重点时点生成 T+0/T+30 两次高优先级检查 |
 | `video-snapshot-sweep` | 60 秒 | 全天为到期 known video 生成指标 task |
 | `daily-terminal-snapshot` | 60 秒检查 | 22:00 后生成额外的当日日终快照，不停止常规 sweep |
 | `operational-alert-evaluation` | 默认 60 秒 | 评估持久告警，可关闭 |
@@ -120,6 +120,10 @@ UID discovery 按持久化的 `next_run_at` 判断窗口和重点分钟，而不
 实际开始时间判断。因此 scheduler 短暂繁忙导致的分钟级延迟不会丢失重点标记；
 服务停机期间错过的历史 slot 不会在恢复后逐个补请求。视频 sweep、worker task
 lease 和 Cookie/告警 job 不使用 discovery 窗口。
+
+重点槽用本地整分钟作为稳定锚点，T+0 和 T+30 的 task 分别记录
+`focus_offset_seconds=0/30`。handler 若晚到，会把主任务的可执行时间顺延到
+当前时间，并把补任务顺延到其后 30 秒；这避免两次检查在恢复瞬间同时被领取。
 
 配置周期改变后，scheduler 下次 bootstrap 会更新仍包含在 definitions 中的已有 job：kind、周期、priority、payload 和 enabled，不删除成功/失败历史字段。
 

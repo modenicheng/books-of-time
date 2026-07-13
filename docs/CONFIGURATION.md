@@ -167,7 +167,7 @@ scheduler:
 | `discovery_start_hour` | `10` | 自动 UID discovery 的本地起始小时，包含该小时 |
 | `discovery_stop_hour` | `22` | 自动 UID discovery 的本地停止小时，不包含该小时 |
 | `discovery_timezone` | `Asia/Shanghai` | 发现窗口和重点分钟使用的 IANA 时区 |
-| `discovery_focus_times` | 见示例 | 严格 `HH:MM` 列表；重点分钟的 discovery task 优先级从 110 提升到 120，并写入审计 payload |
+| `discovery_focus_times` | 见示例 | 严格 `HH:MM` 列表；每个重点时点生成 T+0 和 T+30 秒两次 discovery，优先级从 110 提升到 120，并写入审计 payload |
 
 当前保留但未接入运行时的字段：
 
@@ -176,6 +176,9 @@ scheduler:
 自动窗口只约束 `service run` 的持久化 UID discovery job。显式执行的
 `discovery loop` 是诊断入口，不会被窗口静默拦截。视频指标 sweep 和已入队的
 评论、回复、media、重试任务不读取这些字段，全天都可运行。
+
+重点补检查固定为 30 秒，不单独配置。若 scheduler 晚于重点时点才执行 handler，
+主任务立即变为可执行，补任务仍至少比主任务的 `not_before` 晚 30 秒。
 
 ## Service
 

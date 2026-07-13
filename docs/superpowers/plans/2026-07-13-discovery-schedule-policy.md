@@ -88,3 +88,18 @@ type.
 - [x] Run `uv run ruff check .` and `uv run ruff format --check .`.
 - [x] Run Alembic metadata and both Compose configuration checks.
 - [x] Review the diff and commit the scheduling change independently.
+
+### Follow-up: Focus Recheck At T+30 Seconds
+
+**Files:**
+- Modify: `books_of_time/task_orchestrator/discovery_schedule_policy.py`
+- Modify: `books_of_time/service/scheduled_jobs.py`
+- Modify: `tests/test_discovery_schedule_policy.py`
+- Modify: `tests/test_service_scheduled_handlers.py`
+- Modify: operator documentation and TODO listed above
+
+- [x] Anchor each focus label to its exact local minute.
+- [x] Enqueue one primary task and one task 30 seconds later for every UID.
+- [x] Preserve at least 30 seconds between eligibility times when the handler is late.
+- [x] Prevent recreation of the same focus pair across all task statuses.
+- [x] Run focused and full verification and commit the follow-up independently.

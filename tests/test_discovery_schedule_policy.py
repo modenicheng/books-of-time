@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -48,6 +49,19 @@ def test_discovery_policy_does_not_mark_adjacent_minute_as_focus() -> None:
     at = datetime(2026, 7, 13, 3, 1, tzinfo=UTC)  # 11:01 Asia/Shanghai
 
     assert DiscoverySchedulePolicy().focus_time_for(at) is None
+
+
+def test_discovery_policy_returns_focus_slot_at_exact_local_minute() -> None:
+    at = datetime(2026, 7, 13, 3, 0, 45, tzinfo=UTC)
+
+    assert DiscoverySchedulePolicy().focus_slot_for(at) == datetime(
+        2026,
+        7,
+        13,
+        11,
+        0,
+        tzinfo=ZoneInfo("Asia/Shanghai"),
+    )
 
 
 @pytest.mark.parametrize(

@@ -70,6 +70,7 @@ async def test_uid_discovery_handler_enqueues_each_source_once_per_slot() -> Non
     assert all(task.priority == 110 for task in tasks)
     assert all(task.payload["discovery_schedule_mode"] == "normal" for task in tasks)
     assert all(task.payload["focus_time"] is None for task in tasks)
+    assert all(task.payload["focus_offset_seconds"] is None for task in tasks)
     assert all(now.isoformat() in (task.idempotency_key or "") for task in tasks)
     await engine.dispose()
 
@@ -94,9 +95,11 @@ async def test_uid_discovery_handler_skips_slot_at_stop_boundary() -> None:
 
 
 @pytest.mark.asyncio
-async def test_uid_discovery_handler_marks_focus_slot_and_raises_priority() -> None:
+async def test_uid_discovery_handler_schedules_focus_slot_and_recheck_30_seconds_later() -> (
+    None
+):
     engine, session_factory = await _session_factory()
-    scheduled_for = datetime(2026, 7, 13, 3, 0, 30, tzinfo=UTC)  # 11:00 Asia/Shanghai
+    scheduled_for = datetime(2026, 7, 13, 3, 0, tzinfo=UTC)  # 11:00 Asia/Shanghai
     delayed_now = scheduled_for + timedelta(minutes=2)
     handler = UidDiscoveryScheduleHandler(
         [DiscoveryUidSource(mid="100", pool_type="matrix")]
@@ -111,14 +114,56 @@ async def test_uid_discovery_handler_marks_focus_slot_and_raises_priority() -> N
         await session.commit()
 
     async with session_factory() as session:
-        task = await session.scalar(select(CollectionTask))
+        tasks = list(
+            await session.scalars(
+                select(CollectionTask).order_by(CollectionTask.not_before)
+            )
+        )
 
-    assert task is not None
-    assert task.priority == 120
-    assert task.not_before == delayed_now
-    assert task.payload["discovery_schedule_mode"] == "focus"
-    assert task.payload["focus_time"] == "11:00"
-    assert task.payload["scheduled_for"] == scheduled_for.isoformat()
+    assert len(tasks) == 2
+    assert all(task.priority == 120 for task in tasks)
+    assert [task.not_before for task in tasks] == [
+        delayed_now,
+        delayed_now + timedelta(seconds=30),
+    ]
+    assert [task.payload["discovery_schedule_mode"] for task in tasks] == [
+        "focus",
+        "focus",
+    ]
+    assert [task.payload["focus_time"] for task in tasks] == ["11:00", "11:00"]
+    assert [task.payload["focus_offset_seconds"] for task in tasks] == [0, 30]
+    assert [task.payload["scheduled_for"] for task in tasks] == [
+        scheduled_for.isoformat(),
+        (scheduled_for + timedelta(seconds=30)).isoformat(),
+    ]
+    assert [task.payload["scheduler_slot"] for task in tasks] == [
+        scheduled_for.isoformat(),
+        scheduled_for.isoformat(),
+    ]
+    assert tasks[0].idempotency_key != tasks[1].idempotency_key
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_uid_discovery_handler_does_not_repeat_completed_focus_pair() -> None:
+    engine, session_factory = await _session_factory()
+    now = datetime(2026, 7, 13, 3, 0, tzinfo=UTC)  # 11:00 Asia/Shanghai
+    handler = UidDiscoveryScheduleHandler(
+        [DiscoveryUidSource(mid="100", pool_type="matrix")]
+    )
+    async with session_factory() as session:
+        job = await _job(session, kind=ScheduledJobKind.UID_DISCOVERY, now=now)
+        await handler.handle(job, session, now=now)
+        tasks = list(await session.scalars(select(CollectionTask)))
+        for task in tasks:
+            task.status = TaskStatus.SUCCEEDED
+        await handler.handle(job, session, now=now + timedelta(seconds=10))
+        await session.commit()
+
+    async with session_factory() as session:
+        tasks = list(await session.scalars(select(CollectionTask)))
+
+    assert len(tasks) == 2
     await engine.dispose()
 
 

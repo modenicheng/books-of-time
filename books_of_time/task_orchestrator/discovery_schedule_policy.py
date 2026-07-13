@@ -57,11 +57,19 @@ class DiscoverySchedulePolicy:
         return self.start_hour <= local.hour < self.stop_hour
 
     def focus_time_for(self, at: datetime) -> str | None:
+        slot = self.focus_slot_for(at)
+        if slot is None:
+            return None
+        return f"{slot.hour:02d}:{slot.minute:02d}"
+
+    def focus_slot_for(self, at: datetime) -> datetime | None:
         local = self._to_local(at)
         if not self.start_hour <= local.hour < self.stop_hour:
             return None
         label = f"{local.hour:02d}:{local.minute:02d}"
-        return label if label in self.focus_times else None
+        if label not in self.focus_times:
+            return None
+        return local.replace(second=0, microsecond=0)
 
     def _to_local(self, at: datetime) -> datetime:
         if at.tzinfo is None or at.utcoffset() is None:

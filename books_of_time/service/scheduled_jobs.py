@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from books_of_time.accounts.manager import AccountManager
 from books_of_time.common.logger import get_logger
-from books_of_time.db.models import ScheduledJob
+from books_of_time.db.models import CollectionTask, ScheduledJob
 from books_of_time.db.repositories import CollectionTaskRepository, EventRepository
 from books_of_time.domain.enums import ScheduledJobKind, TaskKind
 from books_of_time.http.client import RawHttpClient
@@ -82,9 +83,10 @@ class UidDiscoveryScheduleHandler:
                 scheduled_for,
             )
             return
+        focus_slot = self.policy.focus_slot_for(scheduled_slot)
         focus_time = self.policy.focus_time_for(scheduled_slot)
-        schedule_mode = "focus" if focus_time is not None else "normal"
-        task_priority = 120 if focus_time is not None else 110
+        schedule_mode = "focus" if focus_slot is not None else "normal"
+        task_priority = 120 if focus_slot is not None else 110
         sources_by_mid: dict[str, DiscoveryUidSource] = {}
         for source in self.sources:
             sources_by_mid.setdefault(source.mid, source)
@@ -100,28 +102,61 @@ class UidDiscoveryScheduleHandler:
             )
 
         for source in sources_by_mid.values():
-            await repo.enqueue(
-                kind=TaskKind.DISCOVER_USER_VIDEOS,
-                target_type="user",
-                target_id=source.mid,
-                priority=task_priority,
-                payload={
-                    "mid": source.mid,
-                    "page": 1,
-                    "source_pool_type": source.pool_type,
-                    "source_pool_id": source.pool_id,
-                    "reason": "scheduled_discovery",
-                    "scheduled_for": scheduled_for,
-                    "discovery_schedule_mode": schedule_mode,
-                    "focus_time": focus_time,
-                    "event_links": event_links_by_mid.get(source.mid, []),
-                },
-                not_before=now,
-                idempotency_key=(
-                    f"{TaskKind.DISCOVER_USER_VIDEOS.value}:user:{source.mid}:"
-                    f"{scheduled_for}"
-                ),
-            )
+            if focus_slot is None:
+                task_slots = [(None, scheduled_slot, now)]
+            else:
+                primary_not_before = max(now, focus_slot)
+                task_slots = [
+                    (0, focus_slot, primary_not_before),
+                    (
+                        30,
+                        focus_slot + timedelta(seconds=30),
+                        primary_not_before + timedelta(seconds=30),
+                    ),
+                ]
+
+            for focus_offset_seconds, planned_at, not_before in task_slots:
+                planned_at = planned_at.astimezone(scheduled_slot.tzinfo)
+                if focus_offset_seconds is None:
+                    idempotency_key = (
+                        f"{TaskKind.DISCOVER_USER_VIDEOS.value}:user:{source.mid}:"
+                        f"{scheduled_for}"
+                    )
+                else:
+                    focus_key = focus_slot.astimezone(scheduled_slot.tzinfo).isoformat()
+                    idempotency_key = (
+                        f"{TaskKind.DISCOVER_USER_VIDEOS.value}:user:{source.mid}:"
+                        f"focus:{focus_key}:+{focus_offset_seconds}"
+                    )
+                    existing_task_id = await session.scalar(
+                        select(CollectionTask.id)
+                        .where(CollectionTask.idempotency_key == idempotency_key)
+                        .limit(1)
+                    )
+                    if existing_task_id is not None:
+                        continue
+
+                await repo.enqueue(
+                    kind=TaskKind.DISCOVER_USER_VIDEOS,
+                    target_type="user",
+                    target_id=source.mid,
+                    priority=task_priority,
+                    payload={
+                        "mid": source.mid,
+                        "page": 1,
+                        "source_pool_type": source.pool_type,
+                        "source_pool_id": source.pool_id,
+                        "reason": "scheduled_discovery",
+                        "scheduled_for": planned_at.isoformat(),
+                        "scheduler_slot": scheduled_for,
+                        "discovery_schedule_mode": schedule_mode,
+                        "focus_time": focus_time,
+                        "focus_offset_seconds": focus_offset_seconds,
+                        "event_links": event_links_by_mid.get(source.mid, []),
+                    },
+                    not_before=not_before,
+                    idempotency_key=idempotency_key,
+                )
 
 
 class VideoSnapshotSweepScheduleHandler:
