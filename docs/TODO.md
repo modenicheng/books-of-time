@@ -301,5 +301,5 @@
 
 ### End-to-End Acceptance
 
-- [ ] 提供可重复的真实 Bilibili API smoke：BV 入队、视频指标、热门评论、latest frontier、图片下载、coverage、raw inspect 全链路。
-- [ ] 用真实采集数据创建事件并生成 timeline、分析输出和 evidence-backed report，记录命令、产物及覆盖限制。
+- [x] 提供可重复的真实 Bilibili API smoke：BV 入队、视频指标、热门评论、latest frontier、图片下载、coverage、raw inspect 全链路。
+- [x] 用真实采集数据创建事件并生成 timeline、分析输出和 evidence-backed report，记录命令、产物及覆盖限制。
