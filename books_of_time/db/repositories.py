@@ -1637,9 +1637,20 @@ class CommentRepository:
                 reply_count=comment.reply_count,
                 author_mid=comment.author_mid,
                 author_name=comment.author_name,
+                platform_created_at=comment.platform_created_at,
+                author_level=comment.author_level,
+                author_official_type=comment.author_official_type,
+                author_official_description=comment.author_official_description,
+                author_vip_status=comment.author_vip_status,
+                author_vip_type=comment.author_vip_type,
+                author_is_senior_member=comment.author_is_senior_member,
+                author_public_metadata_extra=dict(comment.author_public_metadata_extra),
                 is_deleted=False,
                 visibility=comment.visibility,
-                extra={"visibility_evidence": comment.visibility_evidence},
+                extra={
+                    "visibility_evidence": comment.visibility_evidence,
+                    "platform_time_evidence": comment.platform_time_evidence,
+                },
             )
             self.session.add(observation)
             await self.session.flush()
@@ -1718,6 +1729,7 @@ class CommentRepository:
     ) -> tuple[CommentEntity, bool]:
         entity = await self.session.get(CommentEntity, comment.rpid)
         if entity is not None:
+            self._fill_missing_entity_evidence(entity, comment)
             entity.updated_at = captured_at
             return entity, False
 
@@ -1729,6 +1741,14 @@ class CommentRepository:
             parent_rpid=comment.parent_rpid,
             author_mid=comment.author_mid,
             author_name=comment.author_name,
+            platform_created_at=comment.platform_created_at,
+            author_level=comment.author_level,
+            author_official_type=comment.author_official_type,
+            author_official_description=comment.author_official_description,
+            author_vip_status=comment.author_vip_status,
+            author_vip_type=comment.author_vip_type,
+            author_is_senior_member=comment.author_is_senior_member,
+            author_public_metadata_extra=dict(comment.author_public_metadata_extra),
             first_content=comment.content,
             first_content_hash=comment.content_hash,
             first_seen_at=captured_at,
@@ -1739,6 +1759,33 @@ class CommentRepository:
         self.session.add(entity)
         await self.session.flush()
         return entity, True
+
+    @staticmethod
+    def _fill_missing_entity_evidence(
+        entity: CommentEntity,
+        comment: ParsedComment,
+    ) -> None:
+        for field_name in (
+            "platform_created_at",
+            "author_level",
+            "author_official_type",
+            "author_official_description",
+            "author_vip_status",
+            "author_vip_type",
+            "author_is_senior_member",
+        ):
+            if getattr(entity, field_name) is None:
+                value = getattr(comment, field_name)
+                if value is not None:
+                    setattr(entity, field_name, value)
+
+        existing_metadata = dict(entity.author_public_metadata_extra or {})
+        merged_metadata = {
+            **comment.author_public_metadata_extra,
+            **existing_metadata,
+        }
+        if merged_metadata != existing_metadata:
+            entity.author_public_metadata_extra = merged_metadata
 
     async def _latest_observation(self, rpid: int) -> CommentObservation | None:
         return await self.session.scalar(

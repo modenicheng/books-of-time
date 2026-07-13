@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
-COMMENT_PARSER_VERSION = "comments.v2"
+COMMENT_PARSER_VERSION = "comments.v3"
 
 
 class CommentParseError(ValueError):
@@ -33,6 +33,15 @@ class ParsedComment:
     like_count: int | None
     reply_count: int | None
     position: int
+    platform_created_at: datetime | None = None
+    platform_time_evidence: dict[str, Any] = field(default_factory=dict)
+    author_level: int | None = None
+    author_official_type: int | None = None
+    author_official_description: str | None = None
+    author_vip_status: int | None = None
+    author_vip_type: int | None = None
+    author_is_senior_member: bool | None = None
+    author_public_metadata_extra: dict[str, Any] = field(default_factory=dict)
     visibility: str = "visible"
     visibility_evidence: dict[str, Any] = field(default_factory=dict)
     media: list[ParsedCommentMedia] = field(default_factory=list)
@@ -233,6 +242,13 @@ def _parse_comment(
         if isinstance(member, dict) and member.get("uname") is not None
         else None
     )
+    member_data = member if isinstance(member, dict) else {}
+    level_info = member_data.get("level_info")
+    official_verify = member_data.get("official_verify")
+    vip = member_data.get("vip")
+    platform_created_at, platform_time_evidence = _parse_platform_created_at(
+        item.get("ctime")
+    )
     content_text = message if isinstance(message, str) else None
     visibility, visibility_evidence = _parse_comment_visibility(item)
     return ParsedComment(
@@ -243,6 +259,31 @@ def _parse_comment(
         parent_rpid=parent,
         author_mid=author_mid,
         author_name=author_name,
+        platform_created_at=platform_created_at,
+        platform_time_evidence=platform_time_evidence,
+        author_level=(
+            _int_or_none(level_info.get("current_level"))
+            if isinstance(level_info, dict)
+            else None
+        ),
+        author_official_type=(
+            _int_or_none(official_verify.get("type"))
+            if isinstance(official_verify, dict)
+            else None
+        ),
+        author_official_description=(
+            _text_or_none(official_verify.get("desc"))
+            if isinstance(official_verify, dict)
+            else None
+        ),
+        author_vip_status=(
+            _int_or_none(vip.get("status")) if isinstance(vip, dict) else None
+        ),
+        author_vip_type=(
+            _int_or_none(vip.get("type")) if isinstance(vip, dict) else None
+        ),
+        author_is_senior_member=_parse_senior_member(member_data.get("senior_member")),
+        author_public_metadata_extra=_parse_public_member_metadata(member_data),
         content=content_text,
         content_hash=hash_comment_content(content_text),
         like_count=_int_or_none(item.get("like")),
@@ -252,6 +293,49 @@ def _parse_comment(
         visibility_evidence=visibility_evidence,
         media=_parse_comment_media(content),
     )
+
+
+def _parse_platform_created_at(
+    value: Any,
+) -> tuple[datetime | None, dict[str, Any]]:
+    if value is None:
+        return None, {"status": "missing"}
+    try:
+        timestamp = int(value)
+        if timestamp <= 0:
+            raise ValueError
+        return datetime.fromtimestamp(timestamp, tz=UTC), {"status": "parsed"}
+    except (TypeError, ValueError, OSError, OverflowError):
+        return None, {"status": "invalid", "raw_type": type(value).__name__}
+
+
+def _parse_senior_member(value: Any) -> bool | None:
+    if isinstance(value, dict):
+        value = value.get("status")
+    parsed = _int_or_none(value)
+    return parsed > 0 if parsed is not None else None
+
+
+def _parse_public_member_metadata(member: dict[str, Any]) -> dict[str, Any]:
+    if not member:
+        return {}
+    metadata: dict[str, Any] = {"schema_version": "bilibili-comment-member-v1"}
+    for section_name, keys in (
+        ("nameplate", ("nid", "name")),
+        ("pendant", ("pid", "name")),
+    ):
+        section = member.get(section_name)
+        if not isinstance(section, dict):
+            continue
+        allowed = {
+            key: section[key]
+            for key in keys
+            if isinstance(section.get(key), str | int)
+            and not isinstance(section.get(key), bool)
+        }
+        if allowed:
+            metadata[section_name] = allowed
+    return metadata
 
 
 def _parse_comment_visibility(
@@ -349,6 +433,13 @@ def _int_or_none(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _text_or_none(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    return stripped or None
 
 
 def _zero_as_none(value: int | None) -> int | None:

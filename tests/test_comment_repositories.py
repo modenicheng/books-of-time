@@ -40,6 +40,16 @@ def _parsed_comment_page(
     position: int = 1,
     root_rpid: int | None = None,
     visibility: str = "visible",
+    author_name: str = "Alice",
+    platform_created_at: datetime | None = None,
+    platform_time_evidence: dict | None = None,
+    author_level: int | None = None,
+    author_official_type: int | None = None,
+    author_official_description: str | None = None,
+    author_vip_status: int | None = None,
+    author_vip_type: int | None = None,
+    author_is_senior_member: bool | None = None,
+    author_public_metadata_extra: dict | None = None,
 ) -> ParsedCommentPage:
     return ParsedCommentPage(
         bvid="BV1abc",
@@ -56,12 +66,21 @@ def _parsed_comment_page(
                 root_rpid=root_rpid,
                 parent_rpid=None,
                 author_mid=42,
-                author_name="Alice",
+                author_name=author_name,
                 content=content,
                 content_hash=hash_comment_content(content),
                 like_count=like_count,
                 reply_count=reply_count,
                 position=position,
+                platform_created_at=platform_created_at,
+                platform_time_evidence=dict(platform_time_evidence or {}),
+                author_level=author_level,
+                author_official_type=author_official_type,
+                author_official_description=author_official_description,
+                author_vip_status=author_vip_status,
+                author_vip_type=author_vip_type,
+                author_is_senior_member=author_is_senior_member,
+                author_public_metadata_extra=dict(author_public_metadata_extra or {}),
                 visibility=visibility,
             )
         ],
@@ -158,6 +177,84 @@ async def test_comment_repository_upserts_entity_and_appends_observations() -> N
         assert observations[0].content == "first comment"
         assert observations[0].author_name == "Alice"
 
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_comment_repository_preserves_observation_evidence_and_fills_entity() -> (
+    None
+):
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    first_seen = datetime(2026, 7, 8, 10, 0, tzinfo=UTC)
+    platform_created_at = datetime(2026, 7, 8, 9, 58, tzinfo=UTC)
+    first = _parsed_comment_page(
+        captured_at=first_seen,
+        platform_time_evidence={"status": "missing"},
+    )
+    second = _parsed_comment_page(
+        captured_at=datetime(2026, 7, 8, 10, 1, tzinfo=UTC),
+        author_name="Renamed Alice",
+        platform_created_at=platform_created_at,
+        platform_time_evidence={"status": "parsed"},
+        author_level=6,
+        author_official_type=0,
+        author_official_description="Official account",
+        author_vip_status=1,
+        author_vip_type=2,
+        author_is_senior_member=True,
+        author_public_metadata_extra={
+            "schema_version": "bilibili-comment-member-v1",
+            "nameplate": {"nid": 8, "name": "Collector"},
+        },
+    )
+
+    async with session_factory() as session:
+        repository = CommentRepository(session)
+        for page in (first, second):
+            raw_page = await RawPageObservationRepository(
+                session
+            ).insert_from_parsed_page(
+                page,
+                request_type=BilibiliRequestType.COMMENT_HOT,
+            )
+            await repository.upsert_page(
+                page,
+                raw_page_observation_id=raw_page.id,
+            )
+        await session.commit()
+
+    async with session_factory() as session:
+        entity = await session.get(CommentEntity, 1001)
+        observations = list(
+            await session.scalars(
+                select(CommentObservation).order_by(CommentObservation.id)
+            )
+        )
+
+    assert entity is not None
+    assert entity.author_name == "Alice"
+    assert entity.first_content == "first comment"
+    assert entity.platform_created_at == platform_created_at
+    assert entity.author_level == 6
+    assert entity.author_official_type == 0
+    assert entity.author_official_description == "Official account"
+    assert entity.author_vip_status == 1
+    assert entity.author_vip_type == 2
+    assert entity.author_is_senior_member is True
+    assert entity.author_public_metadata_extra == {
+        "schema_version": "bilibili-comment-member-v1",
+        "nameplate": {"nid": 8, "name": "Collector"},
+    }
+    assert observations[0].platform_created_at is None
+    assert observations[0].author_level is None
+    assert observations[0].extra["platform_time_evidence"] == {"status": "missing"}
+    assert observations[1].platform_created_at == platform_created_at
+    assert observations[1].author_level == 6
+    assert observations[1].author_public_metadata_extra["nameplate"]["nid"] == 8
+    assert observations[1].extra["platform_time_evidence"] == {"status": "parsed"}
     await engine.dispose()
 
 

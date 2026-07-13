@@ -198,7 +198,7 @@ git commit -m "feat(db): add collection evidence foundations"
 - Produces: `ParsedComment.platform_time_evidence: dict[str, Any]` and `author_public_metadata_extra: dict[str, Any]`.
 - Consumes: Bilibili reply `ctime`, `member.level_info`, `member.official_verify`, `member.vip`, `member.senior_member`, `member.nameplate`, and `member.pendant`.
 
-- [ ] **Step 1: Write failing parser tests**
+- [x] **Step 1: Write failing parser tests**
 
 Extend the hot/latest parser fixtures with:
 
@@ -218,7 +218,7 @@ Extend the hot/latest parser fixtures with:
 
 Assert UTC conversion, every scalar field, and an allowlisted extra object containing only `schema_version`, `nameplate`, and `pendant`. Add missing and malformed `ctime` cases asserting NULL plus evidence reasons `missing` and `invalid`.
 
-- [ ] **Step 2: Run parser tests to verify RED**
+- [x] **Step 2: Run parser tests to verify RED**
 
 ```powershell
 uv run pytest tests/test_comments_parser.py -q
@@ -226,7 +226,7 @@ uv run pytest tests/test_comments_parser.py -q
 
 Expected: `ParsedComment` lacks the new fields.
 
-- [ ] **Step 3: Implement parser helpers and bump version**
+- [x] **Step 3: Implement parser helpers and bump version**
 
 Set `COMMENT_PARSER_VERSION = "comments.v3"`. Add helpers with these exact contracts:
 
@@ -245,11 +245,11 @@ def _parse_platform_created_at(value: Any) -> tuple[datetime | None, dict[str, A
 
 Parse integer fields without treating zero as missing. For senior membership, accept a mapping `status` or scalar and return `None` when absent. Allowlist only bounded nameplate/pendant keys; do not structure IP location, sign, avatar URL, Cookie, or profile fields.
 
-- [ ] **Step 4: Write failing repository tests**
+- [x] **Step 4: Write failing repository tests**
 
 Add a test that upserts two observations for one RPID. The first has missing entity evidence; the second has parsed evidence. Assert the entity fills only NULL fields, preserves first content/name, and both observations retain their own platform/member snapshots.
 
-- [ ] **Step 5: Run repository test to verify RED**
+- [x] **Step 5: Run repository test to verify RED**
 
 ```powershell
 uv run pytest tests/test_comment_repositories.py -q
@@ -257,13 +257,13 @@ uv run pytest tests/test_comment_repositories.py -q
 
 Expected: ORM rows do not receive the parsed fields.
 
-- [ ] **Step 6: Persist observation and fill-only-missing entity fields**
+- [x] **Step 6: Persist observation and fill-only-missing entity fields**
 
 Populate all new `CommentObservation` columns. Merge parser timing evidence into observation `extra` under `platform_time_evidence` while retaining `visibility_evidence`.
 
 In `_ensure_entity`, when an entity exists, call a helper that assigns scalar fields only when the stored value is `None`. Merge only absent keys into `author_public_metadata_extra`; never replace existing keys. For a new entity, copy all first-known public fields directly.
 
-- [ ] **Step 7: Verify comment evidence GREEN**
+- [x] **Step 7: Verify comment evidence GREEN**
 
 ```powershell
 uv run pytest tests/test_comments_parser.py tests/test_comment_repositories.py tests/test_hot_comments_worker.py tests/test_latest_comments_worker.py tests/test_reply_comments_worker.py -q
@@ -272,7 +272,7 @@ uv run ruff check books_of_time/parsers/comments.py books_of_time/db/repositorie
 
 Expected: all selected tests pass.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```powershell
 git add books_of_time/parsers/comments.py books_of_time/db/repositories.py tests/test_comments_parser.py tests/test_comment_repositories.py

@@ -80,6 +80,104 @@ def test_parse_hot_comment_page_extracts_public_comment_fields() -> None:
     assert second.position == 2
 
 
+def test_parse_comment_extracts_platform_time_and_public_member_evidence() -> None:
+    page = parse_hot_comment_page(
+        {
+            "code": 0,
+            "data": {
+                "replies": [
+                    {
+                        "rpid": 1001,
+                        "oid": 777,
+                        "ctime": 1783490000,
+                        "member": {
+                            "mid": "42",
+                            "uname": "Alice",
+                            "level_info": {"current_level": 6},
+                            "official_verify": {
+                                "type": 0,
+                                "desc": "Official account",
+                            },
+                            "vip": {"status": 1, "type": 2},
+                            "senior_member": {"status": 1},
+                            "nameplate": {
+                                "nid": 8,
+                                "name": "Collector",
+                                "image": "not-structured",
+                            },
+                            "pendant": {
+                                "pid": 9,
+                                "name": "Badge",
+                                "image": "not-structured",
+                            },
+                            "sign": "raw-only",
+                            "avatar": "raw-only",
+                        },
+                        "content": {"message": "evidence comment"},
+                    }
+                ]
+            },
+        },
+        bvid="BV1abc",
+        oid=777,
+        captured_at=datetime(2026, 7, 8, 10, 0, tzinfo=UTC),
+        raw_payload_id=42,
+        page_number=1,
+    )
+
+    comment = page.comments[0]
+    assert comment.platform_created_at == datetime.fromtimestamp(1783490000, tz=UTC)
+    assert comment.platform_time_evidence == {"status": "parsed"}
+    assert comment.author_level == 6
+    assert comment.author_official_type == 0
+    assert comment.author_official_description == "Official account"
+    assert comment.author_vip_status == 1
+    assert comment.author_vip_type == 2
+    assert comment.author_is_senior_member is True
+    assert comment.author_public_metadata_extra == {
+        "schema_version": "bilibili-comment-member-v1",
+        "nameplate": {"nid": 8, "name": "Collector"},
+        "pendant": {"pid": 9, "name": "Badge"},
+    }
+
+
+@pytest.mark.parametrize(
+    ("ctime", "expected_evidence"),
+    [
+        (None, {"status": "missing"}),
+        ("invalid", {"status": "invalid", "raw_type": "str"}),
+        (0, {"status": "invalid", "raw_type": "int"}),
+    ],
+)
+def test_parse_comment_records_missing_or_invalid_platform_time(
+    ctime,
+    expected_evidence,
+) -> None:
+    page = parse_hot_comment_page(
+        {
+            "code": 0,
+            "data": {
+                "replies": [
+                    {
+                        "rpid": 1001,
+                        "oid": 777,
+                        "ctime": ctime,
+                        "content": {"message": "time evidence"},
+                    }
+                ]
+            },
+        },
+        bvid="BV1abc",
+        oid=777,
+        captured_at=datetime(2026, 7, 8, 10, 0, tzinfo=UTC),
+        raw_payload_id=42,
+        page_number=1,
+    )
+
+    assert page.comments[0].platform_created_at is None
+    assert page.comments[0].platform_time_evidence == expected_evidence
+
+
 def test_parse_hot_comment_page_extracts_comment_images() -> None:
     page = parse_hot_comment_page(
         {
