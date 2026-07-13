@@ -335,9 +335,10 @@ async def test_failed_response_does_not_hide_raw_storage_failure(
         raw_count = await session.scalar(select(func.count(RawPayload.id)))
 
         assert attempt is not None
-        assert attempt.status == "started"
+        assert attempt.status == "failed"
         assert attempt.http_status == 429
-        assert attempt.error_type == RequestErrorKind.RATE_LIMITED.value
+        assert attempt.error_type == "raw_storage"
+        assert attempt.error_message == "raw storage failure (RuntimeError)"
         assert raw_count == 0
 
     await engine.dispose()

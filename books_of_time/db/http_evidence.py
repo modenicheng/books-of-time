@@ -71,12 +71,21 @@ class DatabaseHttpEvidenceSink:
         if error_type is None:
             return
 
-        stored = self.raw_store.save(
-            body=response.body,
-            captured_at=response.captured_at,
-            run_id=self.run_id,
-            suffix=_raw_suffix(response.content_type),
-        )
+        try:
+            stored = self.raw_store.save(
+                body=response.body,
+                captured_at=response.captured_at,
+                run_id=self.run_id,
+                suffix=_raw_suffix(response.content_type),
+            )
+        except Exception as exc:
+            await repository.record_transport_failure(
+                attempt_id,
+                error_type="raw_storage",
+                error_message=f"raw storage failure ({type(exc).__name__})",
+                request_finished_at=response.request_finished_at,
+            )
+            raise
         result = FetchResult(
             request_type=response.request_type,
             method=response.method,
