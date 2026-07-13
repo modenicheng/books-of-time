@@ -2,7 +2,19 @@
 
 Books of Time 是一个面向 Bilibili 二游社区公开视频与评论区的时间序列归档系统，用于在合规请求预算内记录、回放和分析游戏社区舆论事件的形成、扩散、转向与沉淀过程。
 
-项目追踪文档：
+使用文档：
+
+- [文档总索引](docs/README.md)：按首次使用、部署、分析和核验场景导航
+- [完整使用手册](docs/USER_GUIDE.md)：从安装、首次采集到长期服务和事件报告
+- [CLI 参考](docs/CLI_REFERENCE.md)：全部命令、参数、默认值和副作用
+- [配置参考](docs/CONFIGURATION.md)：YAML 配置段与环境变量覆盖
+- [采集流程](docs/COLLECTION.md)：任务、限流、视频/评论 frontier、raw 与 media 证据链
+- [数据模型](docs/DATA_MODEL.md)：全部表、关系、hash、时间和备份一致性
+- [分析与报告](docs/ANALYSIS.md)：趋势、候选信号、回放、输出 schema 和解释边界
+- [长期运维](docs/OPERATIONS.md)：服务、队列、告警、备份恢复、维护和扩缩容
+- [故障排查](docs/TROUBLESHOOTING.md)：数据库、Cookie、采集、存储、分析和部署问题
+
+项目追踪与专题文档：
 
 - [ROADMAP](docs/ROADMAP.md)：长期阶段、里程碑和验收标准
 - [TODO](docs/TODO.md)：当前任务清单和进度跟踪

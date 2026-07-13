@@ -303,3 +303,12 @@
 
 - [x] 提供可重复的真实 Bilibili API smoke：BV 入队、视频指标、热门评论、latest frontier、图片下载、coverage、raw inspect 全链路。
 - [x] 用真实采集数据创建事件并生成 timeline、分析输出和 evidence-backed report，记录命令、产物及覆盖限制。
+
+### Operator Documentation
+
+- [x] 建立 `docs/README.md` 文档索引和从零到长期服务的 `USER_GUIDE.md`。
+- [x] 完整记录当前 CLI、配置、生效/保留字段和环境变量覆盖。
+- [x] 完整记录 task、discovery、视频/评论、latest frontier、watchlist、raw 和 media 采集链路。
+- [x] 完整记录全部数据库表、逻辑引用、hash、append-only 语义和备份一致性。
+- [x] 完整记录所有分析/replay/report schema、算法口径、限制和复现要求。
+- [x] 提供 Docker、Linux、Windows 共用的长期运维、备份恢复、容量、升级和故障排查手册。

@@ -2,6 +2,8 @@
 
 Books of Time 默认使用单个 `default` 账号。登录是独立管理命令，不依赖 PostgreSQL；未登录、已登出或 Cookie 确认失效时，服务仍会匿名运行。
 
+账号配置键见 [CONFIGURATION](CONFIGURATION.md#accounts)，长期服务操作见 [OPERATIONS](OPERATIONS.md#15-account-operations)，登录故障见 [TROUBLESHOOTING](TROUBLESHOOTING.md#10-cookie-and-qr-login)。
+
 ## Quick Start
 
 Windows、Linux 原生运行：
@@ -22,6 +24,8 @@ uv run python main.py login logout --account default
 ```
 
 当前版本只运行一个配置账号。`account_id` 是为未来多用户保留的持久化和接口兼容点，不提供账号池、按请求切换账号或扩大请求预算的能力。
+
+二维码登录仍通过统一 HTTP 适配器和进程内限流，但为了保持命令不依赖 PostgreSQL，它不使用数据库 token bucket。服务内 scheduled refresh 使用服务的共享限流；两种登录/刷新握手都不作为普通采集 raw payload 归档，成功凭据只进入加密 account store。
 
 ## Linux Service
 
@@ -80,6 +84,8 @@ accounts:
 ```
 
 部署环境可使用 `BOT_ACCOUNT_ENABLED`、`BOT_ACCOUNT_ID`、`BOT_ACCOUNT_CREDENTIALS_PATH`、`BOT_ACCOUNT_KEY_PATH`、`BOT_ACCOUNT_AUTO_REFRESH` 和 `BOT_ACCOUNT_REFRESH_SECONDS` 覆盖。
+
+若数据库已 bootstrap 过 refresh job，之后关闭 auto refresh 或更换 account ID 时，当前 coordinator 不会自动停用旧 `account-cookie-refresh:*` 行。按 [OPERATIONS](OPERATIONS.md#5-scheduled-jobs) 停 scheduler 并停用旧 job，再启动新配置。
 
 ## Local Files And Security
 

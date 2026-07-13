@@ -2,6 +2,8 @@
 
 Books of Time 是长期运行的应用服务。PostgreSQL 由宿主机或局域网现有实例提供，应用不会启动数据库容器，也不会在正常启动时自动迁移 schema。media asset 与加密账号凭据始终写入本地持久目录；raw payload 默认写本地文件系统，也可单独切换到已有 MinIO。登录操作见 [LOGIN](LOGIN.md)，对应仓库路径为 `docs/LOGIN.md`。
 
+全部配置见 [CONFIGURATION](CONFIGURATION.md)，上线后的日常 runbook 见 [OPERATIONS](OPERATIONS.md)，故障定位见 [TROUBLESHOOTING](TROUBLESHOOTING.md)。
+
 ## Deployment Contract
 
 所有部署共享以下顺序：
@@ -249,7 +251,7 @@ operations:
     repeat_notification_seconds: 3600
 ```
 
-设置 `enabled: false` 会停止创建/执行告警评估 job，但不会删除历史状态。
+新数据库设置 `enabled: false` 不会创建告警评估 job，也不会删除历史状态。若该 job 已由旧配置写入数据库，当前 bootstrap 不会自动停用缺席定义；切换前按 [OPERATIONS](OPERATIONS.md#5-scheduled-jobs) 停 scheduler 并停用旧行。
 
 `database maintain` 默认只输出并记录计划，不执行 SQL。人工审查后使用 `--execute` 执行 ANALYZE、BRIN summarization 和已验证分区父表的未来月份 DDL；只有明确需要时才额外传 `--vacuum`。VACUUM 可能长时间占用 I/O，应放在低峰窗口运行。普通 `comment_observations` 表不会执行分区 DDL，完整切换前置条件见 [PARTITIONING](PARTITIONING.md)。
 
