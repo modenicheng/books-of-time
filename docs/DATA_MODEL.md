@@ -378,6 +378,10 @@ worker run 生命周期：run ID、worker ID、start/finish、status、started/s
 raw 前中止则标 `abandoned`。Cookie、CSRF、refresh token、请求 headers、请求 body
 和完整认证 URL 不进入此表。
 
+失败 response 已收到但 raw store 写入失败时，attempt 为 `failed`、
+`error_type=raw_storage`、`raw_payload_id=NULL`；已知 HTTP status 和时间仍保留，
+存储异常继续向上层传播。
+
 C1 当前与 collector 共用一个数据库 session，最终 commit 前的进程崩溃仍可能回滚
 整次 attempt。C7 计划把请求前/后的证据写入独立短事务；当前文档不把它描述成
 跨崩溃必然持久的 write-ahead log。
