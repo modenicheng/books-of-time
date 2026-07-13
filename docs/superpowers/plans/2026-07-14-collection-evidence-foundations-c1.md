@@ -485,7 +485,7 @@ git commit -m "feat(http): add request attempt lifecycle"
 - Produces `DatabaseHttpEvidenceSink(session, raw_store, run_id, collection_task_id)`.
 - Consumes: the current worker `AsyncSession`, `RawPayloadStore`, run ID, and task ID.
 
-- [ ] **Step 1: Write failing integration tests**
+- [x] **Step 1: Write failing integration tests**
 
 Use a fake curl-cffi session and real in-memory ORM/raw filesystem to assert:
 
@@ -495,7 +495,7 @@ Use a fake curl-cffi session and real in-memory ORM/raw filesystem to assert:
 4. A successful collector response becomes `succeeded` only after its existing raw insertion.
 5. Calling `RawHttpClient` outside `capture_http_evidence` creates no attempt row, preserving login independence.
 
-- [ ] **Step 2: Run integration tests to verify RED**
+- [x] **Step 2: Run integration tests to verify RED**
 
 ```powershell
 uv run pytest tests/test_http_request_attempts.py tests/test_request_errors.py -q
@@ -503,13 +503,13 @@ uv run pytest tests/test_http_request_attempts.py tests/test_request_errors.py -
 
 Expected: no context sink exists and failed bodies are not archived.
 
-- [ ] **Step 3: Implement the context protocol without DB imports**
+- [x] **Step 3: Implement the context protocol without DB imports**
 
 `books_of_time/http/evidence.py` must use `Protocol`, `ContextVar`, and `contextmanager`; it must not import ORM models or repositories, avoiding an `http.client -> evidence -> repositories -> http.client` cycle.
 
 The sink receives method/URL/params but never headers, cookies, or request body. `capture_http_evidence(None)` is a no-op-compatible context for workers without a raw store in unit tests.
 
-- [ ] **Step 4: Implement the database sink**
+- [x] **Step 4: Implement the database sink**
 
 `DatabaseHttpEvidenceSink` uses the current worker session. For a failed response it must:
 
@@ -523,7 +523,7 @@ record response timing/status
 
 Use `.json` when Content-Type contains `json`, otherwise `.bin`. A raw storage error must not be hidden; leave the attempt non-successful and re-raise.
 
-- [ ] **Step 5: Integrate RawHttpClient and worker**
+- [x] **Step 5: Integrate RawHttpClient and worker**
 
 In `RawHttpClient.request`, obtain the current sink after managed Cookie assembly. Call `begin` immediately before opening the network session (Bilibili/media token acquisition already happened outside this method). Capture actual start/finish timestamps. On response, build `FetchResult` with attempt ID, call `record_response`, classify failure, then raise. On transport exception, call `record_transport_failure` before raising typed `RequestFailure`.
 
@@ -531,7 +531,7 @@ Add `RequestErrorKind.NETWORK = "network"` and a 60-second worker default backof
 
 Give `Worker` an optional `raw_store`; when present, wrap each collector call with a `DatabaseHttpEvidenceSink`. On collector failure, mark any still-started attempts for that task `abandoned` before committing failure coverage. `build_worker` passes its existing `raw_store`; direct Worker tests remain compatible with `None`.
 
-- [ ] **Step 6: Verify HTTP evidence GREEN**
+- [x] **Step 6: Verify HTTP evidence GREEN**
 
 ```powershell
 uv run pytest tests/test_http_request_attempts.py tests/test_request_errors.py tests/test_bilibili_client.py tests/test_worker_coverage.py tests/test_media_downloader.py -q
@@ -540,7 +540,7 @@ uv run ruff check books_of_time/http books_of_time/db/http_evidence.py books_of_
 
 Expected: failed response bodies resolve through `http_request_attempts.raw_payload_id`; transport failures have no raw ID; no secret-bearing values are stored.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```powershell
 git add books_of_time/http books_of_time/db/http_evidence.py books_of_time/worker.py books_of_time/app.py tests/test_http_request_attempts.py tests/test_request_errors.py tests/test_worker_coverage.py

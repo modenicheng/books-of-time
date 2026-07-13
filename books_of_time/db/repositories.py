@@ -248,10 +248,12 @@ class HttpRequestAttemptRepository:
         error_message: str | None = None,
     ) -> HttpRequestAttempt:
         attempt = await self._get(attempt_id)
+        if attempt.status != "started":
+            return attempt
         attempt.status = "abandoned"
         attempt.request_finished_at = finished_at
         attempt.duration_ms = _attempt_duration_ms(attempt, finished_at)
-        attempt.error_type = "collector_abort"
+        attempt.error_type = attempt.error_type or "collector_abort"
         attempt.error_message = _bounded_attempt_text(error_message, 2000)
         await self.session.flush()
         return attempt

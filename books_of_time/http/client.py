@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -13,6 +14,10 @@ from books_of_time.http.errors import (
     RequestErrorKind,
     RequestFailure,
     classify_failed_fetch,
+)
+from books_of_time.http.evidence import (
+    HttpResponseEvidence,
+    current_http_evidence_sink,
 )
 
 
@@ -66,6 +71,18 @@ class RawHttpClient:
         if use_managed_cookies and self.cookie_provider is not None:
             request_cookies.update(await self.cookie_provider.get_cookies(account_id))
 
+        evidence_sink = current_http_evidence_sink()
+        request_started_at = datetime.now(UTC)
+        attempt_id = None
+        if evidence_sink is not None:
+            attempt_id = await evidence_sink.begin(
+                method=str(method),
+                url=url,
+                request_type=request_type,
+                params=params,
+                request_started_at=request_started_at,
+            )
+
         try:
             async with AsyncSession() as session:
                 response = await session.request(
@@ -78,13 +95,39 @@ class RawHttpClient:
                     allow_redirects=allow_redirects,
                     timeout=self.timeout_seconds,
                 )
+                response_received_at = datetime.now(UTC)
+        except asyncio.CancelledError:
+            raise
         except TimeoutError as exc:
+            request_finished_at = datetime.now(UTC)
+            if evidence_sink is not None and attempt_id is not None:
+                await evidence_sink.record_transport_failure(
+                    attempt_id,
+                    request_finished_at=request_finished_at,
+                    error_type=RequestErrorKind.TIMEOUT.value,
+                    error_message=f"timeout ({type(exc).__name__})",
+                )
             raise RequestFailure(
                 kind=RequestErrorKind.TIMEOUT,
                 request_type=request_type,
-                message=str(exc),
+                message="network request timed out",
+            ) from exc
+        except Exception as exc:
+            request_finished_at = datetime.now(UTC)
+            if evidence_sink is not None and attempt_id is not None:
+                await evidence_sink.record_transport_failure(
+                    attempt_id,
+                    request_finished_at=request_finished_at,
+                    error_type=RequestErrorKind.NETWORK.value,
+                    error_message=f"network failure ({type(exc).__name__})",
+                )
+            raise RequestFailure(
+                kind=RequestErrorKind.NETWORK,
+                request_type=request_type,
+                message="network request failed",
             ) from exc
 
+        request_finished_at = datetime.now(UTC)
         response_headers = {key: value for key, value in response.headers.items()}
         response_cookies = {
             cookie.name: cookie.value for cookie in getattr(response.cookies, "jar", [])
@@ -96,11 +139,42 @@ class RawHttpClient:
             params=params,
             status_code=response.status_code,
             body=response.content,
-            captured_at=datetime.now(UTC),
+            captured_at=response_received_at,
             response_headers=response_headers,
             response_cookies=response_cookies,
+            request_started_at=request_started_at,
+            request_finished_at=request_finished_at,
+            response_received_at=response_received_at,
+            http_attempt_id=attempt_id,
         )
         failure = classify_failed_fetch(result)
+        if evidence_sink is not None and attempt_id is not None:
+            content_type = next(
+                (
+                    value
+                    for key, value in response_headers.items()
+                    if key.casefold() == "content-type"
+                ),
+                None,
+            )
+            await evidence_sink.record_response(
+                attempt_id,
+                response=HttpResponseEvidence(
+                    request_type=request_type,
+                    method=result.method,
+                    url=result.url,
+                    params=params,
+                    status_code=result.status_code,
+                    body=result.body,
+                    captured_at=result.captured_at,
+                    request_started_at=request_started_at,
+                    request_finished_at=request_finished_at,
+                    response_received_at=response_received_at,
+                    content_type=content_type,
+                ),
+                error_type=failure.kind.value if failure is not None else None,
+                error_message=str(failure) if failure is not None else None,
+            )
         if failure is not None:
             raise failure
         return result

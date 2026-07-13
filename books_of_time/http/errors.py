@@ -11,6 +11,7 @@ if TYPE_CHECKING:
 
 class RequestErrorKind(StrEnum):
     TIMEOUT = "timeout"
+    NETWORK = "network"
     FORBIDDEN = "403"
     RATE_LIMITED = "429"
     CAPTCHA = "captcha"

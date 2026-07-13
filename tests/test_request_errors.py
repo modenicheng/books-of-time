@@ -85,6 +85,11 @@ class FakeTimeoutSession:
         raise TimeoutError("timed out")
 
 
+class FakeNetworkFailureSession(FakeTimeoutSession):
+    async def request(self, *args, **kwargs):
+        raise OSError("connection reset")
+
+
 class FakeResponseCookies:
     def __init__(self) -> None:
         self.jar = []
@@ -154,6 +159,26 @@ async def test_raw_http_client_maps_timeout(monkeypatch) -> None:
         )
 
     assert exc_info.value.kind == RequestErrorKind.TIMEOUT
+    assert exc_info.value.request_type == BilibiliRequestType.DEFAULT
+    assert exc_info.value.fetch_result is None
+
+
+@pytest.mark.asyncio
+async def test_raw_http_client_maps_generic_network_failure(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "books_of_time.http.client.AsyncSession",
+        FakeNetworkFailureSession,
+    )
+    client = RawHttpClient(timeout_seconds=1)
+
+    with pytest.raises(RequestFailure) as exc_info:
+        await client.request(
+            method="GET",
+            url="https://api.bilibili.com/x/test",
+            request_type=BilibiliRequestType.DEFAULT,
+        )
+
+    assert exc_info.value.kind == RequestErrorKind.NETWORK
     assert exc_info.value.request_type == BilibiliRequestType.DEFAULT
     assert exc_info.value.fetch_result is None
 

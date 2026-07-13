@@ -8,6 +8,7 @@ from typing import Protocol
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from books_of_time.coverage import CoverageDraft
+from books_of_time.db.http_evidence import DatabaseHttpEvidenceSink
 from books_of_time.db.models import CollectionTask
 from books_of_time.db.repositories import (
     CollectionCoverageRepository,
@@ -17,6 +18,8 @@ from books_of_time.db.repositories import (
 )
 from books_of_time.domain.enums import TaskKind, TaskStatus
 from books_of_time.http.errors import RequestFailure
+from books_of_time.http.evidence import capture_http_evidence
+from books_of_time.storage.base import RawPayloadStore
 
 
 class Collector(Protocol):
@@ -39,6 +42,7 @@ class Worker:
         retry_delay_seconds: int = 300,
         request_backoff_defaults: Mapping[str, int] | None = None,
         request_backoff_max_seconds: int = 21600,
+        raw_store: RawPayloadStore | None = None,
     ) -> None:
         self.session_factory = session_factory
         self.collectors = collectors
@@ -50,6 +54,7 @@ class Worker:
             request_backoff_defaults
             or {
                 "timeout": 60,
+                "network": 60,
                 "403": 1800,
                 "429": 900,
                 "captcha": 3600,
@@ -58,6 +63,7 @@ class Worker:
             }
         )
         self.request_backoff_max_seconds = request_backoff_max_seconds
+        self.raw_store = raw_store
 
     async def run_once(self, *, now: datetime | None = None) -> bool:
         effective_now = now or datetime.now(UTC)
@@ -99,10 +105,26 @@ class Worker:
                 task.lease_until = None
                 await session.commit()
                 return True
+            evidence_sink = (
+                DatabaseHttpEvidenceSink(
+                    session=session,
+                    raw_store=self.raw_store,
+                    run_id=self.run_id,
+                    collection_task_id=task.id,
+                )
+                if self.raw_store is not None
+                else None
+            )
             try:
-                draft = await collector.collect(task, session)
+                with capture_http_evidence(evidence_sink):
+                    draft = await collector.collect(task, session)
             except Exception as exc:
                 finished_at = datetime.now(UTC)
+                if evidence_sink is not None:
+                    await evidence_sink.mark_abandoned(
+                        finished_at=finished_at,
+                        error_message=str(exc),
+                    )
                 backoff_until = effective_now + timedelta(
                     seconds=self.retry_delay_seconds
                 )

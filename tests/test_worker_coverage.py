@@ -12,11 +12,14 @@ from books_of_time.db.models import (
     CollectionCoverageStat,
     CollectionRun,
     CollectionTask,
+    HttpRequestAttempt,
     RequestBackoffState,
 )
 from books_of_time.db.repositories import CollectionTaskRepository
 from books_of_time.domain.enums import BilibiliRequestType, TaskKind, TaskStatus
 from books_of_time.http.errors import RequestErrorKind, RequestFailure
+from books_of_time.http.evidence import current_http_evidence_sink
+from books_of_time.storage.filesystem import RawPayloadFileStore
 from books_of_time.worker import Worker
 
 
@@ -55,6 +58,21 @@ class RateLimitedCollector:
             status_code=429,
             retry_after_seconds=45,
         )
+
+
+class StartedAttemptThenFailingCollector:
+    async def collect(self, task: CollectionTask, session) -> CoverageDraft:
+        sink = current_http_evidence_sink()
+        assert sink is not None
+        started_at = datetime(2099, 1, 1, tzinfo=UTC)
+        await sink.begin(
+            method="GET",
+            url="https://api.bilibili.com/x/test",
+            request_type=BilibiliRequestType.VIDEO_STATS,
+            params={"bvid": task.target_id},
+            request_started_at=started_at,
+        )
+        raise RuntimeError("collector stopped before raw persistence")
 
 
 @pytest.mark.asyncio
@@ -192,5 +210,46 @@ async def test_worker_writes_failed_coverage_and_preserves_retry() -> None:
             assert task.status == TaskStatus.PENDING
             assert task.retry_count == 1
             assert task.not_before == now + timedelta(seconds=30)
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_worker_marks_unfinished_http_attempt_abandoned(
+    tmp_path,
+) -> None:
+    engine, session_factory = await _create_session_factory()
+    now = datetime(2099, 1, 1, tzinfo=UTC)
+    try:
+        async with session_factory() as session:
+            task = await CollectionTaskRepository(session).enqueue(
+                kind=TaskKind.FETCH_VIDEO_STATS,
+                target_type="video",
+                target_id="BV1xx",
+                priority=100,
+                payload={"bvid": "BV1xx"},
+                not_before=now - timedelta(seconds=1),
+            )
+            await session.commit()
+
+        worker = Worker(
+            session_factory=session_factory,
+            collectors={
+                TaskKind.FETCH_VIDEO_STATS: StartedAttemptThenFailingCollector()
+            },
+            run_id="run-1",
+            lease_owner="worker-1",
+            raw_store=RawPayloadFileStore(tmp_path / "raw"),
+        )
+        assert await worker.run_once(now=now) is True
+
+        async with session_factory() as session:
+            attempt = await session.scalar(select(HttpRequestAttempt))
+
+        assert attempt is not None
+        assert attempt.collection_task_id == task.id
+        assert attempt.status == "abandoned"
+        assert attempt.error_type == "collector_abort"
+        assert attempt.raw_payload_id is None
     finally:
         await engine.dispose()
