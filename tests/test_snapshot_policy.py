@@ -1,7 +1,6 @@
 from datetime import UTC, datetime, timedelta
 
 from books_of_time.task_orchestrator.snapshot_policy import (
-    CoreWindow,
     get_next_snapshot_at,
     get_next_snapshot_interval,
 )
@@ -53,9 +52,15 @@ def test_next_snapshot_uses_absolute_publish_time_axis() -> None:
     ) == published_at + timedelta(minutes=35)
 
 
-def test_next_snapshot_pauses_detail_polling_outside_core_window() -> None:
-    window = CoreWindow(start_hour=10, stop_hour=22, timezone_name="Asia/Shanghai")
+def test_next_snapshot_continues_after_discovery_window_closes() -> None:
     published_at = datetime(2026, 7, 8, 13, 0, tzinfo=UTC)
     after_stop = datetime(2026, 7, 8, 14, 30, tzinfo=UTC)  # 22:30 in Shanghai
 
-    assert get_next_snapshot_at(published_at, after_stop, core_window=window) is None
+    assert get_next_snapshot_at(published_at, after_stop) == datetime(
+        2026,
+        7,
+        8,
+        14,
+        35,
+        tzinfo=UTC,
+    )

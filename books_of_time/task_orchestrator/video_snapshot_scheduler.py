@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -14,10 +15,15 @@ from books_of_time.db.models import (
 )
 from books_of_time.db.repositories import CollectionTaskRepository
 from books_of_time.domain.enums import TaskKind
-from books_of_time.task_orchestrator.snapshot_policy import CoreWindow
 from books_of_time.task_orchestrator.video_snapshot_policy import (
     get_next_video_snapshot_at,
 )
+
+
+@dataclass(frozen=True)
+class DailyTerminalSnapshotSchedule:
+    hour: int = 22
+    timezone_name: str = "Asia/Shanghai"
 
 
 class VideoSnapshotScheduler:
@@ -37,7 +43,6 @@ class VideoSnapshotScheduler:
         )
         repo = CollectionTaskRepository(session)
         tasks: list[CollectionTask] = []
-        window = CoreWindow()
         for video in videos:
             if not await self._is_video_available(session, video.bvid):
                 continue
@@ -56,9 +61,7 @@ class VideoSnapshotScheduler:
                     published_at=video.pubdate,
                     now=latest_at,
                 )
-                if due_at is None and window.allows_detail_polling(now):
-                    due_at = now
-            if due_at is None or due_at > now:
+            if due_at > now:
                 continue
             task = await repo.enqueue(
                 kind=TaskKind.FETCH_VIDEO_STATS,
@@ -99,9 +102,6 @@ class VideoSnapshotScheduler:
             published_at=known.pubdate,
             now=now,
         )
-        if next_at is None:
-            return None
-
         return await CollectionTaskRepository(session).enqueue(
             kind=TaskKind.FETCH_VIDEO_STATS,
             target_type="video",
@@ -123,10 +123,10 @@ class VideoSnapshotScheduler:
         *,
         session: AsyncSession,
         now: datetime,
-        core_window: CoreWindow | None = None,
+        terminal_schedule: DailyTerminalSnapshotSchedule | None = None,
     ) -> list[CollectionTask]:
-        window = core_window or CoreWindow()
-        terminal_at, terminal_date = _terminal_at_for_day(now, window)
+        schedule = terminal_schedule or DailyTerminalSnapshotSchedule()
+        terminal_at, terminal_date = _terminal_at_for_day(now, schedule)
         if now < terminal_at:
             return []
 
@@ -184,11 +184,14 @@ class VideoSnapshotScheduler:
         return latest.status == "visible"
 
 
-def _terminal_at_for_day(now: datetime, window: CoreWindow) -> tuple[datetime, str]:
-    timezone = ZoneInfo(window.timezone_name)
+def _terminal_at_for_day(
+    now: datetime,
+    schedule: DailyTerminalSnapshotSchedule,
+) -> tuple[datetime, str]:
+    timezone = ZoneInfo(schedule.timezone_name)
     local_now = now.astimezone(timezone)
     terminal_local = local_now.replace(
-        hour=window.stop_hour,
+        hour=schedule.hour,
         minute=0,
         second=0,
         microsecond=0,

@@ -178,9 +178,29 @@ uv run python main.py task list --status pending --limit 50
 
 `health` 失败意味着运行依赖或 heartbeat 不满足健康契约；`status` 中出现 active alert 是运维状态，不会自动改写采集数据。
 
-内置 scheduler 会自动执行 UID discovery、已知视频指标、每日终结快照、Cookie refresh 和告警评估。它当前不会自动周期入队所有视频的 hot/latest comments；长期评论刷新应由 systemd timer、Windows Task Scheduler 或现有编排器周期调用入队 CLI。详见 [COLLECTION](COLLECTION.md#13-current-automation-boundary) 和 [OPERATIONS](OPERATIONS.md#6-comment-collection-scheduling)。
+内置 scheduler 在北京时间 10:00（含）到 22:00（不含）执行 UID discovery，
+并全天执行已知视频指标 sweep、每日附加日终快照、Cookie refresh 和告警评估。
+常驻 worker 全天处理已入队的评论、回复、media 和重试任务。它当前不会自动周期
+入队所有视频的 hot/latest comments；长期评论刷新应由 systemd timer、Windows
+Task Scheduler 或现有编排器周期调用入队 CLI。详见
+[COLLECTION](COLLECTION.md#13-current-automation-boundary) 和
+[OPERATIONS](OPERATIONS.md#6-comment-collection-scheduling)。
 
 ## 9. Configure Discovery
+
+自动发现调度：
+
+```yaml
+scheduler:
+  discovery_scan_seconds: 60
+  discovery_start_hour: 10
+  discovery_stop_hour: 22
+  discovery_timezone: Asia/Shanghai
+  discovery_focus_times: ["11:00", "12:00", "13:00", "18:00", "19:00", "19:30", "20:00"]
+```
+
+起始时点包含、停止时点不包含。重点分钟会提高 discovery task 优先级并写入
+审计字段；视频指标和已排队评论任务不受此窗口限制。
 
 静态 UID 池可放在 YAML：
 
@@ -201,7 +221,9 @@ discovery:
 uv run python main.py event add-target <EVENT> uid 12345 --priority 100 --role official
 ```
 
-正式 scheduler 每分钟把 UID discovery 写成 `discover_user_videos` task。worker 保存投稿列表 raw 和 coverage，新发现视频进入 `known_videos` 并产生视频指标任务；事件 UID target 发现的视频会自动关联事件。
+正式 scheduler 在发现窗口内每分钟把 UID discovery 写成
+`discover_user_videos` task。worker 保存投稿列表 raw 和 coverage，新发现视频进入
+`known_videos` 并产生视频指标任务；事件 UID target 发现的视频会自动关联事件。
 
 ## 10. Create An Event
 

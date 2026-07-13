@@ -220,6 +220,9 @@ uv run python main.py discovery loop [--interval-seconds S] [--max-iterations N]
 
 这是兼容诊断入口：请求经过统一 HTTP/限流，但该直接 loop 不写 discovery raw/coverage，也不合并数据库中的 event UID target。正式证据路径是 `service run` 的 scheduler 产生 `discover_user_videos` task，再由 worker 执行。
 
+诊断 loop 是显式 operator 操作，不应用 `scheduler.discovery_start_hour` /
+`discovery_stop_hour` 自动窗口；正式服务的持久化 UID job 才应用该窗口和重点分钟。
+
 ### `discover-user`
 
 ```bash

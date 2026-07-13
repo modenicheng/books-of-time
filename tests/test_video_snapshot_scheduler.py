@@ -109,6 +109,44 @@ async def test_video_snapshot_scheduler_skips_unknown_video() -> None:
 
 
 @pytest.mark.asyncio
+async def test_video_snapshot_sweep_enqueues_due_video_after_discovery_window() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    now = datetime(2026, 7, 8, 15, 0, tzinfo=UTC)  # 23:00 Asia/Shanghai
+    async with session_factory() as session:
+        session.add(
+            KnownVideo(
+                bvid="BV-AFTER-WINDOW",
+                source_mid="123",
+                pubdate=now - timedelta(hours=2),
+                first_seen_at=now - timedelta(hours=2),
+            )
+        )
+        session.add(
+            _metric(
+                bvid="BV-AFTER-WINDOW",
+                captured_at=now - timedelta(minutes=10),
+                view_count=1000,
+            )
+        )
+        await session.commit()
+
+        tasks = await VideoSnapshotScheduler().schedule_due_snapshots(
+            session=session,
+            now=now,
+        )
+        await session.commit()
+
+    assert len(tasks) == 1
+    assert tasks[0].target_id == "BV-AFTER-WINDOW"
+    assert tasks[0].payload["reason"] == "snapshot_sweep"
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_video_snapshot_scheduler_enqueues_daily_terminal_snapshot_once() -> None:
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as conn:

@@ -21,6 +21,10 @@ from books_of_time.service.coordinator import (
     ScheduledJobHandler,
 )
 from books_of_time.task_orchestrator.discovery_loop import DiscoveryUidSource
+from books_of_time.task_orchestrator.discovery_schedule_policy import (
+    DEFAULT_DISCOVERY_FOCUS_TIMES,
+    DiscoverySchedulePolicy,
+)
 from books_of_time.task_orchestrator.discovery_sources import (
     resolve_discovery_uid_sources,
 )
@@ -53,8 +57,14 @@ class OperationalAlertScheduleHandler:
 
 
 class UidDiscoveryScheduleHandler:
-    def __init__(self, sources: list[DiscoveryUidSource]) -> None:
+    def __init__(
+        self,
+        sources: list[DiscoveryUidSource],
+        *,
+        policy: DiscoverySchedulePolicy | None = None,
+    ) -> None:
         self.sources = list(sources)
+        self.policy = policy or DiscoverySchedulePolicy()
 
     async def handle(
         self,
@@ -64,7 +74,17 @@ class UidDiscoveryScheduleHandler:
         now: datetime,
     ) -> None:
         repo = CollectionTaskRepository(session)
-        scheduled_for = job.next_run_at.isoformat()
+        scheduled_slot = job.next_run_at
+        scheduled_for = scheduled_slot.isoformat()
+        if not self.policy.allows_discovery(scheduled_slot):
+            logger.debug(
+                "UID discovery skipped outside active window scheduled_for=%s",
+                scheduled_for,
+            )
+            return
+        focus_time = self.policy.focus_time_for(scheduled_slot)
+        schedule_mode = "focus" if focus_time is not None else "normal"
+        task_priority = 120 if focus_time is not None else 110
         sources_by_mid: dict[str, DiscoveryUidSource] = {}
         for source in self.sources:
             sources_by_mid.setdefault(source.mid, source)
@@ -84,7 +104,7 @@ class UidDiscoveryScheduleHandler:
                 kind=TaskKind.DISCOVER_USER_VIDEOS,
                 target_type="user",
                 target_id=source.mid,
-                priority=110,
+                priority=task_priority,
                 payload={
                     "mid": source.mid,
                     "page": 1,
@@ -92,6 +112,8 @@ class UidDiscoveryScheduleHandler:
                     "source_pool_id": source.pool_id,
                     "reason": "scheduled_discovery",
                     "scheduled_for": scheduled_for,
+                    "discovery_schedule_mode": schedule_mode,
+                    "focus_time": focus_time,
                     "event_links": event_links_by_mid.get(source.mid, []),
                 },
                 not_before=now,
@@ -176,14 +198,26 @@ def build_default_scheduled_jobs(
 ]:
     scheduler_cfg = cfg.get("scheduler", {})
     sources = resolve_discovery_uid_sources(cfg.get("discovery", {}))
+    configured_focus_times = scheduler_cfg.get(
+        "discovery_focus_times",
+        DEFAULT_DISCOVERY_FOCUS_TIMES,
+    )
+    if not isinstance(configured_focus_times, (list, tuple)):
+        raise ValueError("scheduler.discovery_focus_times must be a list")
+    discovery_policy = DiscoverySchedulePolicy(
+        start_hour=int(scheduler_cfg.get("discovery_start_hour", 10)),
+        stop_hour=int(scheduler_cfg.get("discovery_stop_hour", 22)),
+        timezone_name=str(scheduler_cfg.get("discovery_timezone", "Asia/Shanghai")),
+        focus_times=tuple(str(value) for value in configured_focus_times),
+    )
+    discovery_scan_seconds = int(scheduler_cfg.get("discovery_scan_seconds", 60))
+    if not 1 <= discovery_scan_seconds <= 60:
+        raise ValueError("scheduler.discovery_scan_seconds must be between 1 and 60")
     definitions = [
         ScheduledJobDefinition(
             job_key="uid-discovery",
             job_kind=ScheduledJobKind.UID_DISCOVERY,
-            schedule_seconds=max(
-                int(scheduler_cfg.get("discovery_scan_seconds", 60)),
-                1,
-            ),
+            schedule_seconds=discovery_scan_seconds,
             priority=100,
             payload={},
         ),
@@ -203,7 +237,10 @@ def build_default_scheduled_jobs(
         ),
     ]
     handlers: dict[ScheduledJobKind, ScheduledJobHandler] = {
-        ScheduledJobKind.UID_DISCOVERY: UidDiscoveryScheduleHandler(sources),
+        ScheduledJobKind.UID_DISCOVERY: UidDiscoveryScheduleHandler(
+            sources,
+            policy=discovery_policy,
+        ),
         ScheduledJobKind.VIDEO_SNAPSHOT_SWEEP: VideoSnapshotSweepScheduleHandler(),
         ScheduledJobKind.DAILY_TERMINAL_SNAPSHOT: (TerminalSnapshotScheduleHandler()),
     }

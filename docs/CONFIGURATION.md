@@ -151,9 +151,10 @@ scheduler:
   default_retry_delay_seconds: 300
   max_retries: 3
   discovery_scan_seconds: 60
-  core_start_hour: 10
-  core_stop_hour: 22
-  timezone: Asia/Shanghai
+  discovery_start_hour: 10
+  discovery_stop_hour: 22
+  discovery_timezone: Asia/Shanghai
+  discovery_focus_times: ["11:00", "12:00", "13:00", "18:00", "19:00", "19:30", "20:00"]
 ```
 
 当前生效字段：
@@ -162,14 +163,19 @@ scheduler:
 | --- | --- | --- |
 | `lease_seconds` | `120` | collection task worker lease 时长 |
 | `default_retry_delay_seconds` | `300` | 普通 collector exception 的任务重试延迟，以及 scheduled job 失败重试延迟 |
-| `discovery_scan_seconds` | `60` | UID discovery scheduled job 和诊断 discovery loop 的默认周期 |
+| `discovery_scan_seconds` | `60` | UID discovery scheduled job 和诊断 discovery loop 的默认周期；服务值必须为 1 到 60 秒，以覆盖每个重点分钟 |
+| `discovery_start_hour` | `10` | 自动 UID discovery 的本地起始小时，包含该小时 |
+| `discovery_stop_hour` | `22` | 自动 UID discovery 的本地停止小时，不包含该小时 |
+| `discovery_timezone` | `Asia/Shanghai` | 发现窗口和重点分钟使用的 IANA 时区 |
+| `discovery_focus_times` | 见示例 | 严格 `HH:MM` 列表；重点分钟的 discovery task 优先级从 110 提升到 120，并写入审计 payload |
 
 当前保留但未接入运行时的字段：
 
 - `max_retries`：新 task 当前仍使用 repository 默认值 3；此键不会全局改写 task。
-- `core_start_hour`、`core_stop_hour`、`timezone`：视频详细快照窗口当前使用代码默认 `10:00-22:00 Asia/Shanghai`；修改这些 YAML 键不会改变策略。
 
-保留字段写在模板中是为了后续兼容，不应作为已生效配置使用。
+自动窗口只约束 `service run` 的持久化 UID discovery job。显式执行的
+`discovery loop` 是诊断入口，不会被窗口静默拦截。视频指标 sweep 和已入队的
+评论、回复、media、重试任务不读取这些字段，全天都可运行。
 
 ## Service
 

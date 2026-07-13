@@ -72,9 +72,10 @@ scheduler:
   default_retry_delay_seconds: 300
   max_retries: 3
   discovery_scan_seconds: 60
-  core_start_hour: 10
-  core_stop_hour: 22
-  timezone: Asia/Shanghai
+  discovery_start_hour: 10
+  discovery_stop_hour: 22
+  discovery_timezone: Asia/Shanghai
+  discovery_focus_times: ["11:00", "12:00", "13:00", "18:00", "19:00", "19:30", "20:00"]
 
 service:
   roles: [worker, scheduler]

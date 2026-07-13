@@ -67,7 +67,58 @@ async def test_uid_discovery_handler_enqueues_each_source_once_per_slot() -> Non
     assert [task.target_id for task in tasks] == ["100", "200"]
     assert tasks[1].payload["source_pool_type"] == "event"
     assert tasks[1].payload["source_pool_id"] == "event-a"
+    assert all(task.priority == 110 for task in tasks)
+    assert all(task.payload["discovery_schedule_mode"] == "normal" for task in tasks)
+    assert all(task.payload["focus_time"] is None for task in tasks)
     assert all(now.isoformat() in (task.idempotency_key or "") for task in tasks)
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_uid_discovery_handler_skips_slot_at_stop_boundary() -> None:
+    engine, session_factory = await _session_factory()
+    now = datetime(2026, 7, 13, 14, 0, tzinfo=UTC)  # 22:00 Asia/Shanghai
+    handler = UidDiscoveryScheduleHandler(
+        [DiscoveryUidSource(mid="100", pool_type="matrix")]
+    )
+    async with session_factory() as session:
+        job = await _job(session, kind=ScheduledJobKind.UID_DISCOVERY, now=now)
+        await handler.handle(job, session, now=now)
+        await session.commit()
+
+    async with session_factory() as session:
+        tasks = list(await session.scalars(select(CollectionTask)))
+
+    assert tasks == []
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_uid_discovery_handler_marks_focus_slot_and_raises_priority() -> None:
+    engine, session_factory = await _session_factory()
+    scheduled_for = datetime(2026, 7, 13, 3, 0, 30, tzinfo=UTC)  # 11:00 Asia/Shanghai
+    delayed_now = scheduled_for + timedelta(minutes=2)
+    handler = UidDiscoveryScheduleHandler(
+        [DiscoveryUidSource(mid="100", pool_type="matrix")]
+    )
+    async with session_factory() as session:
+        job = await _job(
+            session,
+            kind=ScheduledJobKind.UID_DISCOVERY,
+            now=scheduled_for,
+        )
+        await handler.handle(job, session, now=delayed_now)
+        await session.commit()
+
+    async with session_factory() as session:
+        task = await session.scalar(select(CollectionTask))
+
+    assert task is not None
+    assert task.priority == 120
+    assert task.not_before == delayed_now
+    assert task.payload["discovery_schedule_mode"] == "focus"
+    assert task.payload["focus_time"] == "11:00"
+    assert task.payload["scheduled_for"] == scheduled_for.isoformat()
     await engine.dispose()
 
 
@@ -228,7 +279,13 @@ async def test_snapshot_sweep_enqueues_only_due_video() -> None:
 def test_default_scheduled_jobs_include_independent_terminal_job() -> None:
     definitions, handlers = build_default_scheduled_jobs(
         {
-            "scheduler": {"discovery_scan_seconds": 45},
+            "scheduler": {
+                "discovery_scan_seconds": 45,
+                "discovery_start_hour": 9,
+                "discovery_stop_hour": 21,
+                "discovery_timezone": "Asia/Shanghai",
+                "discovery_focus_times": ["10:30", "20:00"],
+            },
             "discovery": {"matrix_uids": []},
         }
     )
@@ -246,3 +303,27 @@ def test_default_scheduled_jobs_include_independent_terminal_job() -> None:
     )
     assert uid_definition.schedule_seconds == 45
     assert set(handlers) == {definition.job_kind for definition in definitions}
+    uid_handler = handlers[ScheduledJobKind.UID_DISCOVERY]
+    assert isinstance(uid_handler, UidDiscoveryScheduleHandler)
+    assert uid_handler.policy.start_hour == 9
+    assert uid_handler.policy.stop_hour == 21
+    assert uid_handler.policy.timezone_name == "Asia/Shanghai"
+    assert uid_handler.policy.focus_times == ("10:30", "20:00")
+
+
+@pytest.mark.parametrize("discovery_scan_seconds", [0, 61])
+def test_default_scheduled_jobs_reject_discovery_interval_that_can_miss_focus_minute(
+    discovery_scan_seconds: int,
+) -> None:
+    with pytest.raises(
+        ValueError,
+        match=r"scheduler\.discovery_scan_seconds must be between 1 and 60",
+    ):
+        build_default_scheduled_jobs(
+            {
+                "scheduler": {
+                    "discovery_scan_seconds": discovery_scan_seconds,
+                },
+                "discovery": {"matrix_uids": []},
+            }
+        )

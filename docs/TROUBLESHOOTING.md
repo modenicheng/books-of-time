@@ -75,12 +75,13 @@ database: postgresql+asyncpg://...
 当前保留但未接入运行时：
 
 - `scheduler.max_retries`
-- `scheduler.core_start_hour`
-- `scheduler.core_stop_hour`
-- `scheduler.timezone`
 - request tier 的 `per_round`、`latest_pages`、`reply_roots`
 
 只有 tier `hot_pages` 当前影响 `video comments`。详情见 [CONFIGURATION](CONFIGURATION.md)。
+
+`scheduler.discovery_start_hour`、`discovery_stop_hour`、
+`discovery_timezone` 和 `discovery_focus_times` 已接入正式 UID discovery handler。
+它们不会限制视频快照或 worker 领取其他 collection task。
 
 `BOT_DATABASE_SCHEMA` 也不是普通 runtime engine 的 schema selector，只用于 migration/test 隔离流程。
 

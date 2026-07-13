@@ -108,13 +108,18 @@ scheduler 启动时 bootstrap 以下稳定 job：
 
 | Job | 默认周期 | 作用 |
 | --- | --- | --- |
-| `uid-discovery` | `scheduler.discovery_scan_seconds`，默认 60 秒 | 为静态/event UID 生成 discovery task |
-| `video-snapshot-sweep` | 60 秒 | 为到期 known video 生成指标 task |
-| `daily-terminal-snapshot` | 60 秒检查 | 22:00 后生成当日终结快照 |
+| `uid-discovery` | `scheduler.discovery_scan_seconds`，默认 60 秒 | 仅在 10:00（含）到 22:00（不含）为静态/event UID 生成 discovery task；重点分钟提升任务优先级 |
+| `video-snapshot-sweep` | 60 秒 | 全天为到期 known video 生成指标 task |
+| `daily-terminal-snapshot` | 60 秒检查 | 22:00 后生成额外的当日日终快照，不停止常规 sweep |
 | `operational-alert-evaluation` | 默认 60 秒 | 评估持久告警，可关闭 |
 | `account-cookie-refresh:<id>` | 默认 21600 秒 | 校验/刷新 Cookie，可关闭 |
 
 job 使用 PostgreSQL lease，失败后默认 300 秒重试。成功时按照原 schedule slot 推进；服务停机跨过多个 slot 后会跳到下一个未来 slot，不为每个漏过周期逐次补跑。
+
+UID discovery 按持久化的 `next_run_at` 判断窗口和重点分钟，而不是按 handler
+实际开始时间判断。因此 scheduler 短暂繁忙导致的分钟级延迟不会丢失重点标记；
+服务停机期间错过的历史 slot 不会在恢复后逐个补请求。视频 sweep、worker task
+lease 和 Cookie/告警 job 不使用 discovery 窗口。
 
 配置周期改变后，scheduler 下次 bootstrap 会更新仍包含在 definitions 中的已有 job：kind、周期、priority、payload 和 enabled，不删除成功/失败历史字段。
 
@@ -166,7 +171,7 @@ uv run python main.py video comments <BVID> --mode hot --tier c
 uv run python main.py collect-latest-comments <BVID> --max-scan-seconds 55
 ```
 
-这些命令只执行数据库 enqueue，适合 systemd timer、cron、Windows Task Scheduler 或现有编排平台；不要从 timer 启动第二个 `worker loop`。
+这些命令只执行数据库 enqueue，适合 systemd timer、cron、Windows Task Scheduler 或现有编排平台；不要从 timer 启动第二个 `worker loop`。常驻 worker 全天领取这些任务，评论调度器本身不应增加任何 10:00 到 22:00 的窗口判断。
 
 活动 idempotency key 会吸收重叠调用：上次同目标任务仍 pending/running 时，不会再插入第二条活动任务。任务结束后，下一次 timer 可创建新快照。
 
