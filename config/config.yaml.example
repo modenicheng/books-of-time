@@ -127,6 +127,45 @@ request_budget:
     latest_pages: 0
     reply_roots: 0
 
+snapshot_cohorts:
+  # C2 only stores and validates policy. C3 introduces the shadow planner.
+  enabled: false
+  planning_seconds: 30
+  timezone: Asia/Shanghai
+  checkpoint_hours: [6, 12, 18, 24]
+  checkpoint_max_lateness_minutes: 60
+  downgrade_confirmations: 2
+  tier_policy:
+    official_s_age_hours: 6
+    reassess_after_24h_minutes: 60
+    hot_turnover_confirmations: 2
+    s:
+      view_growth_per_hour: 6000
+      comment_growth_per_hour: 60
+      hot_top20_turnover_ratio: 0.35
+    a:
+      view_growth_per_hour: 1200
+      comment_growth_per_hour: 20
+      hot_top20_turnover_ratio: 0.20
+    b:
+      view_growth_per_hour: 300
+      comment_growth_per_hour: 5
+  lifecycle:
+    dormant_after_days: 7
+    archive_after_days: 30
+    dormant_interval_minutes: 1440
+    archived_metric_probe_minutes: 10080
+  activity_windows:
+    defaults:
+      - {name: lunch, start: "11:30", end: "13:30"}
+      - {name: dinner, start: "17:30", end: "20:30"}
+      - {name: night, start: "21:30", end: "00:30"}
+  tier_intervals_minutes:
+    s: {active: 2, normal: 10}
+    a: {active: 10, normal: 30}
+    b: {active: 30, normal: 60}
+    c: {active: 60, normal: 120}
+
 watchlist:
   hot_max_position: 3
   reply_growth_min: 5

@@ -171,7 +171,7 @@ git commit -m "feat(db): add cohort state and policy schema"
 - Produces frozen value objects `TierThreshold`, `TierInterval`, `ActivityWindow`, `LifecyclePolicy`, and `CohortPolicy`.
 - Produces `CohortPolicy.from_config(config: Mapping[str, Any] | None) -> CohortPolicy`.
 
-- [ ] **Step 1: Write failing default and validation tests**
+- [x] **Step 1: Write failing default and validation tests**
 
 Test exact defaults from the approved spec:
 
@@ -198,7 +198,7 @@ Parametrize invalid configurations and assert precise `ValueError` messages:
 - zero downgrade confirmations;
 - malformed `HH:MM` activity window.
 
-- [ ] **Step 2: Run config tests to verify RED**
+- [x] **Step 2: Run config tests to verify RED**
 
 ```powershell
 uv run pytest tests/test_cohort_policy_config.py -q
@@ -206,7 +206,7 @@ uv run pytest tests/test_cohort_policy_config.py -q
 
 Expected: `books_of_time.domain.cohort_policy` does not exist.
 
-- [ ] **Step 3: Implement immutable configuration objects**
+- [x] **Step 3: Implement immutable configuration objects**
 
 `CohortPolicy.from_config` reads the `snapshot_cohorts` mapping only. It accepts partial overrides and returns immutable normalized objects. Use `ZoneInfo`, exact enum keys, integer minute/hour/day values, and `datetime.time` activity boundaries. Keep the initial windows:
 
@@ -218,7 +218,7 @@ night  21:30-00:30
 
 The object also carries `enabled` (default `False` during C2), `planning_seconds=30`, `checkpoint_max_lateness=60 minutes`, tier thresholds, official S age, turnover confirmations, reassessment interval, lifecycle intervals, and tier ceilings. Reject booleans where integer values are expected.
 
-- [ ] **Step 4: Update example configuration without activating planner**
+- [x] **Step 4: Update example configuration without activating planner**
 
 Add the approved `snapshot_cohorts` keys to `config/config.yaml.example`, but set:
 
@@ -229,7 +229,7 @@ snapshot_cohorts:
 
 Include the 6/12/18/24 checkpoints, tier thresholds, lifecycle, default activity windows, and tier intervals. Do not add C4-C8 execution knobs in this commit.
 
-- [ ] **Step 5: Verify config GREEN**
+- [x] **Step 5: Verify config GREEN**
 
 ```powershell
 uv run pytest tests/test_cohort_policy_config.py tests/test_config_loader.py -q
@@ -238,7 +238,7 @@ uv run ruff check books_of_time/domain/cohort_policy.py tests/test_cohort_policy
 
 Expected: approved defaults parse and every invalid boundary is rejected.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```powershell
 git add books_of_time/domain/cohort_policy.py tests/test_cohort_policy_config.py config/config.yaml.example docs/superpowers/plans/2026-07-14-cohort-state-and-policy-c2.md
