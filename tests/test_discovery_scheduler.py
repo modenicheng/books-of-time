@@ -80,6 +80,7 @@ async def test_discovery_scheduler_preserves_all_source_provenance() -> None:
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     first_seen = datetime(2026, 7, 10, 10, 0, tzinfo=UTC)
     second_seen = first_seen + timedelta(minutes=1)
+    third_seen = second_seen + timedelta(minutes=1)
     game_source = {
         "source_mid": "123",
         "pool_type": "game",
@@ -155,6 +156,12 @@ async def test_discovery_scheduler_preserves_all_source_provenance() -> None:
             raw_page_observation_id=second_page.id,
             now=second_seen,
         )
+        third_created = await scheduler.handle_discovered_videos(
+            session=session,
+            videos=[video],
+            source_associations=[game_source, event_source],
+            now=third_seen,
+        )
         await session.commit()
 
     async with session_factory() as session:
@@ -168,6 +175,7 @@ async def test_discovery_scheduler_preserves_all_source_provenance() -> None:
 
     assert first_created == ["BV-SOURCES"]
     assert second_created == []
+    assert third_created == []
     assert known_video is not None
     assert known_video.source_mid == "123"
     assert len(tasks) == 1
@@ -176,10 +184,11 @@ async def test_discovery_scheduler_preserves_all_source_provenance() -> None:
     assert event_row.first_raw_page_id == second_page.id
     assert event_row.last_raw_page_id == second_page.id
     assert event_row.first_seen_at == second_seen
+    assert event_row.last_seen_at == third_seen
     assert game_row.first_raw_page_id == first_page.id
     assert game_row.last_raw_page_id == second_page.id
     assert game_row.first_seen_at == first_seen
-    assert game_row.last_seen_at == second_seen
+    assert game_row.last_seen_at == third_seen
     assert game_row.game_id == "genshin"
     assert game_row.official is True
     assert game_row.monitored is True

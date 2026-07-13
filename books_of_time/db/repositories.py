@@ -142,7 +142,8 @@ class KnownVideoSourceRepository:
                 self.session.add(row)
             else:
                 row.last_seen_at = seen_at
-                row.last_raw_page_id = raw_page_observation_id
+                if raw_page_observation_id is not None:
+                    row.last_raw_page_id = raw_page_observation_id
                 row.active = True
                 row.updated_at = seen_at
             rows.append(row)
