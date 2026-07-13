@@ -4,6 +4,9 @@
 
 这是固定时点的验收记录，不替代当前接口文档。完整流程见 [USER_GUIDE](USER_GUIDE.md)，采集状态语义见 [COLLECTION](COLLECTION.md)，分析输出字段见 [ANALYSIS](ANALYSIS.md)。
 
+从二维码登录开始的认证态完整复验见
+[REAL_DATA_LOGIN_E2E_2026-07-13](REAL_DATA_LOGIN_E2E_2026-07-13.md)。
+
 真实平台数据会变化，下面的数量是本次证据，不是未来运行必须匹配的固定断言。样本失效时应替换为仍公开可见的视频，并保留相同验收步骤和覆盖限制。
 
 ## Preconditions

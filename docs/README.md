@@ -18,6 +18,7 @@
 | 部署服务 | [DEPLOYMENT](DEPLOYMENT.md) | Docker、split Compose、Linux systemd、Windows 开发和升级 |
 | 排查故障 | [TROUBLESHOOTING](TROUBLESHOOTING.md) | 数据库、任务、限流、Cookie、raw/media、报告和服务问题 |
 | 复现真实验收 | [REAL_DATA_SMOKE](REAL_DATA_SMOKE.md) | 真实 Bilibili 数据的端到端命令、结果和覆盖限制 |
+| 复核登录后全流程 | [REAL_DATA_LOGIN_E2E_2026-07-13](REAL_DATA_LOGIN_E2E_2026-07-13.md) | 从二维码登录到采集、媒体、报告和长期服务的认证态真实验收记录 |
 
 ## Reading Paths
 
@@ -42,6 +43,7 @@
 2. [COLLECTION](COLLECTION.md) 中的 coverage 与 frontier 语义
 3. [ANALYSIS](ANALYSIS.md) 中的算法边界
 4. [REAL_DATA_SMOKE](REAL_DATA_SMOKE.md)
+5. [REAL_DATA_LOGIN_E2E_2026-07-13](REAL_DATA_LOGIN_E2E_2026-07-13.md)
 
 ## Project And Engineering Records
 
