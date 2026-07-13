@@ -120,6 +120,12 @@ http:
 | `timeout_seconds` | `10` | 单次 HTTP 请求超时；latest 的 55 秒是整个任务片段预算，不替代此超时 |
 | `user_agent` | 项目默认 UA | 所有统一 HTTP 请求的 User-Agent |
 
+正式 worker 请求会额外写入 `http_request_attempts`。该行为不需要配置开关：
+成功响应在 collector 保存 raw 后才标记为 `succeeded`；403、429、captcha、5xx
+等带 body 的失败响应先保存 raw 再抛错；timeout/network 只记录无 body attempt。
+登录、Cookie 刷新和诊断入口不在 collection worker context 内，不会被强制绑定到
+collection task。
+
 ## Rate Limits
 
 ```yaml
@@ -314,28 +320,60 @@ discovery:
   matrix_uids: []
   game_uid_pools:
     genshin_impact:
+      game_id: genshin_impact
+      official: true
+      monitored: true
       uids: [401742377]
     wuthering_waves:
+      game_id: wuthering_waves
+      official: true
+      monitored: true
       uids: [1955897084]
     honkai_star_rail:
+      game_id: honkai_star_rail
+      official: true
+      monitored: true
       uids: [1340190821]
     zenless_zone_zero:
+      game_id: zenless_zone_zero
+      official: true
+      monitored: true
       uids: [1636034895]
     honkai_impact_3rd:
+      game_id: honkai_impact_3rd
+      official: true
+      monitored: true
       uids: [27534330]
     arknights_endfield:
+      game_id: arknights_endfield
+      official: true
+      monitored: true
       uids: [1265652806]
     arknights:
+      game_id: arknights
+      official: true
+      monitored: true
       uids: [161775300]
   event_uid_pools: {}
 ```
 
-- `matrix_uids`：通用矩阵账号。
-- `game_uid_pools`：保留 `pool_type=game` 和 pool ID 的静态分组。
-- `event_uid_pools`：保留 `pool_type=event` 和 pool ID 的静态分组。
+- `matrix_uids`：通用矩阵账号；来源默认为 `pool_id=matrix`、
+  `game_id=null`、`official=false`、`monitored=true`。
+- `game_uid_pools`：保留 `pool_type=game` 和 pool ID 的静态分组。省略元数据时，
+  `game_id` 默认为 pool key，`official` 与 `monitored` 均默认为 `true`。
+- `event_uid_pools`：保留 `pool_type=event` 和 pool ID 的静态分组；默认
+  `game_id=null`、`official=false`、`monitored=true`。
 - active 事件中的 UID target 会在 scheduler 运行时动态合并，不需要重复写入 YAML。
 
-pool 值既可写成 `{uids: [...]}`，也可直接写列表或单个 UID。服务每轮对同一 MID 去重。
+pool 值既可写成 `{uids: [...]}`，也可直接写列表或单个 UID。`official` 和
+`monitored` 必须是真正的 YAML boolean；`"false"` 这类字符串会被拒绝。MID、
+pool type、pool ID 和非空 game ID 不允许只含空白。
+
+服务每轮按 MID 合并来源，但不会丢弃重复归属：一个 MID 同时位于 matrix、game、
+event pool 时只生成一条 discovery task，完整、去重、稳定排序后的来源写入
+`source_associations`。legacy `source_pool_type/source_pool_id` 只保留首个排序来源供
+兼容诊断。active event UID target 使用独立 `pool_id=target:<target_id>`；仅
+`extra.role=official` 会设置 `official=true`，`major_creator` 不会被等同为官方账号。
 
 模板默认监测以下于 2026-07-13 经 B 站用户检索确认的官方主发布账号：
 

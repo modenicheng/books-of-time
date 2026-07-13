@@ -561,7 +561,7 @@ git commit -m "feat(http): preserve failed request evidence"
 - Produces operator-visible semantics for comment timestamps, source associations, and HTTP attempts.
 - Produces C1 completion evidence; C2 remains unstarted.
 
-- [ ] **Step 1: Update operator documentation**
+- [x] **Step 1: Update operator documentation**
 
 Document:
 
@@ -572,7 +572,7 @@ Document:
 - attempt statuses/timestamps, failed-body archival, timeout/network no-body evidence, and secret exclusions;
 - C1's current-session limitation and that C7 will move attempt/page work to fully durable short transactions.
 
-- [ ] **Step 2: Run isolated migration cycle and full verification**
+- [x] **Step 2: Run isolated migration cycle and full verification**
 
 Run:
 
@@ -588,11 +588,11 @@ and Git reports no whitespace errors. Do not run downgrade against the user's
 configured PostgreSQL database. A PostgreSQL round trip, when available, must
 use a disposable database or isolated schema created for this test.
 
-- [ ] **Step 3: Mark only C1 complete in TODO**
+- [x] **Step 3: Mark only C1 complete in TODO**
 
 Change C1 from `[~]` to `[x]`. Leave C2-C9 unchecked. Do not mark the overall P1 collection-cohort mainline complete.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```powershell
 git add docs/CONFIGURATION.md docs/COLLECTION.md docs/DATA_MODEL.md docs/TODO.md
