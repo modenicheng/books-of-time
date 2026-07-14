@@ -88,6 +88,15 @@ def _add_comment_evidence_columns(table_name: str) -> None:
 
 
 def upgrade() -> None:
+    if op.get_bind().dialect.name == "postgresql":
+        op.alter_column(
+            "alembic_version",
+            "version_num",
+            existing_type=sa.String(length=32),
+            type_=sa.String(length=128),
+            existing_nullable=False,
+        )
+
     _add_comment_evidence_columns("comment_entities")
     _add_comment_evidence_columns("comment_observations")
 

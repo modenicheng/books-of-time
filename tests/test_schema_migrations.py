@@ -418,6 +418,23 @@ def test_hot_comment_scan_revision_is_static() -> None:
     assert "Base.metadata" not in source
 
 
+def test_first_long_revision_widens_postgresql_alembic_version_column() -> None:
+    revision_path = (
+        Path(__file__).resolve().parents[1]
+        / "alembic"
+        / "versions"
+        / "0008_collection_evidence_foundations.py"
+    )
+    source = revision_path.read_text(encoding="utf-8")
+    widen_call = 'op.alter_column(\n            "alembic_version"'
+    first_schema_change = '_add_comment_evidence_columns("comment_entities")'
+
+    assert len("0008_collection_evidence_foundations") > 32
+    assert widen_call in source
+    assert "type_=sa.String(length=128)" in source
+    assert source.index(widen_call) < source.index(first_schema_change)
+
+
 def test_hot_comment_scan_revision_round_trip(tmp_path: Path) -> None:
     database_path = tmp_path / "hot-comment-scan-cycle.sqlite3"
     config_path = _write_sqlite_config(
