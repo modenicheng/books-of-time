@@ -9,6 +9,7 @@ from books_of_time.accounts.manager import AccountManager
 from books_of_time.common.logger import get_logger
 from books_of_time.db.models import CollectionTask, ScheduledJob
 from books_of_time.db.repositories import CollectionTaskRepository, EventRepository
+from books_of_time.domain.cohort_policy import CohortPolicy, CohortRolloutMode
 from books_of_time.domain.enums import ScheduledJobKind, TaskKind
 from books_of_time.http.client import RawHttpClient
 from books_of_time.http.rate_limiter import RateLimiter
@@ -28,6 +29,9 @@ from books_of_time.task_orchestrator.discovery_schedule_policy import (
 )
 from books_of_time.task_orchestrator.discovery_sources import (
     resolve_discovery_uid_sources,
+)
+from books_of_time.task_orchestrator.snapshot_cohort_planner import (
+    SnapshotCohortPlanner,
 )
 from books_of_time.task_orchestrator.video_snapshot_scheduler import (
     VideoSnapshotScheduler,
@@ -212,6 +216,40 @@ class TerminalSnapshotScheduleHandler:
         await self.scheduler.schedule_terminal_snapshots(session=session, now=now)
 
 
+class SnapshotCohortPlanningScheduleHandler:
+    def __init__(
+        self,
+        policy: CohortPolicy,
+        *,
+        planner: SnapshotCohortPlanner | None = None,
+    ) -> None:
+        self.policy = policy
+        self.planner = planner or SnapshotCohortPlanner(policy)
+
+    async def handle(
+        self,
+        job: ScheduledJob,
+        session: AsyncSession,
+        *,
+        now: datetime,
+    ) -> None:
+        summary = await self.planner.plan_due(
+            session,
+            now=now,
+            rollout_mode=CohortRolloutMode.SHADOW,
+        )
+        logger.info(
+            "Snapshot cohort shadow planning videos=%s adopted=%s cohorts=%s "
+            "components=%s tasks=%s gaps=%s",
+            summary.videos_considered,
+            summary.videos_adopted,
+            summary.cohorts_created,
+            summary.components_created,
+            summary.tasks_created,
+            summary.schedule_gaps_created,
+        )
+
+
 class AccountCookieRefreshScheduleHandler:
     def __init__(
         self,
@@ -256,6 +294,12 @@ def build_default_scheduled_jobs(
     list[ScheduledJobDefinition],
     dict[ScheduledJobKind, ScheduledJobHandler],
 ]:
+    cohort_policy = CohortPolicy.from_config(cfg)
+    if cohort_policy.enabled and cohort_policy.rollout_mode is CohortRolloutMode.LIVE:
+        raise ValueError(
+            "snapshot_cohorts.rollout_mode=live is unavailable until C7 migrates "
+            "all routine scheduling ownership"
+        )
     scheduler_cfg = cfg.get("scheduler", {})
     sources = resolve_discovery_uid_sources(cfg.get("discovery", {}))
     configured_focus_times = scheduler_cfg.get(
@@ -304,6 +348,22 @@ def build_default_scheduled_jobs(
         ScheduledJobKind.VIDEO_SNAPSHOT_SWEEP: VideoSnapshotSweepScheduleHandler(),
         ScheduledJobKind.DAILY_TERMINAL_SNAPSHOT: (TerminalSnapshotScheduleHandler()),
     }
+    if cohort_policy.enabled:
+        definitions.append(
+            ScheduledJobDefinition(
+                job_key="snapshot-cohort-planning",
+                job_kind=ScheduledJobKind.SNAPSHOT_COHORT_PLANNING,
+                schedule_seconds=cohort_policy.planning_seconds,
+                priority=110,
+                payload={
+                    "policy_version": cohort_policy.policy_version,
+                    "rollout_mode": cohort_policy.rollout_mode.value,
+                },
+            )
+        )
+        handlers[ScheduledJobKind.SNAPSHOT_COHORT_PLANNING] = (
+            SnapshotCohortPlanningScheduleHandler(cohort_policy)
+        )
     operations_cfg = cfg.get("operations", {})
     if not isinstance(operations_cfg, dict):
         raise ValueError("Configuration section operations must be a mapping")

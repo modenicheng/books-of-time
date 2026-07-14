@@ -413,7 +413,7 @@ git commit -m "feat(worker): track cohort component execution"
 - `build_default_scheduled_jobs` adds `snapshot-cohort-planning` only when `snapshot_cohorts.enabled=true` and rollout is shadow.
 - Normal service configuration rejects live rollout before creating any scheduled-job definition.
 
-- [ ] **Step 1: Write failing service-boundary tests**
+- [x] **Step 1: Write failing service-boundary tests**
 
 Assert:
 
@@ -438,7 +438,7 @@ Also assert disabled config adds no planner job; custom positive planning second
 
 Run the handler/coordinator against one known video. Assert policy/state/cohort/component rows commit, `SnapshotCohort.status == "shadow_planned"`, and `CollectionTask` count remains zero. Use collectors/HTTP fakes that fail the test if called, proving shadow planning performs no platform request.
 
-- [ ] **Step 2: Run service tests to verify RED**
+- [x] **Step 2: Run service tests to verify RED**
 
 ```powershell
 uv run pytest tests/test_service_scheduled_handlers.py tests/test_service_coordinator.py -q
@@ -446,7 +446,7 @@ uv run pytest tests/test_service_scheduled_handlers.py tests/test_service_coordi
 
 Expected: no planner definition/handler exists and live rollout is not rejected.
 
-- [ ] **Step 3: Implement shadow-only service registration**
+- [x] **Step 3: Implement shadow-only service registration**
 
 Parse `CohortPolicy` once in `build_default_scheduled_jobs`. When disabled, preserve the existing definition set exactly. When enabled in shadow mode, register priority 110 and schedule `policy.planning_seconds`; the handler calls `planner.plan_due(session, now=now, rollout_mode=SHADOW)` and logs summary counts.
 
@@ -458,14 +458,14 @@ snapshot_cohorts.rollout_mode=live is unavailable until C7 migrates all routine 
 
 Do not disable, delegate, or edit the legacy video sweep, terminal handler, or collector recursion in C3.
 
-- [ ] **Step 4: Verify GREEN and explicit no-request proof**
+- [x] **Step 4: Verify GREEN and explicit no-request proof**
 
 ```powershell
 uv run pytest tests/test_service_scheduled_handlers.py tests/test_service_coordinator.py tests/test_snapshot_cohort_planner.py -q
 uv run ruff check books_of_time/service/scheduled_jobs.py tests/test_service_scheduled_handlers.py tests/test_service_coordinator.py
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add books_of_time/service/scheduled_jobs.py tests/test_service_scheduled_handlers.py tests/test_service_coordinator.py docs/superpowers/plans/2026-07-14-persistent-cohort-planner-c3.md

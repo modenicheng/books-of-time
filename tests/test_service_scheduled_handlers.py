@@ -6,14 +6,19 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from books_of_time.db.base import Base
 from books_of_time.db.models import (
+    CollectionPolicyVersion,
     CollectionTask,
     KnownVideo,
     ScheduledJob,
+    SnapshotCohort,
+    SnapshotCohortComponent,
+    VideoCollectionState,
     VideoMetricSnapshot,
 )
 from books_of_time.db.repositories import EventRepository, ScheduledJobRepository
 from books_of_time.domain.enums import ScheduledJobKind, TaskKind, TaskStatus
 from books_of_time.service.scheduled_jobs import (
+    SnapshotCohortPlanningScheduleHandler,
     TerminalSnapshotScheduleHandler,
     UidDiscoveryScheduleHandler,
     VideoSnapshotSweepScheduleHandler,
@@ -408,6 +413,112 @@ def test_default_scheduled_jobs_include_independent_terminal_job() -> None:
     assert uid_handler.policy.stop_hour == 21
     assert uid_handler.policy.timezone_name == "Asia/Shanghai"
     assert uid_handler.policy.focus_times == ("10:30", "20:00")
+
+
+def test_default_scheduled_jobs_add_optional_shadow_cohort_planner() -> None:
+    definitions, handlers = build_default_scheduled_jobs(
+        {
+            "discovery": {"matrix_uids": []},
+            "snapshot_cohorts": {
+                "enabled": True,
+                "policy_version": "cohort-default-v1",
+                "rollout_mode": "shadow",
+                "planning_seconds": 45,
+            },
+        }
+    )
+
+    definition = next(
+        item
+        for item in definitions
+        if item.job_kind is ScheduledJobKind.SNAPSHOT_COHORT_PLANNING
+    )
+    assert definition.job_key == "snapshot-cohort-planning"
+    assert definition.schedule_seconds == 45
+    assert definition.priority == 110
+    assert isinstance(
+        handlers[ScheduledJobKind.SNAPSHOT_COHORT_PLANNING],
+        SnapshotCohortPlanningScheduleHandler,
+    )
+
+
+def test_default_scheduled_jobs_reject_live_cohort_rollout_until_c7() -> None:
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"snapshot_cohorts\.rollout_mode=live is unavailable until C7 migrates "
+            "all routine scheduling ownership"
+        ),
+    ):
+        build_default_scheduled_jobs(
+            {
+                "discovery": {"matrix_uids": []},
+                "snapshot_cohorts": {
+                    "enabled": True,
+                    "rollout_mode": "live",
+                },
+            }
+        )
+
+
+@pytest.mark.asyncio
+async def test_shadow_cohort_handler_persists_evidence_without_collection_tasks() -> (
+    None
+):
+    engine, session_factory = await _session_factory()
+    now = datetime(2026, 7, 14, 4, 0, tzinfo=UTC)
+    definitions, handlers = build_default_scheduled_jobs(
+        {
+            "discovery": {"matrix_uids": []},
+            "snapshot_cohorts": {
+                "enabled": True,
+                "rollout_mode": "shadow",
+            },
+        }
+    )
+    definition = next(
+        item
+        for item in definitions
+        if item.job_kind is ScheduledJobKind.SNAPSHOT_COHORT_PLANNING
+    )
+    handler = handlers[ScheduledJobKind.SNAPSHOT_COHORT_PLANNING]
+
+    async with session_factory() as session:
+        session.add(
+            KnownVideo(
+                bvid="BV-SERVICE-SHADOW",
+                source_mid="42",
+                pubdate=now - timedelta(hours=1),
+                first_seen_at=now - timedelta(hours=1),
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        job = await ScheduledJobRepository(session).ensure(
+            job_key=definition.job_key,
+            job_kind=definition.job_kind,
+            schedule_seconds=definition.schedule_seconds,
+            priority=definition.priority,
+            payload=definition.payload,
+            next_run_at=now,
+        )
+        await handler.handle(job, session, now=now)
+        await session.commit()
+
+    async with session_factory() as session:
+        policy = await session.scalar(select(CollectionPolicyVersion))
+        state = await session.get(VideoCollectionState, "BV-SERVICE-SHADOW")
+        cohort = await session.scalar(select(SnapshotCohort))
+        components = list(await session.scalars(select(SnapshotCohortComponent)))
+        tasks = list(await session.scalars(select(CollectionTask)))
+
+        assert policy is not None and policy.active is True
+        assert state is not None
+        assert cohort is not None and cohort.status == "shadow_planned"
+        assert len(components) == 3
+        assert tasks == []
+
+    await engine.dispose()
 
 
 @pytest.mark.parametrize("discovery_scan_seconds", [0, 61])
