@@ -257,7 +257,7 @@ git commit -m "feat(scans): coordinate active latest scans"
 - Newly owned scans enqueue slice zero with all-status slice identity and `frontier_version` in payload.
 - Joined components use `joined_active_task` and create no duplicate task.
 
-- [ ] **Step 1: Write failing planner timing tests**
+- [x] **Step 1: Write failing planner timing tests**
 
 Assert routine latest payload limits:
 
@@ -270,7 +270,7 @@ checkpoint/recovery            -> max_scan_seconds 55
 
 Existing shadow plans must keep `latest_current_head` / `latest_reconciliation` but create no scan/task.
 
-- [ ] **Step 2: Write failing live materialization tests**
+- [x] **Step 2: Write failing live materialization tests**
 
 Cover:
 
@@ -281,7 +281,7 @@ Cover:
 5. Repeated materialization returns the same scan/task.
 6. Shadow creates component plans only: zero frontier owner, scan runs, or tasks.
 
-- [ ] **Step 3: Run planner/materializer tests and verify RED**
+- [x] **Step 3: Run planner/materializer tests and verify RED**
 
 ```powershell
 uv run pytest tests/test_snapshot_cohort_planner.py tests/test_cohort_materialization.py -q
@@ -289,11 +289,11 @@ uv run pytest tests/test_snapshot_cohort_planner.py tests/test_cohort_materializ
 
 Expected: latest components still enqueue generic tasks and have no scan ownership.
 
-- [ ] **Step 4: Implement latest component payload timing**
+- [x] **Step 4: Implement latest component payload timing**
 
 Pass the already computed routine interval into component-plan creation. Checkpoint and recovery use 55. Do not alter hot page ranges or C3/C4 shadow behavior.
 
-- [ ] **Step 5: Implement atomic live latest materialization**
+- [x] **Step 5: Implement atomic live latest materialization**
 
 Before generic task insertion, lock/create the `latest_comments` frontier. Select the initial mode from durable state:
 
@@ -305,14 +305,14 @@ otherwise                                 -> baseline_tail
 
 For a newly claimed scan, link the component and enqueue slice zero with key `<scan_id>:<mode>:0`; payload includes `scan_mode`, `frontier_version`, `max_scan_seconds`, and `current_head_required`. For an existing active scan, link the component, set `joined_active_task`, and do not create a task. `latest_reconciliation` uses the same current-head incremental mode in C5; it must not claim full reconciliation coverage before C6.
 
-- [ ] **Step 6: Run focused verification**
+- [x] **Step 6: Run focused verification**
 
 ```powershell
 uv run pytest tests/test_snapshot_cohort_planner.py tests/test_cohort_materialization.py tests/test_latest_scan_repositories.py -q
 uv run ruff check books_of_time/task_orchestrator/snapshot_cohort_planner.py books_of_time/db/cohort_repositories.py tests/test_snapshot_cohort_planner.py tests/test_cohort_materialization.py
 ```
 
-- [ ] **Step 7: Commit the planner/materializer unit**
+- [x] **Step 7: Commit the planner/materializer unit**
 
 ```powershell
 git add books_of_time/task_orchestrator/snapshot_cohort_planner.py books_of_time/db/cohort_repositories.py tests/test_snapshot_cohort_planner.py tests/test_cohort_materialization.py

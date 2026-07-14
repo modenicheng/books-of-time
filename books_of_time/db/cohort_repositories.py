@@ -14,19 +14,28 @@ from books_of_time.db.comment_scan_repositories import (
     CommentScanRunRepository,
     HotScanRunPlan,
 )
+from books_of_time.db.latest_scan_repositories import (
+    LatestScanClaim,
+    LatestScanRunPlan,
+    LatestScanRunRepository,
+)
 from books_of_time.db.models import (
     CollectionCoverageStat,
     CollectionPolicyVersion,
     CollectionScheduleGap,
     CollectionTask,
     CommentScanRun,
+    FrontierState,
     HttpRequestAttempt,
     KnownVideo,
     SnapshotCohort,
     SnapshotCohortComponent,
     VideoCollectionState,
 )
-from books_of_time.db.repositories import CollectionTaskRepository
+from books_of_time.db.repositories import (
+    CollectionTaskRepository,
+    FrontierStateRepository,
+)
 from books_of_time.domain.cohort_policy import (
     CohortComponentStatus,
     CohortPolicy,
@@ -44,6 +53,7 @@ from books_of_time.domain.enums import (
     CommentScanStatus,
     TaskKind,
 )
+from books_of_time.domain.latest_frontier import normalize_anchor_set, primary_anchor
 
 
 @dataclass(frozen=True, slots=True)
@@ -541,6 +551,8 @@ class SnapshotCohortRepository:
         ):
             task_repository = CollectionTaskRepository(self.session)
             scan_repository = CommentScanRunRepository(self.session)
+            latest_scan_repository = LatestScanRunRepository(self.session)
+            frontier_repository = FrontierStateRepository(self.session)
             for component_plan, component in zip(
                 plan.components,
                 ordered_components,
@@ -551,7 +563,39 @@ class SnapshotCohortRepository:
                     or component_plan.task_kind is None
                 ):
                     continue
+                if _is_managed_latest_component(component_plan):
+                    existing_latest_task = await self.session.scalar(
+                        select(CollectionTask)
+                        .where(
+                            CollectionTask.snapshot_cohort_component_id == component.id
+                        )
+                        .order_by(CollectionTask.id.asc())
+                        .limit(1)
+                        .with_for_update()
+                    )
+                    if existing_latest_task is not None:
+                        if component.comment_scan_run_id is None:
+                            raise ValueError(
+                                "Existing latest task has no linked comment scan run"
+                            )
+                        existing_scan = await self.session.scalar(
+                            select(CommentScanRun)
+                            .where(CommentScanRun.id == component.comment_scan_run_id)
+                            .with_for_update()
+                        )
+                        if existing_scan is None:
+                            raise LookupError(
+                                "Existing latest task comment scan run was not found"
+                            )
+                        _validate_existing_latest_task(
+                            existing_latest_task,
+                            scan_run_id=existing_scan.id,
+                            scan_mode=existing_scan.mode,
+                        )
+                        tasks.append(existing_latest_task)
+                        continue
                 scan = None
+                latest_claim: LatestScanClaim | None = None
                 if _is_managed_hot_component(component_plan):
                     scan, _created = await scan_repository.materialize_hot(
                         _hot_scan_run_plan(
@@ -567,6 +611,32 @@ class SnapshotCohortRepository:
                         raise ValueError(
                             "Cohort component belongs to another comment scan run"
                         )
+                elif _is_managed_latest_component(component_plan):
+                    frontier = await frontier_repository.get_or_create(
+                        target_type="video",
+                        target_id=plan.bvid,
+                        frontier_type="latest_comments",
+                        now=now,
+                        lock=True,
+                    )
+                    latest_claim = await latest_scan_repository.claim_or_join(
+                        _latest_scan_run_plan(
+                            plan,
+                            cohort=cohort,
+                            component_plan=component_plan,
+                            frontier=frontier,
+                        ),
+                        frontier_state=frontier,
+                        expected_version=frontier.version,
+                        now=now,
+                    )
+                    scan = latest_claim.scan
+                    if component.comment_scan_run_id is None:
+                        component.comment_scan_run_id = scan.id
+                    elif component.comment_scan_run_id != scan.id:
+                        raise ValueError(
+                            "Cohort component belongs to another comment scan run"
+                        )
                 existing_task = await self.session.scalar(
                     select(CollectionTask)
                     .where(CollectionTask.snapshot_cohort_component_id == component.id)
@@ -576,45 +646,70 @@ class SnapshotCohortRepository:
                 )
                 if existing_task is not None:
                     if scan is not None:
-                        _validate_existing_hot_task(
-                            existing_task,
-                            scan_run_id=scan.id,
-                            scan_mode=scan.mode,
-                        )
+                        if latest_claim is None:
+                            _validate_existing_hot_task(
+                                existing_task,
+                                scan_run_id=scan.id,
+                                scan_mode=scan.mode,
+                            )
+                        else:
+                            _validate_existing_latest_task(
+                                existing_task,
+                                scan_run_id=scan.id,
+                                scan_mode=scan.mode,
+                            )
                     tasks.append(existing_task)
+                    continue
+
+                if latest_claim is not None and not latest_claim.created:
+                    component.status = CohortComponentStatus.JOINED_ACTIVE_TASK.value
                     continue
 
                 not_before = component_plan.not_before or max(
                     now,
                     plan.scheduled_for,
                 )
+                scan_slice_key = (
+                    f"{scan.id}:{scan.mode.value}:0" if scan is not None else None
+                )
+                task_payload = {
+                    **deepcopy(dict(component_plan.payload)),
+                    "bvid": plan.bvid,
+                    "reason": plan.reason,
+                    "scheduled_for": plan.scheduled_for.isoformat(),
+                    "cohort_key": plan.cohort_key,
+                    "component_kind": component_plan.component_kind,
+                }
+                if latest_claim is not None:
+                    task_payload.update(
+                        {
+                            "scan_mode": scan.mode.value,
+                            "frontier_version": latest_claim.frontier_state.version,
+                            "current_head_required": True,
+                        }
+                    )
                 task = await task_repository.enqueue(
                     kind=component_plan.task_kind,
                     target_type="video",
                     target_id=plan.bvid,
                     priority=component_plan.priority,
                     budget_cost=component_plan.budget_cost,
-                    payload={
-                        **deepcopy(dict(component_plan.payload)),
-                        "bvid": plan.bvid,
-                        "reason": plan.reason,
-                        "scheduled_for": plan.scheduled_for.isoformat(),
-                        "cohort_key": plan.cohort_key,
-                        "component_kind": component_plan.component_kind,
-                    },
+                    payload=task_payload,
                     not_before=not_before,
                     max_retries=component_plan.max_retries,
-                    idempotency_key=component_key(
-                        plan.cohort_key,
-                        component_plan.component_kind,
+                    idempotency_key=(
+                        scan_slice_key
+                        if latest_claim is not None
+                        else component_key(
+                            plan.cohort_key,
+                            component_plan.component_kind,
+                        )
                     ),
                     snapshot_cohort_id=cohort.id,
                     snapshot_cohort_component_id=component.id,
                     comment_scan_run_id=scan.id if scan is not None else None,
                     scan_slice_no=0 if scan is not None else None,
-                    scan_slice_key=(
-                        f"{scan.id}:{scan.mode.value}:0" if scan is not None else None
-                    ),
+                    scan_slice_key=scan_slice_key,
                 )
                 tasks.append(task)
                 tasks_created += 1
@@ -1192,6 +1287,14 @@ def _is_managed_hot_component(component_plan: CohortComponentPlan) -> bool:
     return component_plan.extra.get("scan_mode") in {"hot_core", "hot_deep"}
 
 
+def _is_managed_latest_component(component_plan: CohortComponentPlan) -> bool:
+    return (
+        component_plan.component_kind
+        in {"latest_current_head", "latest_reconciliation"}
+        and component_plan.task_kind is TaskKind.FETCH_LATEST_COMMENTS
+    )
+
+
 def _hot_scan_run_plan(
     plan: SnapshotCohortPlan,
     *,
@@ -1222,6 +1325,75 @@ def _hot_scan_run_plan(
     )
 
 
+def _latest_scan_run_plan(
+    plan: SnapshotCohortPlan,
+    *,
+    cohort: SnapshotCohort,
+    component_plan: CohortComponentPlan,
+    frontier: FrontierState,
+) -> LatestScanRunPlan:
+    max_scan_seconds = component_plan.extra.get("max_scan_seconds")
+    current_head_required = component_plan.extra.get("current_head_required")
+    if (
+        isinstance(max_scan_seconds, bool)
+        or not isinstance(max_scan_seconds, int | float)
+        or max_scan_seconds < 10
+        or max_scan_seconds > 55
+    ):
+        raise ValueError("Managed latest component has invalid slice timing")
+    if current_head_required is not True:
+        raise ValueError("Managed latest component must require current-head evidence")
+
+    baseline_status = frontier.extra.get("baseline_status")
+    if baseline_status == "baseline_complete":
+        mode = CommentScanMode.INCREMENTAL
+    elif baseline_status == "baseline_tail_complete":
+        mode = CommentScanMode.BASELINE_HEAD_SWEEP
+    else:
+        mode = CommentScanMode.BASELINE_TAIL
+    anchors = _latest_start_anchors(frontier, mode=mode)
+    start_frontier_rpid, _ = primary_anchor(anchors)
+    return LatestScanRunPlan(
+        scan_key=component_key(plan.cohort_key, component_plan.component_kind),
+        bvid=plan.bvid,
+        snapshot_cohort_id=cohort.id,
+        parent_scan_run_id=None,
+        mode=mode,
+        policy_version=plan.policy_version,
+        reason=plan.reason,
+        start_frontier_rpid=start_frontier_rpid,
+        start_anchor_set=anchors,
+        start_cursor=frontier.cursor,
+        extra=component_plan.extra,
+    )
+
+
+def _latest_start_anchors(
+    frontier: FrontierState,
+    *,
+    mode: CommentScanMode,
+) -> list[dict[str, object]]:
+    if mode is CommentScanMode.BASELINE_TAIL:
+        return []
+    if mode is CommentScanMode.BASELINE_HEAD_SWEEP:
+        legacy_rpid = frontier.extra.get("baseline_start_frontier_rpid")
+        if legacy_rpid is not None:
+            return list(
+                normalize_anchor_set(
+                    [{"rpid": legacy_rpid, "platform_created_at": None}]
+                )
+            )
+
+    anchors = list(normalize_anchor_set(frontier.frontier_anchor_set))
+    if not anchors and frontier.frontier_rpid is not None:
+        anchors = list(
+            normalize_anchor_set(
+                [{"rpid": frontier.frontier_rpid, "platform_created_at": None}]
+            )
+        )
+    return anchors
+
+
 def _validate_existing_hot_task(
     task: CollectionTask,
     *,
@@ -1235,6 +1407,22 @@ def _validate_existing_hot_task(
         or task.scan_slice_key != expected_slice_key
     ):
         raise ValueError("Existing hot task belongs to another scan slice")
+
+
+def _validate_existing_latest_task(
+    task: CollectionTask,
+    *,
+    scan_run_id: int,
+    scan_mode: CommentScanMode,
+) -> None:
+    expected_slice_key = f"{scan_run_id}:{scan_mode.value}:0"
+    if (
+        task.comment_scan_run_id != scan_run_id
+        or task.scan_slice_no != 0
+        or task.scan_slice_key != expected_slice_key
+        or task.idempotency_key != expected_slice_key
+    ):
+        raise ValueError("Existing latest task belongs to another scan slice")
 
 
 def _require_aware(value: datetime, field_name: str) -> None:

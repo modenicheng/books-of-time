@@ -17,6 +17,7 @@ from books_of_time.db.models import (
     CollectionPolicyVersion,
     CollectionTask,
     CommentScanRun,
+    FrontierState,
     KnownVideo,
     SnapshotCohort,
     SnapshotCohortComponent,
@@ -28,7 +29,12 @@ from books_of_time.domain.cohort_policy import (
     CohortStatus,
     CollectionTier,
 )
-from books_of_time.domain.enums import TaskKind, TaskStatus
+from books_of_time.domain.enums import (
+    CommentScanMode,
+    CommentScanStatus,
+    TaskKind,
+    TaskStatus,
+)
 
 
 async def _database():
@@ -114,6 +120,14 @@ def _routine_plan(now: datetime, *, bvid: str = "BV-C3") -> SnapshotCohortPlan:
                 TaskKind.FETCH_LATEST_COMMENTS,
                 1,
                 priority=100,
+                payload={
+                    "max_scan_seconds": 48,
+                    "current_head_required": True,
+                },
+                extra={
+                    "max_scan_seconds": 48,
+                    "current_head_required": True,
+                },
             ),
         ),
     )
@@ -169,6 +183,75 @@ def _hot_checkpoint_plan(
             hot_component("hot_core", 1, 3, 121),
             hot_component("hot_deep", 4, 20, 120),
         ),
+    )
+
+
+def _latest_only_plan(
+    now: datetime,
+    *,
+    bvid: str,
+    cohort_suffix: str = "routine",
+    component_kind: str = "latest_current_head",
+) -> SnapshotCohortPlan:
+    return SnapshotCohortPlan(
+        cohort_key=f"snapshot:{bvid}:{now.isoformat()}:{cohort_suffix}",
+        bvid=bvid,
+        scheduled_for=now,
+        reason=cohort_suffix,
+        age_checkpoint_hours=None,
+        desired_tier=CollectionTier.S,
+        effective_tier=CollectionTier.S,
+        policy_version="cohort-default-v1",
+        deadline=now + timedelta(minutes=2),
+        status=CohortStatus.PLANNED,
+        status_reason=None,
+        extra={},
+        components=(
+            CohortComponentPlan(
+                component_kind,
+                TaskKind.FETCH_LATEST_COMMENTS,
+                1,
+                priority=100,
+                payload={
+                    "max_scan_seconds": 48,
+                    "current_head_required": True,
+                },
+                extra={
+                    "max_scan_seconds": 48,
+                    "current_head_required": True,
+                },
+            ),
+        ),
+    )
+
+
+def _frontier(
+    now: datetime,
+    *,
+    bvid: str,
+    baseline_status: str,
+    frontier_rpid: int | None = None,
+    anchors: list[dict[str, object]] | None = None,
+    cursor: str | None = None,
+    extra: dict[str, object] | None = None,
+) -> FrontierState:
+    return FrontierState(
+        target_type="video",
+        target_id=bvid,
+        frontier_type="latest_comments",
+        frontier_rpid=frontier_rpid,
+        frontier_time=None,
+        frontier_anchor_set=anchors or [],
+        active_scan_run_id=None,
+        version=0,
+        cursor=cursor,
+        last_scan_at=now,
+        last_scan_status=baseline_status,
+        last_scan_pages=1,
+        last_scan_truncated=False,
+        extra={"baseline_status": baseline_status, **(extra or {})},
+        created_at=now,
+        updated_at=now,
     )
 
 
@@ -238,10 +321,16 @@ async def test_live_materialization_links_tasks_and_never_recreates_initial_task
         assert {task.snapshot_cohort_component_id for task in first.tasks} == {
             component.id for component in first.components
         }
-        assert {task.idempotency_key for task in first.tasks} == {
-            f"{first.cohort.cohort_key}:{component.component_kind}"
-            for component in first.components
-        }
+        tasks_by_kind = {task.payload["component_kind"]: task for task in first.tasks}
+        for component_kind in {"video_metrics", "hot_core"}:
+            assert tasks_by_kind[component_kind].idempotency_key == (
+                f"{first.cohort.cohort_key}:{component_kind}"
+            )
+        latest_task = tasks_by_kind["latest_current_head"]
+        assert latest_task.idempotency_key == latest_task.scan_slice_key
+        assert latest_task.idempotency_key == (
+            f"{latest_task.comment_scan_run_id}:baseline_tail:0"
+        )
         assert all(task.payload["bvid"] == "BV-C3" for task in first.tasks)
         assert all(
             task.payload["cohort_key"] == first.cohort.cohort_key
@@ -319,6 +408,201 @@ async def test_live_hot_components_materialize_scan_runs_and_slice_zero_once() -
         deep = next(scan for scan in scans if scan.mode.value == "hot_deep")
         assert (core.extra["start_page"], core.extra["end_page"]) == (1, 3)
         assert (deep.extra["start_page"], deep.extra["end_page"]) == (4, 20)
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("baseline_status", "expected_mode", "expected_anchor_rpid"),
+    [
+        (None, CommentScanMode.BASELINE_TAIL, None),
+        ("baseline_tail_complete", CommentScanMode.BASELINE_HEAD_SWEEP, 1001),
+        ("baseline_complete", CommentScanMode.INCREMENTAL, 2001),
+    ],
+)
+async def test_live_latest_component_claims_mode_and_slice_zero(
+    baseline_status: str | None,
+    expected_mode: CommentScanMode,
+    expected_anchor_rpid: int | None,
+) -> None:
+    engine, session_factory = await _database()
+    now = datetime(2026, 7, 14, 6, 0, tzinfo=UTC)
+    bvid = f"BV-LATEST-{expected_mode.value}"
+
+    async with session_factory() as session:
+        await _seed_graph(session, bvid=bvid, now=now)
+        if baseline_status == "baseline_tail_complete":
+            session.add(
+                _frontier(
+                    now,
+                    bvid=bvid,
+                    baseline_status=baseline_status,
+                    cursor="",
+                    extra={"baseline_start_frontier_rpid": 1001},
+                )
+            )
+        elif baseline_status == "baseline_complete":
+            session.add(
+                _frontier(
+                    now,
+                    bvid=bvid,
+                    baseline_status=baseline_status,
+                    frontier_rpid=2001,
+                    anchors=[{"rpid": 2001, "platform_created_at": None}],
+                )
+            )
+        await session.flush()
+
+        result = await SnapshotCohortRepository(session).materialize(
+            _latest_only_plan(now, bvid=bvid),
+            rollout_mode=CohortRolloutMode.LIVE,
+            now=now,
+        )
+
+        scan = await session.scalar(select(CommentScanRun))
+        frontier = await session.scalar(select(FrontierState))
+        assert scan is not None
+        assert frontier is not None
+        assert len(result.tasks) == 1
+        task = result.tasks[0]
+        component = result.components[0]
+        assert result.tasks_created == 1
+        assert scan.mode is expected_mode
+        assert scan.status is CommentScanStatus.PLANNED
+        assert scan.start_frontier_rpid == expected_anchor_rpid
+        assert [item["rpid"] for item in scan.start_anchor_set] == (
+            [] if expected_anchor_rpid is None else [expected_anchor_rpid]
+        )
+        assert frontier.active_scan_run_id == scan.id
+        assert frontier.version == 1
+        assert component.comment_scan_run_id == scan.id
+        assert component.status == CohortComponentStatus.PENDING.value
+        assert task.comment_scan_run_id == scan.id
+        assert task.scan_slice_no == 0
+        assert task.scan_slice_key == f"{scan.id}:{expected_mode.value}:0"
+        assert task.idempotency_key == task.scan_slice_key
+        assert task.payload["scan_mode"] == expected_mode.value
+        assert task.payload["frontier_version"] == frontier.version
+        assert task.payload["max_scan_seconds"] == 48
+        assert task.payload["current_head_required"] is True
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_second_latest_cohort_joins_active_scan_without_duplicate_task() -> None:
+    engine, session_factory = await _database()
+    now = datetime(2026, 7, 14, 6, 0, tzinfo=UTC)
+    bvid = "BV-LATEST-JOIN"
+
+    async with session_factory() as session:
+        await _seed_graph(session, bvid=bvid, now=now)
+        repository = SnapshotCohortRepository(session)
+        first_plan = _latest_only_plan(now, bvid=bvid)
+        first = await repository.materialize(
+            first_plan,
+            rollout_mode=CohortRolloutMode.LIVE,
+            now=now,
+        )
+        repeated = await repository.materialize(
+            first_plan,
+            rollout_mode=CohortRolloutMode.LIVE,
+            now=now + timedelta(seconds=1),
+        )
+        second = await repository.materialize(
+            _latest_only_plan(
+                now + timedelta(seconds=30),
+                bvid=bvid,
+                cohort_suffix="checkpoint_recovery",
+                component_kind="latest_reconciliation",
+            ),
+            rollout_mode=CohortRolloutMode.LIVE,
+            now=now + timedelta(seconds=30),
+        )
+
+        assert first.tasks_created == 1
+        assert repeated.tasks_created == 0
+        assert len(repeated.tasks) == 1
+        assert repeated.tasks[0].id == first.tasks[0].id
+        assert second.tasks_created == 0
+        assert second.tasks == ()
+        assert second.components[0].status == (
+            CohortComponentStatus.JOINED_ACTIVE_TASK.value
+        )
+        assert second.components[0].comment_scan_run_id == (
+            first.components[0].comment_scan_run_id
+        )
+        assert await session.scalar(select(func.count(CommentScanRun.id))) == 1
+        assert await session.scalar(select(func.count(CollectionTask.id))) == 1
+        frontier = await session.scalar(select(FrontierState))
+        assert frontier is not None
+        assert frontier.version == 1
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_repeated_latest_materialization_keeps_terminal_scan_and_task() -> None:
+    engine, session_factory = await _database()
+    now = datetime(2026, 7, 14, 6, 0, tzinfo=UTC)
+    bvid = "BV-LATEST-TERMINAL-IDEMPOTENT"
+
+    async with session_factory() as session:
+        await _seed_graph(session, bvid=bvid, now=now)
+        repository = SnapshotCohortRepository(session)
+        plan = _latest_only_plan(now, bvid=bvid)
+        first = await repository.materialize(
+            plan,
+            rollout_mode=CohortRolloutMode.LIVE,
+            now=now,
+        )
+        scan = await session.get(
+            CommentScanRun,
+            first.components[0].comment_scan_run_id,
+        )
+        assert scan is not None
+        scan.status = CommentScanStatus.COMPLETE
+        scan.outcome = "frontier_reached"
+        scan.finished_at = now + timedelta(seconds=10)
+        first.tasks[0].status = TaskStatus.SUCCEEDED
+        await session.flush()
+
+        repeated = await repository.materialize(
+            plan,
+            rollout_mode=CohortRolloutMode.LIVE,
+            now=now + timedelta(seconds=30),
+        )
+
+        assert repeated.tasks_created == 0
+        assert len(repeated.tasks) == 1
+        assert repeated.tasks[0].id == first.tasks[0].id
+        assert repeated.components[0].comment_scan_run_id == scan.id
+        assert await session.scalar(select(func.count(CommentScanRun.id))) == 1
+        assert await session.scalar(select(func.count(CollectionTask.id))) == 1
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_shadow_latest_component_creates_no_frontier_scan_or_task() -> None:
+    engine, session_factory = await _database()
+    now = datetime(2026, 7, 14, 6, 0, tzinfo=UTC)
+    bvid = "BV-LATEST-SHADOW"
+
+    async with session_factory() as session:
+        await _seed_graph(session, bvid=bvid, now=now)
+        result = await SnapshotCohortRepository(session).materialize(
+            _latest_only_plan(now, bvid=bvid),
+            rollout_mode=CohortRolloutMode.SHADOW,
+            now=now,
+        )
+
+        assert result.tasks_created == 0
+        assert result.components[0].comment_scan_run_id is None
+        assert await session.scalar(select(func.count(FrontierState.id))) == 0
+        assert await session.scalar(select(func.count(CommentScanRun.id))) == 0
+        assert await session.scalar(select(func.count(CollectionTask.id))) == 0
 
     await engine.dispose()
 

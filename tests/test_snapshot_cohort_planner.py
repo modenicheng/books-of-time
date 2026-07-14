@@ -28,6 +28,7 @@ from books_of_time.domain.cohort_policy import (
 )
 from books_of_time.task_orchestrator.snapshot_cohort_planner import (
     SnapshotCohortPlanner,
+    _component_plans_for_kinds,
     _hot_component_plans,
     _prefer_recovery_component_plan,
 )
@@ -178,6 +179,41 @@ def test_dormant_hot_plan_is_one_core_page_and_no_deep() -> None:
     assert plans[0].planned_pages == 1
     assert plans[0].extra["start_page"] == 1
     assert plans[0].extra["end_page"] == 1
+
+
+@pytest.mark.parametrize(
+    ("interval_seconds", "expected_slice_seconds"),
+    [
+        (60, 24),
+        (120, 48),
+        (138, 55),
+        (600, 55),
+        (None, 55),
+    ],
+)
+def test_latest_component_slice_budget_tracks_routine_interval(
+    interval_seconds: int | None,
+    expected_slice_seconds: int,
+) -> None:
+    plans = _component_plans_for_kinds(
+        ("latest_current_head", "latest_reconciliation"),
+        policy=_policy(policy_version="cohort-default-v2"),
+        tier=CollectionTier.S,
+        include_hot_deep=False,
+        dormant=False,
+        status=CohortComponentStatus.PENDING,
+        priority_for=lambda _kind: 100,
+        latest_interval_seconds=interval_seconds,
+    )
+
+    assert len(plans) == 2
+    for plan in plans:
+        assert plan.payload["max_scan_seconds"] == expected_slice_seconds
+        assert plan.payload["current_head_required"] is True
+        assert plan.extra == {
+            "max_scan_seconds": expected_slice_seconds,
+            "current_head_required": True,
+        }
 
 
 def test_recovery_prefers_larger_persisted_hot_range_without_recalculation() -> None:

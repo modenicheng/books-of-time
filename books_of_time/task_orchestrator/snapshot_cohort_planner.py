@@ -51,6 +51,7 @@ from books_of_time.domain.cohort_policy import (
     routine_cohort_key,
 )
 from books_of_time.domain.enums import TaskKind
+from books_of_time.domain.latest_frontier import latest_slice_seconds
 
 
 @dataclass(frozen=True, slots=True)
@@ -366,6 +367,7 @@ class SnapshotCohortPlanner:
                 dormant=False,
                 status=component_status,
                 priority_for=_checkpoint_priority,
+                latest_interval_seconds=None,
             )
             plan = SnapshotCohortPlan(
                 cohort_key=checkpoint_cohort_key(video.bvid, checkpoint_hours),
@@ -531,6 +533,7 @@ class SnapshotCohortPlanner:
                             signals.assessment.effective,
                             kind,
                         ),
+                        latest_interval_seconds=interval.total_seconds(),
                     ),
                 )
                 result = await materializer.materialize(
@@ -549,6 +552,7 @@ def _component_plan(
     *,
     status: CohortComponentStatus,
     priority: int,
+    latest_interval_seconds: float | int | None = None,
 ) -> CohortComponentPlan:
     task_kind = {
         "video_metrics": TaskKind.FETCH_VIDEO_STATS,
@@ -558,8 +562,15 @@ def _component_plan(
         "latest_reconciliation": TaskKind.FETCH_LATEST_COMMENTS,
     }[component_kind]
     payload: dict[str, object] = {}
+    extra: dict[str, object] = {}
     if component_kind == "hot_core":
         payload = {"page": 1, "page_limit": 1}
+    elif component_kind in {"latest_current_head", "latest_reconciliation"}:
+        extra = {
+            "max_scan_seconds": latest_slice_seconds(latest_interval_seconds),
+            "current_head_required": True,
+        }
+        payload = dict(extra)
     return CohortComponentPlan(
         component_kind=component_kind,
         task_kind=task_kind,
@@ -567,6 +578,7 @@ def _component_plan(
         status=status,
         priority=priority,
         payload=payload,
+        extra=extra,
     )
 
 
@@ -579,6 +591,7 @@ def _component_plans_for_kinds(
     dormant: bool,
     status: CohortComponentStatus,
     priority_for: Callable[[str], int],
+    latest_interval_seconds: float | int | None = None,
 ) -> tuple[CohortComponentPlan, ...]:
     plans: list[CohortComponentPlan] = []
     for kind in component_kinds:
@@ -599,6 +612,7 @@ def _component_plans_for_kinds(
                 kind,
                 status=status,
                 priority=priority_for(kind),
+                latest_interval_seconds=latest_interval_seconds,
             )
         )
     return tuple(plans)
