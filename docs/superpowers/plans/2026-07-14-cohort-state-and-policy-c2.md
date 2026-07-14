@@ -334,7 +334,7 @@ git commit -m "feat(policy): add deterministic cohort time policy"
 - Produces `desired_tier(signals: TierSignals, policy: CohortPolicy) -> CollectionTier`.
 - Produces `apply_tier_assessment(current_effective, desired, candidate_downgrade, consecutive_count, policy) -> TierAssessment`.
 
-- [ ] **Step 1: Write failing tier decision tests**
+- [x] **Step 1: Write failing tier decision tests**
 
 Test all independent S paths:
 
@@ -358,7 +358,7 @@ candidate changes A -> B: count restarts at 1
 desired returns to current tier: candidate/count reset
 ```
 
-- [ ] **Step 2: Run tier tests to verify RED**
+- [x] **Step 2: Run tier tests to verify RED**
 
 ```powershell
 uv run pytest tests/test_cohort_tier_policy.py -q
@@ -366,11 +366,11 @@ uv run pytest tests/test_cohort_tier_policy.py -q
 
 Expected: tier signal/assessment APIs are missing.
 
-- [ ] **Step 3: Implement OR-first-match tiering**
+- [x] **Step 3: Implement OR-first-match tiering**
 
 Represent tier rank explicitly (`S=0`, `A=1`, `B=2`, `C=3`). Apply forced/pinned rules before numeric thresholds. Numeric comparisons are `>=`; thresholds are checked S, then A, then B. Turnover is eligible only when input is complete and confirmations meet policy. `apply_tier_assessment` never changes `desired`; it only determines effective tier and persisted downgrade candidate/count.
 
-- [ ] **Step 4: Verify tier policy GREEN**
+- [x] **Step 4: Verify tier policy GREEN**
 
 ```powershell
 uv run pytest tests/test_cohort_tier_policy.py tests/test_cohort_policy_config.py -q
@@ -379,7 +379,7 @@ uv run ruff check books_of_time/domain/cohort_policy.py tests/test_cohort_tier_p
 
 Expected: broad S OR semantics and two-confirmation downgrade are explicit and deterministic.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add books_of_time/domain/cohort_policy.py tests/test_cohort_tier_policy.py docs/superpowers/plans/2026-07-14-cohort-state-and-policy-c2.md

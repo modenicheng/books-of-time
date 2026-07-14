@@ -79,6 +79,28 @@ class LifecyclePolicy:
 
 
 @dataclass(frozen=True)
+class TierSignals:
+    monitored_official: bool = False
+    publish_age: timedelta | None = None
+    active_event_core: bool = False
+    major_creator_involved: bool = False
+    pinned_tier: CollectionTier | None = None
+    view_growth_per_hour: int | None = None
+    comment_growth_per_hour: int | None = None
+    hot_top20_turnover_ratio: float | None = None
+    hot_turnover_confirmations: int = 0
+    hot_turnover_input_complete: bool = False
+
+
+@dataclass(frozen=True)
+class TierAssessment:
+    desired: CollectionTier
+    effective: CollectionTier
+    candidate_downgrade: CollectionTier | None
+    consecutive_downgrade_count: int
+
+
+@dataclass(frozen=True)
 class CohortPolicy:
     enabled: bool
     planning_seconds: int
@@ -278,6 +300,86 @@ def component_key(cohort_key: str, component_kind: str) -> str:
     return f"{cohort_key}:{component_kind}"
 
 
+def desired_tier(signals: TierSignals, policy: CohortPolicy) -> CollectionTier:
+    official_initial_s = (
+        signals.monitored_official
+        and signals.publish_age is not None
+        and timedelta() <= signals.publish_age < policy.official_s_age
+    )
+    if (
+        official_initial_s
+        or signals.active_event_core
+        or signals.major_creator_involved
+        or signals.pinned_tier is CollectionTier.S
+    ):
+        return CollectionTier.S
+    if signals.pinned_tier is not None:
+        return signals.pinned_tier
+
+    turnover_eligible = (
+        signals.hot_turnover_input_complete
+        and signals.hot_turnover_confirmations >= policy.hot_turnover_confirmations
+        and signals.hot_top20_turnover_ratio is not None
+    )
+    for tier in (CollectionTier.S, CollectionTier.A, CollectionTier.B):
+        threshold = policy.tier_thresholds[tier]
+        if (
+            _meets_threshold(
+                signals.view_growth_per_hour,
+                threshold.view_growth_per_hour,
+            )
+            or _meets_threshold(
+                signals.comment_growth_per_hour,
+                threshold.comment_growth_per_hour,
+            )
+            or (
+                turnover_eligible
+                and threshold.hot_top20_turnover_ratio is not None
+                and signals.hot_top20_turnover_ratio
+                >= threshold.hot_top20_turnover_ratio
+            )
+        ):
+            return tier
+    return CollectionTier.C
+
+
+def apply_tier_assessment(
+    *,
+    current_effective: CollectionTier,
+    desired: CollectionTier,
+    candidate_downgrade: CollectionTier | None,
+    consecutive_count: int,
+    policy: CohortPolicy,
+) -> TierAssessment:
+    if consecutive_count < 0:
+        raise ValueError("consecutive_count must be non-negative")
+
+    current_rank = _TIER_RANK[current_effective]
+    desired_rank = _TIER_RANK[desired]
+    if desired_rank <= current_rank:
+        return TierAssessment(
+            desired=desired,
+            effective=desired if desired_rank < current_rank else current_effective,
+            candidate_downgrade=None,
+            consecutive_downgrade_count=0,
+        )
+
+    next_count = consecutive_count + 1 if candidate_downgrade is desired else 1
+    if next_count >= policy.downgrade_confirmations:
+        return TierAssessment(
+            desired=desired,
+            effective=desired,
+            candidate_downgrade=None,
+            consecutive_downgrade_count=0,
+        )
+    return TierAssessment(
+        desired=desired,
+        effective=current_effective,
+        candidate_downgrade=desired,
+        consecutive_downgrade_count=next_count,
+    )
+
+
 _TIER_THRESHOLD_DEFAULTS = {
     CollectionTier.S: (6000, 60, 0.35),
     CollectionTier.A: (1200, 20, 0.20),
@@ -289,6 +391,13 @@ _TIER_INTERVAL_DEFAULTS = {
     CollectionTier.A: (10, 30),
     CollectionTier.B: (30, 60),
     CollectionTier.C: (60, 120),
+}
+
+_TIER_RANK = {
+    CollectionTier.S: 0,
+    CollectionTier.A: 1,
+    CollectionTier.B: 2,
+    CollectionTier.C: 3,
 }
 
 _ACTIVITY_WINDOW_DEFAULTS = (
@@ -320,6 +429,10 @@ def _canonical_utc_second(value: datetime) -> str:
 def _require_positive_hours(value: int) -> None:
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise ValueError("hours must be a positive integer")
+
+
+def _meets_threshold(value: int | None, threshold: int) -> bool:
+    return value is not None and value >= threshold
 
 
 def _mapping(value: object, path: str) -> Mapping[str, Any]:
