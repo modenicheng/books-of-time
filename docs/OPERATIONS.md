@@ -111,10 +111,27 @@ scheduler 启动时 bootstrap 以下稳定 job：
 | `uid-discovery` | `scheduler.discovery_scan_seconds`，默认 60 秒 | 仅在 10:00（含）到 22:00（不含）为静态/event UID 生成 discovery task；每个重点时点生成 T+0/T+30 两次高优先级检查 |
 | `video-snapshot-sweep` | 60 秒 | 全天为到期 known video 生成指标 task |
 | `daily-terminal-snapshot` | 60 秒检查 | 22:00 后生成额外的当日日终快照，不停止常规 sweep |
+| `snapshot-cohort-planning` | `snapshot_cohorts.planning_seconds`，默认 30 秒 | 仅在 `snapshot_cohorts.enabled=true` 时注册；C3 只写 shadow planning 证据，不创建 task |
 | `operational-alert-evaluation` | 默认 60 秒 | 评估持久告警，可关闭 |
 | `account-cookie-refresh:<id>` | 默认 21600 秒 | 校验/刷新 Cookie，可关闭 |
 
 job 使用 PostgreSQL lease，失败后默认 300 秒重试。成功时按照原 schedule slot 推进；服务停机跨过多个 slot 后会跳到下一个未来 slot，不为每个漏过周期逐次补跑。
+
+启用 cohort shadow planner：
+
+```yaml
+snapshot_cohorts:
+  enabled: true
+  policy_version: cohort-default-v1
+  rollout_mode: shadow
+  planning_seconds: 30
+```
+
+重启 scheduler 后检查 `snapshot-cohort-planning` 连续成功，并确认 `snapshot_cohorts.status='shadow_planned'` 持续增加、`collection_tasks.snapshot_cohort_id` 没有新增非 NULL 行。C3 明确拒绝 `rollout_mode: live`；不要修改代码绕过检查，因为旧 sweep/collector owner 尚未迁移，会产生重复请求。
+
+planner 使用 UTC 30 秒 bucket 和持久化 `video_collection_states`，重启不会重置 pubdate anchor、tier、checkpoint 或下一到期时间。停机期间漏过的普通 routine 被压缩为 `collection_schedule_gaps`，逾期 checkpoint 保留 missed/not-applicable 证据并生成一个当前 recovery，而不是瞬间补发整段历史请求。有限候选批次先接管尚无 state 的视频，再按最早 `next_due_at` 处理已接管视频，避免长期服务中较老视频永久占满批次。
+
+PostgreSQL 允许多个 scheduler 连接同一数据库：scheduled-job lease 控制 handler 所有权，单视频 state 行锁和唯一键/savepoint 处理 planner 与任务入队竞争。所有实例必须使用同一 policy 内容和 `policy_version`。SQLite 的 `FOR UPDATE` 语义不足以验证该并发模型，只用于 Windows/Linux 单进程开发和确定性单元测试。
 
 UID discovery 按持久化的 `next_run_at` 判断窗口和重点分钟，而不是按 handler
 实际开始时间判断。因此 scheduler 短暂繁忙导致的分钟级延迟不会丢失重点标记；
@@ -127,10 +144,11 @@ lease 和 Cookie/告警 job 不使用 discovery 窗口。
 
 配置周期改变后，scheduler 下次 bootstrap 会更新仍包含在 definitions 中的已有 job：kind、周期、priority、payload 和 enabled，不删除成功/失败历史字段。
 
-当前 coordinator 不会自动停用“新配置已不再声明”的旧 job。这影响两种切换：
+当前 coordinator 不会自动停用“新配置已不再声明”的旧 job。这影响以下切换：
 
 - `operations.alerts.enabled` 从 true 改为 false 后，已有 `operational-alert-evaluation` 行可能仍 enabled，但新进程没有对应 handler。
 - `accounts.enabled/auto_refresh` 关闭或 `active_account_id` 改名后，旧 `account-cookie-refresh:*` 行可能仍 enabled；更换账号时旧/新行还会共享当前 account handler。
+- `snapshot_cohorts.enabled` 从 true 改为 false 后，已有 `snapshot-cohort-planning` 行可能仍 enabled，但新进程没有对应 handler。
 
 操作时先停止 scheduler，修改配置，再定向停用旧行：
 
@@ -149,6 +167,13 @@ SET enabled = FALSE,
     lease_until = NULL,
     updated_at = now()
 WHERE job_key LIKE 'account-cookie-refresh:%';
+
+UPDATE scheduled_jobs
+SET enabled = FALSE,
+    lease_owner = NULL,
+    lease_until = NULL,
+    updated_at = now()
+WHERE job_key = 'snapshot-cohort-planning';
 COMMIT;
 ```
 
@@ -166,9 +191,30 @@ ORDER BY priority DESC, next_run_at;
 
 不要直接修改 `next_run_at` 或清零 failures 来隐藏问题；先修复 handler/config，再观察下一轮成功自动重置。
 
+shadow planner 只读核对：
+
+```sql
+SELECT status, reason, COUNT(*)
+FROM snapshot_cohorts
+GROUP BY status, reason
+ORDER BY status, reason;
+
+SELECT COUNT(*) AS executable_cohort_tasks
+FROM collection_tasks
+WHERE snapshot_cohort_id IS NOT NULL;
+
+SELECT bvid, next_due_at, last_planned_at, last_checkpoint_hours,
+       desired_tier, effective_tier, life_stage, policy_version
+FROM video_collection_states
+ORDER BY last_planned_at DESC NULLS LAST
+LIMIT 50;
+```
+
+在纯 C3 shadow 运行中，第二个查询应为 0；若不为 0，先区分测试/手工底层 live 数据，再确认没有绕过 service 配置边界。不要删除 shadow 历史来“清零”。
+
 ## 6. Comment Collection Scheduling
 
-内置 scheduler 当前不自动周期入队 hot/latest comments。长期评论归档需要外部 timer 调用入队 CLI：
+内置 scheduler 当前不自动周期入队 hot/latest comments。cohort shadow planner 只记录本应采集的组件，不执行它们。长期评论归档仍需要外部 timer 调用入队 CLI：
 
 ```bash
 uv run python main.py video comments <BVID> --mode hot --tier c

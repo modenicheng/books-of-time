@@ -131,8 +131,9 @@ transport failure 没有 response body，因此 `http_request_attempts.raw_paylo
   `http_request_attempts` 本身。
 - 删除 known video 会 cascade 删除对应 `video_collection_states`、cohort 和 gap；
   删除 cohort 会 cascade 删除 component。正常运维不应删除这些审计状态。
-- `collection_tasks` / `collection_coverage_stats` 的 cohort/component ID 在 C2 是可空
-  逻辑引用，没有 FK；C3 创建新任务时才开始填写，旧任务保持 NULL。
+- `collection_tasks` / `collection_coverage_stats` / `http_request_attempts` 的
+  cohort/component ID 是可空逻辑引用，没有 FK；C3 live 物化和 worker 会直接填写，
+  shadow 不创建 task，旧独立任务保持 NULL。
 
 正常运维不应依赖这些 destructive cascade；事件停用/归档应使用状态字段。
 
@@ -350,7 +351,9 @@ planned, shadow_planned, running, complete, partial, missed,
 corrupted, blocked, not_applicable
 ```
 
-`complete` 只表示所有适用 required component 满足各自 coverage 合同，不表示 Bilibili 评论集合在服务端被事务冻结。C2 尚不创建 cohort；C3 shadow planner 才开始写入。
+`complete` 只表示所有适用 required component 满足各自 coverage 合同，不表示 Bilibili 评论集合在服务端被事务冻结。C3 shadow planner 写入 `shadow_planned`，并在 `extra.shadow_target_status` 保存模拟 live 状态；该父状态是终态规划证据，不参与 live miss 比率，也不拥有 task。
+
+稳定 key：routine 使用 BVID + UTC 秒级槽位，checkpoint 使用 BVID + age hours，recovery 使用 BVID + 最新 overdue checkpoint。policy version 是证据，不拼入 key；同一 key 的 immutable identity 冲突会失败，不会覆盖已有行。
 
 ### `snapshot_cohort_components`
 
@@ -366,6 +369,8 @@ corrupted, not_applicable, blocked
 
 聚合时 optional component 不影响完整性；required corrupted 优先，其次 active running/joined，再区分全 blocked、未开始的 miss、partial、complete 和全 not-applicable。
 
+C3 物化器在 `video_collection_states` 行锁内创建 cohort/component/首任务，并由唯一约束处理竞争。recovery 可以给同一稳定 key 补入新的缺失 component；普通 routine/checkpoint 在首次事务完成后不能改变 component 集或计划页数。shadow component 保存计划状态但没有 task。
+
 ### `collection_schedule_gaps`
 
 按 BVID 保存 `[gap_start, gap_end]` 范围、预期 cohort 数、原因、可空 service instance、policy version 和创建时间。时间范围必须正向，稳定组合唯一。它用于压缩表示离线/容量/策略前或发现前空档，避免重启后制造大量过期分钟级 task。
@@ -375,6 +380,8 @@ corrupted, not_applicable, blocked
 持久任务队列：kind、target、idempotency key、priority、budget cost、status、payload、not-before、lease、retry count/max retries、可空 `snapshot_cohort_id` / `snapshot_cohort_component_id` 和时间戳。
 
 活动 idempotency key 使用 PostgreSQL/SQLite 条件唯一索引，只约束 pending/running/backoff。
+
+Cohort 首任务还按 `snapshot_cohort_component_id` 查询所有 task 状态，因此首任务即使已经 succeeded/failed，重复 planner 也不会创建替代行。后续多 slice task 由 C4/C5 的 scan-run/slice 唯一键负责。
 
 ### `collection_runs`
 
@@ -392,6 +399,8 @@ worker run 生命周期：run ID、worker ID、start/finish、status、started/s
 - 可空 `snapshot_cohort_id` / `snapshot_cohort_component_id`，用于直接归属而不依赖 task payload JSON。
 
 该表用于 `coverage`、event coverage、service status failure window 和 operational alerts。
+
+Worker 开始 live cohort task 时，把 component/cohort 改为 running，并记录 task 生命周期的 `started_at`。`skew_seconds` 使用首个关联 HTTP attempt 的 `request_started_at - scheduled_for`，后续请求不覆盖；没有真实 HTTP attempt 时保持 NULL。coverage succeeded/partial/corrupted 分别映射 component complete/partial/corrupted；可重试失败保持 running，耗尽重试才变 failed。父 cohort 在同一事务中重新聚合，complete 时更新 `video_collection_states.last_completed_cohort_at`。
 
 ### `frontier_states`
 
@@ -416,6 +425,7 @@ worker run 生命周期：run ID、worker ID、start/finish、status、started/s
 | 字段 | 含义 |
 | --- | --- |
 | `collection_task_id` | 当前 collection task；task 删除时置 NULL |
+| `snapshot_cohort_id` / `snapshot_cohort_component_id` | live cohort task 的直接归属；shadow/旧独立请求为 NULL |
 | `attempt_started_at` | evidence row 开始时间 |
 | `request_started_at` / `request_finished_at` | 实际网络时间边界 |
 | `response_received_at` | 收到 response 的时间；transport failure 为 NULL |

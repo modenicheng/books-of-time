@@ -339,6 +339,7 @@ git commit -m "feat(planner): plan persistent snapshot cohorts"
 
 **Interfaces:**
 - Produces `SnapshotCohortExecutionRepository.mark_task_started(task, *, now)`.
+- Produces `SnapshotCohortExecutionRepository.record_http_attempt_started(attempt)`.
 - Produces `SnapshotCohortExecutionRepository.record_task_succeeded(task, coverage, *, finished_at)`.
 - Produces `SnapshotCohortExecutionRepository.record_task_failed(task, coverage, *, terminal, finished_at)`.
 - Coverage and HTTP attempt rows copy `task.snapshot_cohort_id` and `task.snapshot_cohort_component_id`.
@@ -348,7 +349,7 @@ git commit -m "feat(planner): plan persistent snapshot cohorts"
 
 Materialize one live `video_metrics` task and run a real `Worker` with a deterministic collector. Assert:
 
-1. Leasing marks component/cohort running, captures first `started_at`, and computes `skew_seconds = task_start - scheduled_for` once.
+1. Leasing marks component/cohort running and captures the task lifecycle `started_at`; the first real HTTP attempt computes `skew_seconds = request_started_at - scheduled_for` once, while a task with no request keeps NULL skew.
 2. Success copies coverage counters into the component, marks it complete, aggregates the cohort, and updates `completed_component_count`/`finished_at` when all required components finish.
 3. Partial and corrupted drafts map to component/cohort partial and corrupted status respectively.
 4. A retryable failure keeps the component active and unfinished; exhausted retries mark it failed and aggregate the parent.
@@ -488,7 +489,7 @@ git commit -m "feat(service): run cohort planner in shadow mode"
 - Documents operator configuration, planner transactions, persisted evidence, restart behavior, and the C3/C7 ownership boundary.
 - Marks only C3 complete; C4-C9 remain unchecked.
 
-- [ ] **Step 1: Document the complete C3 operator and data flow**
+- [x] **Step 1: Document the complete C3 operator and data flow**
 
 Document:
 
@@ -501,32 +502,37 @@ Document:
 - PostgreSQL multi-scheduler expectations and SQLite single-process limits;
 - Docker/external PostgreSQL, Linux native, and Windows native behavior remains identical.
 
-- [ ] **Step 2: Run focused migration and planner verification**
+- [x] **Step 2: Run focused migration and planner verification**
 
 ```powershell
 uv run pytest tests/test_schema_migrations.py::test_snapshot_cohort_planning_job_revision_round_trip -q
 uv run pytest tests/test_cohort_materialization.py tests/test_snapshot_cohort_planner.py tests/test_worker_cohort_lifecycle.py tests/test_service_scheduled_handlers.py -q
 ```
 
-- [ ] **Step 3: Run complete verification**
+- [x] **Step 3: Run complete verification**
 
 ```powershell
 uv run pytest
 uv run ruff check .
+uv run ruff format --check .
 git diff --check
 ```
 
 Expected: all tests pass, Ruff is clean, and no whitespace errors exist.
 
-- [ ] **Step 4: Perform a P0/P1 audit**
+2026-07-14 result: migration round-trip `1 passed`; focused C3 suite `36 passed`; full suite `513 passed`; Ruff clean; 195 files formatted; `git diff --check` clean.
+
+- [x] **Step 4: Perform a P0/P1 audit**
 
 Review transaction rollback, duplicate initial-task prevention, checkpoint lateness inclusivity, first-seen not-applicable boundaries, shadow no-task enforcement, live service rejection, worker retry transitions, and evidence ID propagation. Any confirmed P0/P1 bug gets its own failing regression test, fix commit, and `docs/fix/2026-07-14_<no>.md` record with code location, reason, expected result, approach, introducing commit hash, and fixing commit hash. Do not refactor speculative or over-designed surfaces.
 
-- [ ] **Step 5: Mark C3 complete and C4 next**
+Audit result: fixed recovery/routine duplicate requests, latest follow-up linkage loss, candidate batch starvation, idempotent enqueue races, and task-time skew; records are `docs/fix/2026-07-14_04.md` through `_08.md`. Legacy/live ownership duplication remains intentionally blocked until C7. Enum identity and repeated direct completion calls did not reproduce as normal worker-path P0/P1 bugs and were not refactored.
+
+- [x] **Step 5: Mark C3 complete and C4 next**
 
 Change C3 from `[~]` to `[x]`, keep C4-C9 unchecked, and update Near-term Sprint to say C1-C3 complete and C4 Hot Core And Deep Scans next. Do not mark the overall Collection-First Snapshot Cohorts mainline complete.
 
-- [ ] **Step 6: Commit documentation and completion state**
+- [x] **Step 6: Commit documentation and completion state**
 
 ```powershell
 git add docs/CONFIGURATION.md docs/COLLECTION.md docs/DATA_MODEL.md docs/OPERATIONS.md docs/TODO.md docs/superpowers/plans/2026-07-14-persistent-cohort-planner-c3.md
