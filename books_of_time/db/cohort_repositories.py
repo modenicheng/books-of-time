@@ -15,6 +15,7 @@ from books_of_time.db.models import (
     CollectionPolicyVersion,
     CollectionScheduleGap,
     CollectionTask,
+    HttpRequestAttempt,
     KnownVideo,
     SnapshotCohort,
     SnapshotCohortComponent,
@@ -731,9 +732,6 @@ class SnapshotCohortExecutionRepository:
             )
         if component.started_at is None:
             component.started_at = now
-            component.skew_seconds = int(
-                (now - component.scheduled_for).total_seconds()
-            )
         component.status = CohortComponentStatus.RUNNING.value
         component.finished_at = None
         cohort.status = CohortStatus.RUNNING.value
@@ -741,6 +739,26 @@ class SnapshotCohortExecutionRepository:
         cohort.finished_at = None
         cohort.updated_at = now
         await self.session.flush()
+        return component
+
+    async def record_http_attempt_started(
+        self,
+        attempt: HttpRequestAttempt,
+    ) -> SnapshotCohortComponent | None:
+        linked = await self._load_linked_ids(
+            snapshot_cohort_id=attempt.snapshot_cohort_id,
+            snapshot_cohort_component_id=attempt.snapshot_cohort_component_id,
+        )
+        if linked is None:
+            return None
+        _cohort, component = linked
+        if attempt.request_started_at is None:
+            raise ValueError("Cohort HTTP attempt must have request_started_at")
+        if component.skew_seconds is None:
+            component.skew_seconds = int(
+                (attempt.request_started_at - component.scheduled_for).total_seconds()
+            )
+            await self.session.flush()
         return component
 
     async def record_task_succeeded(
@@ -800,29 +818,37 @@ class SnapshotCohortExecutionRepository:
         self,
         task: CollectionTask,
     ) -> tuple[SnapshotCohort, SnapshotCohortComponent] | None:
-        if (
-            task.snapshot_cohort_id is None
-            and task.snapshot_cohort_component_id is None
-        ):
+        return await self._load_linked_ids(
+            snapshot_cohort_id=task.snapshot_cohort_id,
+            snapshot_cohort_component_id=task.snapshot_cohort_component_id,
+        )
+
+    async def _load_linked_ids(
+        self,
+        *,
+        snapshot_cohort_id: int | None,
+        snapshot_cohort_component_id: int | None,
+    ) -> tuple[SnapshotCohort, SnapshotCohortComponent] | None:
+        if snapshot_cohort_id is None and snapshot_cohort_component_id is None:
             return None
-        if task.snapshot_cohort_id is None or task.snapshot_cohort_component_id is None:
+        if snapshot_cohort_id is None or snapshot_cohort_component_id is None:
             raise ValueError("Cohort task must carry both cohort and component IDs")
         component = await self.session.scalar(
             select(SnapshotCohortComponent)
-            .where(SnapshotCohortComponent.id == task.snapshot_cohort_component_id)
+            .where(SnapshotCohortComponent.id == snapshot_cohort_component_id)
             .with_for_update()
         )
         if component is None:
             raise LookupError(
-                f"Snapshot cohort component not found: {task.snapshot_cohort_component_id}"
+                f"Snapshot cohort component not found: {snapshot_cohort_component_id}"
             )
         cohort = await self.session.scalar(
             select(SnapshotCohort)
-            .where(SnapshotCohort.id == task.snapshot_cohort_id)
+            .where(SnapshotCohort.id == snapshot_cohort_id)
             .with_for_update()
         )
         if cohort is None:
-            raise LookupError(f"Snapshot cohort not found: {task.snapshot_cohort_id}")
+            raise LookupError(f"Snapshot cohort not found: {snapshot_cohort_id}")
         if component.cohort_id != cohort.id:
             raise ValueError("Task cohort/component linkage is inconsistent")
         if cohort.status == CohortStatus.SHADOW_PLANNED.value:

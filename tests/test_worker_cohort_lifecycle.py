@@ -172,13 +172,15 @@ class AttemptThenFailingCollector:
     async def collect(self, task: CollectionTask, session) -> CoverageDraft:
         sink = current_http_evidence_sink()
         assert sink is not None
-        await sink.begin(
-            method="GET",
-            url="https://api.bilibili.com/x/test",
-            request_type=BilibiliRequestType.VIDEO_STATS,
-            params={"bvid": task.target_id},
-            request_started_at=datetime(2099, 1, 1, tzinfo=UTC),
-        )
+        for offset in (7, 12):
+            await sink.begin(
+                method="GET",
+                url="https://api.bilibili.com/x/test",
+                request_type=BilibiliRequestType.VIDEO_STATS,
+                params={"bvid": task.target_id, "offset": offset},
+                request_started_at=datetime(2099, 1, 1, tzinfo=UTC)
+                + timedelta(seconds=offset),
+            )
         raise RuntimeError("after request start")
 
 
@@ -212,7 +214,7 @@ async def test_worker_success_completes_component_cohort_and_evidence_links() ->
             assert component is not None
             assert component.status == CohortComponentStatus.COMPLETE.value
             assert component.started_at == now
-            assert component.skew_seconds == 10
+            assert component.skew_seconds is None
             assert component.finished_at is not None
             assert component.requested_pages == 1
             assert component.succeeded_pages == 1
@@ -335,10 +337,20 @@ async def test_worker_http_attempt_inherits_cohort_links(tmp_path) -> None:
         assert await worker.run_once(now=now) is True
 
         async with session_factory() as session:
-            attempt = await session.scalar(select(HttpRequestAttempt))
-            assert attempt is not None
-            assert attempt.snapshot_cohort_id == cohort_id
-            assert attempt.snapshot_cohort_component_id == component_id
-            assert attempt.status == "abandoned"
+            attempts = list(
+                await session.scalars(
+                    select(HttpRequestAttempt).order_by(HttpRequestAttempt.id)
+                )
+            )
+            component = await session.get(SnapshotCohortComponent, component_id)
+            assert len(attempts) == 2
+            assert all(attempt.snapshot_cohort_id == cohort_id for attempt in attempts)
+            assert all(
+                attempt.snapshot_cohort_component_id == component_id
+                for attempt in attempts
+            )
+            assert all(attempt.status == "abandoned" for attempt in attempts)
+            assert component is not None
+            assert component.skew_seconds == 17
     finally:
         await engine.dispose()

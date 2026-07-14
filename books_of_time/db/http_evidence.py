@@ -5,6 +5,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from books_of_time.db.cohort_repositories import SnapshotCohortExecutionRepository
 from books_of_time.db.repositories import (
     HttpRequestAttemptRepository,
     RawPayloadRepository,
@@ -54,6 +55,9 @@ class DatabaseHttpEvidenceSink:
             attempt_started_at=request_started_at,
             request_started_at=request_started_at,
         )
+        await SnapshotCohortExecutionRepository(
+            self.session
+        ).record_http_attempt_started(attempt)
         self._attempt_ids.add(attempt.id)
         return attempt.id
 
