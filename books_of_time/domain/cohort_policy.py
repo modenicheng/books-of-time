@@ -50,6 +50,11 @@ class CohortComponentStatus(StrEnum):
     BLOCKED = "blocked"
 
 
+class CohortRolloutMode(StrEnum):
+    SHADOW = "shadow"
+    LIVE = "live"
+
+
 @dataclass(frozen=True)
 class TierThreshold:
     view_growth_per_hour: int
@@ -110,6 +115,8 @@ class ComponentOutcome:
 @dataclass(frozen=True)
 class CohortPolicy:
     enabled: bool
+    policy_version: str
+    rollout_mode: CohortRolloutMode
     planning_seconds: int
     timezone: ZoneInfo
     checkpoint_hours: tuple[int, ...]
@@ -131,6 +138,24 @@ class CohortPolicy:
         enabled = section.get("enabled", False)
         if not isinstance(enabled, bool):
             raise ValueError("snapshot_cohorts.enabled must be a boolean")
+
+        policy_version_value = section.get("policy_version", "cohort-default-v1")
+        if (
+            not isinstance(policy_version_value, str)
+            or not policy_version_value.strip()
+        ):
+            raise ValueError("snapshot_cohorts.policy_version must not be empty")
+        policy_version = policy_version_value.strip()
+
+        rollout_mode_value = section.get("rollout_mode", CohortRolloutMode.SHADOW.value)
+        try:
+            if not isinstance(rollout_mode_value, str):
+                raise ValueError
+            rollout_mode = CohortRolloutMode(rollout_mode_value.strip().casefold())
+        except ValueError as exc:
+            raise ValueError(
+                "snapshot_cohorts.rollout_mode must be 'shadow' or 'live'"
+            ) from exc
 
         planning_seconds = _positive_int(
             section,
@@ -207,6 +232,8 @@ class CohortPolicy:
 
         return cls(
             enabled=enabled,
+            policy_version=policy_version,
+            rollout_mode=rollout_mode,
             planning_seconds=planning_seconds,
             timezone=timezone,
             checkpoint_hours=checkpoint_hours,
@@ -220,6 +247,73 @@ class CohortPolicy:
             activity_windows=activity_windows,
             tier_intervals=MappingProxyType(tier_intervals),
         )
+
+    def as_persisted_policy(self) -> dict[str, Any]:
+        return {
+            "planning_seconds": self.planning_seconds,
+            "timezone": self.timezone.key,
+            "checkpoint_hours": list(self.checkpoint_hours),
+            "checkpoint_max_lateness_minutes": int(
+                self.checkpoint_max_lateness.total_seconds() // 60
+            ),
+            "downgrade_confirmations": self.downgrade_confirmations,
+            "tier_policy": {
+                "official_s_age_hours": int(
+                    self.official_s_age.total_seconds() // 3600
+                ),
+                "reassess_after_24h_minutes": int(
+                    self.reassessment_interval.total_seconds() // 60
+                ),
+                "hot_turnover_confirmations": self.hot_turnover_confirmations,
+                **{
+                    tier.value: {
+                        "view_growth_per_hour": threshold.view_growth_per_hour,
+                        "comment_growth_per_hour": threshold.comment_growth_per_hour,
+                        **(
+                            {
+                                "hot_top20_turnover_ratio": (
+                                    threshold.hot_top20_turnover_ratio
+                                )
+                            }
+                            if threshold.hot_top20_turnover_ratio is not None
+                            else {}
+                        ),
+                    }
+                    for tier, threshold in self.tier_thresholds.items()
+                },
+            },
+            "lifecycle": {
+                "dormant_after_days": int(
+                    self.lifecycle.dormant_after.total_seconds() // 86400
+                ),
+                "archive_after_days": int(
+                    self.lifecycle.archive_after.total_seconds() // 86400
+                ),
+                "dormant_interval_minutes": int(
+                    self.lifecycle.dormant_interval.total_seconds() // 60
+                ),
+                "archived_metric_probe_minutes": int(
+                    self.lifecycle.archived_metric_probe_interval.total_seconds() // 60
+                ),
+            },
+            "activity_windows": {
+                "defaults": [
+                    {
+                        "name": window.name,
+                        "start": window.start.strftime("%H:%M"),
+                        "end": window.end.strftime("%H:%M"),
+                    }
+                    for window in self.activity_windows
+                ]
+            },
+            "tier_intervals_minutes": {
+                tier.value: {
+                    "active": int(interval.active.total_seconds() // 60),
+                    "normal": int(interval.normal.total_seconds() // 60),
+                }
+                for tier, interval in self.tier_intervals.items()
+            },
+        }
 
 
 def is_activity_window(now: datetime, policy: CohortPolicy) -> bool:

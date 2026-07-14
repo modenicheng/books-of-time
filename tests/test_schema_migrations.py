@@ -25,7 +25,7 @@ async def test_schema_revision_helpers_read_expected_and_current_head(
     tmp_path: Path,
 ) -> None:
     expected = get_expected_schema_revision()
-    assert expected == "0009_cohort_state_and_policy"
+    assert expected == "0010_snapshot_cohort_planning_job"
 
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as connection:
@@ -302,6 +302,76 @@ def test_cohort_state_revision_round_trip(tmp_path: Path) -> None:
         database_path,
         "collection_tasks",
     )
+
+
+def test_snapshot_cohort_planning_job_revision_is_static() -> None:
+    revision_path = (
+        Path(__file__).resolve().parents[1]
+        / "alembic"
+        / "versions"
+        / "0010_snapshot_cohort_planning_job.py"
+    )
+    source = revision_path.read_text(encoding="utf-8")
+
+    assert (
+        "down_revision: str | Sequence[str] | None = "
+        '"0009_cohort_state_and_policy"' in source
+    )
+    assert "ADD VALUE IF NOT EXISTS 'snapshot_cohort_planning'" in source
+    assert "DELETE FROM scheduled_jobs" in source
+    assert "Base.metadata" not in source
+
+
+def test_snapshot_cohort_planning_job_revision_round_trip(tmp_path: Path) -> None:
+    database_path = tmp_path / "cohort-planner-job-cycle.sqlite3"
+    config_path = _write_sqlite_config(
+        tmp_path / "cohort-planner-job-cycle.yaml",
+        database_path,
+    )
+    alembic_config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
+    alembic_config.attributes["bot_config_path"] = str(config_path)
+    alembic_config.attributes["skip_logger_config"] = True
+
+    command.upgrade(alembic_config, "head")
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO scheduled_jobs (
+                job_key,
+                job_kind,
+                schedule_seconds,
+                priority,
+                payload,
+                enabled,
+                next_run_at,
+                consecutive_failures,
+                created_at,
+                updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            """,
+            (
+                "snapshot-cohort-planning",
+                "snapshot_cohort_planning",
+                30,
+                110,
+                "{}",
+                1,
+                "2026-07-14 04:00:00+00:00",
+                0,
+            ),
+        )
+        connection.commit()
+
+    command.downgrade(alembic_config, "0009_cohort_state_and_policy")
+    with sqlite3.connect(database_path) as connection:
+        remaining = connection.execute(
+            "SELECT COUNT(*) FROM scheduled_jobs "
+            "WHERE job_kind = 'snapshot_cohort_planning'"
+        ).fetchone()
+    assert remaining == (0,)
+
+    command.upgrade(alembic_config, "head")
+    assert _sqlite_table_exists(database_path, "snapshot_cohorts")
     assert "snapshot_cohort_component_id" in _sqlite_columns(
         database_path,
         "collection_coverage_stats",

@@ -68,7 +68,7 @@
 - Extends `CohortPolicy` with `policy_version: str` and `rollout_mode: CohortRolloutMode`.
 - Produces `CohortPolicy.as_persisted_policy() -> dict[str, Any]`, a stable JSON-compatible representation used to enforce immutable policy-version identity.
 
-- [ ] **Step 1: Write failing enum, policy, and migration tests**
+- [x] **Step 1: Write failing enum, policy, and migration tests**
 
 Add assertions:
 
@@ -95,7 +95,7 @@ assert "DELETE FROM scheduled_jobs" in source
 
 The isolated cycle upgrades to head, inserts no planner data, downgrades to `0009_cohort_state_and_policy`, and upgrades to head again.
 
-- [ ] **Step 2: Run focused tests to verify RED**
+- [x] **Step 2: Run focused tests to verify RED**
 
 ```powershell
 uv run pytest tests/test_cohort_policy_config.py tests/test_schema_migrations.py -q
@@ -103,7 +103,7 @@ uv run pytest tests/test_cohort_policy_config.py tests/test_schema_migrations.py
 
 Expected: enum/import/default/head assertions fail because the C3 contracts do not exist.
 
-- [ ] **Step 3: Implement rollout configuration and stable serialization**
+- [x] **Step 3: Implement rollout configuration and stable serialization**
 
 Add:
 
@@ -115,7 +115,7 @@ class CohortRolloutMode(StrEnum):
 
 Parse exact top-level `snapshot_cohorts.policy_version` and `rollout_mode`. `as_persisted_policy` must return newly allocated dictionaries/lists containing every C2 field that affects planning: timezone, checkpoint hours/lateness, downgrade settings, tier thresholds, lifecycle intervals, activity windows, and tier intervals. It excludes operational enablement and rollout mode because those control execution, not policy evidence.
 
-- [ ] **Step 4: Add static migration and example configuration**
+- [x] **Step 4: Add static migration and example configuration**
 
 Create revision `0010_snapshot_cohort_planning_job` with `down_revision="0009_cohort_state_and_policy"`. On PostgreSQL, use an Alembic autocommit block to add `snapshot_cohort_planning` to `scheduledjobkind`. Downgrade deletes rows with that kind and intentionally retains the PostgreSQL enum value.
 
@@ -130,14 +130,14 @@ snapshot_cohorts:
   planning_seconds: 30
 ```
 
-- [ ] **Step 5: Verify GREEN**
+- [x] **Step 5: Verify GREEN**
 
 ```powershell
 uv run pytest tests/test_cohort_policy_config.py tests/test_schema_migrations.py -q
 uv run ruff check books_of_time/domain/enums.py books_of_time/domain/cohort_policy.py alembic/versions/0010_snapshot_cohort_planning_job.py tests/test_cohort_policy_config.py tests/test_schema_migrations.py
 ```
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```powershell
 git add books_of_time/domain/enums.py books_of_time/domain/cohort_policy.py alembic/versions/0010_snapshot_cohort_planning_job.py config/config.yaml.example tests/test_cohort_policy_config.py tests/test_schema_migrations.py docs/superpowers/plans/2026-07-14-persistent-cohort-planner-c3.md

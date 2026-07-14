@@ -40,3 +40,4 @@ class ScheduledJobKind(StrEnum):
     DAILY_TERMINAL_SNAPSHOT = "daily_terminal_snapshot"
     ACCOUNT_COOKIE_REFRESH = "account_cookie_refresh"
     OPERATIONAL_ALERT_EVALUATION = "operational_alert_evaluation"
+    SNAPSHOT_COHORT_PLANNING = "snapshot_cohort_planning"

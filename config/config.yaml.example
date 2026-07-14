@@ -128,8 +128,10 @@ request_budget:
     reply_roots: 0
 
 snapshot_cohorts:
-  # C2 only stores and validates policy. C3 introduces the shadow planner.
+  # C3 may be enabled only in shadow mode; live ownership moves in C7.
   enabled: false
+  policy_version: cohort-default-v1
+  rollout_mode: shadow
   planning_seconds: 30
   timezone: Asia/Shanghai
   checkpoint_hours: [6, 12, 18, 24]

@@ -1,10 +1,13 @@
 from datetime import time, timedelta
+from pathlib import Path
 
 import pytest
 
+from books_of_time.config.loader import load_config
 from books_of_time.domain.cohort_policy import (
     CohortComponentStatus,
     CohortPolicy,
+    CohortRolloutMode,
     CohortStatus,
     CollectionTier,
     VideoLifeStage,
@@ -15,6 +18,8 @@ def test_cohort_policy_defaults_match_approved_contract() -> None:
     policy = CohortPolicy.from_config(None)
 
     assert policy.enabled is False
+    assert policy.policy_version == "cohort-default-v1"
+    assert policy.rollout_mode is CohortRolloutMode.SHADOW
     assert policy.planning_seconds == 30
     assert policy.timezone.key == "Asia/Shanghai"
     assert policy.checkpoint_hours == (6, 12, 18, 24)
@@ -38,6 +43,29 @@ def test_cohort_policy_defaults_match_approved_contract() -> None:
     assert policy.tier_thresholds[CollectionTier.A].hot_top20_turnover_ratio == 0.20
     assert policy.tier_thresholds[CollectionTier.B].hot_top20_turnover_ratio is None
 
+    persisted = policy.as_persisted_policy()
+    assert persisted["timezone"] == "Asia/Shanghai"
+    assert persisted["checkpoint_hours"] == [6, 12, 18, 24]
+    assert persisted["tier_intervals_minutes"]["s"] == {
+        "active": 2,
+        "normal": 10,
+    }
+    assert persisted["activity_windows"]["defaults"][2] == {
+        "name": "night",
+        "start": "21:30",
+        "end": "00:30",
+    }
+
+
+def test_example_config_keeps_c3_shadow_planner_disabled() -> None:
+    config_path = Path(__file__).resolve().parents[1] / "config" / "config.yaml.example"
+
+    policy = CohortPolicy.from_config(load_config(config_path, environ={}))
+
+    assert policy.enabled is False
+    assert policy.policy_version == "cohort-default-v1"
+    assert policy.rollout_mode is CohortRolloutMode.SHADOW
+
 
 def test_cohort_policy_enums_use_persisted_values() -> None:
     assert [tier.value for tier in CollectionTier] == ["s", "a", "b", "c"]
@@ -59,6 +87,8 @@ def test_cohort_policy_accepts_partial_overrides() -> None:
         {
             "snapshot_cohorts": {
                 "enabled": True,
+                "policy_version": "cohort-experiment-v2",
+                "rollout_mode": "live",
                 "planning_seconds": 45,
                 "checkpoint_hours": [3, 9],
                 "tier_policy": {
@@ -72,6 +102,8 @@ def test_cohort_policy_accepts_partial_overrides() -> None:
     )
 
     assert policy.enabled is True
+    assert policy.policy_version == "cohort-experiment-v2"
+    assert policy.rollout_mode is CohortRolloutMode.LIVE
     assert policy.planning_seconds == 45
     assert policy.checkpoint_hours == (3, 9)
     assert policy.tier_thresholds[CollectionTier.S].view_growth_per_hour == 9000
@@ -162,6 +194,18 @@ def test_cohort_policy_accepts_partial_overrides() -> None:
         (
             {"planning_seconds": True},
             "snapshot_cohorts.planning_seconds must be a positive integer",
+        ),
+        (
+            {"policy_version": "  "},
+            "snapshot_cohorts.policy_version must not be empty",
+        ),
+        (
+            {"rollout_mode": 1},
+            "snapshot_cohorts.rollout_mode must be 'shadow' or 'live'",
+        ),
+        (
+            {"rollout_mode": "disabled"},
+            "snapshot_cohorts.rollout_mode must be 'shadow' or 'live'",
         ),
         (
             {
