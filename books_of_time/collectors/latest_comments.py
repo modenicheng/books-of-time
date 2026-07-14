@@ -10,6 +10,7 @@ from typing import Protocol
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from books_of_time.collectors.latest_scan import LatestScanCollector
 from books_of_time.coverage import CoverageDraft
 from books_of_time.db.models import (
     CollectionTask,
@@ -61,6 +62,7 @@ class LatestCommentCollector:
         page_retry_backoff_seconds: list[float] | None = None,
         monotonic: MonotonicFunc | None = None,
         sleep: SleepFunc | None = None,
+        now: Callable[[], datetime] | None = None,
         watchlist_policy: WatchlistPolicy | None = None,
     ) -> None:
         self.client = client
@@ -71,9 +73,31 @@ class LatestCommentCollector:
         self.page_retry_backoff_seconds = page_retry_backoff_seconds or [1, 3, 5]
         self.monotonic = monotonic or time.monotonic
         self.sleep = sleep or time.sleep
+        self.now = now or _utc_now
         self.watchlist_policy = watchlist_policy or WatchlistPolicy()
+        self.scan_collector = LatestScanCollector(
+            client=client,
+            raw_store=raw_store,
+            run_id=run_id,
+            max_scan_seconds=max_scan_seconds,
+            page_retry_attempts=page_retry_attempts,
+            page_retry_backoff_seconds=self.page_retry_backoff_seconds,
+            monotonic=self.monotonic,
+            sleep=self.sleep,
+            now=self.now,
+            watchlist_policy=self.watchlist_policy,
+        )
 
     async def collect(
+        self,
+        task: CollectionTask,
+        session: AsyncSession,
+    ) -> CoverageDraft:
+        if task.comment_scan_run_id is not None:
+            return await self.scan_collector.collect(task, session)
+        return await self._collect_legacy(task, session)
+
+    async def _collect_legacy(
         self,
         task: CollectionTask,
         session: AsyncSession,
@@ -817,3 +841,7 @@ class LatestCommentCollector:
             offset = str(parsed.extra["next_offset"])
             state.cursor = offset
             page_number += 1
+
+
+def _utc_now() -> datetime:
+    return datetime.now(UTC)

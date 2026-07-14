@@ -336,11 +336,11 @@ git commit -m "feat(planner): attach cohorts to latest scans"
 - Raw page and comment observation persistence passes `scan_run_id`.
 - Follow-ups carry incremented slice number, all-status slice key, and post-CAS `frontier_version`.
 
-- [ ] **Step 1: Write failing dispatch and legacy-regression tests**
+- [x] **Step 1: Write failing dispatch and legacy-regression tests**
 
 Assert a legacy task still produces NULL scan evidence and current baseline behavior. Assert a scan task missing slice identity or `frontier_version` fails before network access and terminal worker handling can close its scan.
 
-- [ ] **Step 2: Write failing baseline-tail slice tests**
+- [x] **Step 2: Write failing baseline-tail slice tests**
 
 With deterministic fake cursor pages, assert:
 
@@ -352,7 +352,7 @@ With deterministic fake cursor pages, assert:
 6. Cursor repetition marks the scan corrupted and creates no follow-up.
 7. A stale `frontier_version` raises `FrontierVersionConflict` and cannot persist page progress or a follow-up.
 
-- [ ] **Step 3: Run new tests and verify RED**
+- [x] **Step 3: Run new tests and verify RED**
 
 ```powershell
 uv run pytest tests/test_latest_scan_worker.py tests/test_latest_comments_worker.py -q
@@ -360,24 +360,24 @@ uv run pytest tests/test_latest_scan_worker.py tests/test_latest_comments_worker
 
 Expected: scan-backed tasks are handled by the legacy mutable state machine and lack scan evidence/slice identity.
 
-- [ ] **Step 4: Implement collector dispatch without changing legacy behavior**
+- [x] **Step 4: Implement collector dispatch without changing legacy behavior**
 
 Move no legacy semantics. Rename the existing body to `_collect_legacy()` and delegate only when `task.comment_scan_run_id` is non-NULL. Keep CLI/manual task output and existing tests unchanged.
 
-- [ ] **Step 5: Implement baseline-tail scan loop**
+- [x] **Step 5: Implement baseline-tail scan loop**
 
 The scan loop reads only the cursor and retry fields owned by its active frontier row. For every successful page, archive raw before parse, persist raw page/comments/media with `scan_run_id`, update scan counters and frontier cursor/version, and assign the new version back to `task.payload`. Yield and follow-up insertion share the worker transaction.
 
 At server end in this task, mark the parent tail `complete/tail_reached`; Task 6 replaces the temporary tail-complete endpoint with the automatic linked head transition. Empty first pages retain an empty anchor set.
 
-- [ ] **Step 6: Run collector verification**
+- [x] **Step 6: Run collector verification**
 
 ```powershell
 uv run pytest tests/test_latest_scan_worker.py tests/test_latest_comments_worker.py tests/test_comment_repositories.py -q
 uv run ruff check books_of_time/collectors/latest_scan.py books_of_time/collectors/latest_comments.py books_of_time/app.py tests/test_latest_scan_worker.py tests/test_latest_comments_worker.py
 ```
 
-- [ ] **Step 7: Commit the baseline-tail unit**
+- [x] **Step 7: Commit the baseline-tail unit**
 
 ```powershell
 git add books_of_time/collectors/latest_scan.py books_of_time/collectors/latest_comments.py books_of_time/app.py tests/test_latest_scan_worker.py tests/test_latest_comments_worker.py
