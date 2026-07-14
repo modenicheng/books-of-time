@@ -235,6 +235,41 @@ async def _seed_scan_task(
     return claim.scan, claim.frontier_state, task
 
 
+async def _seed_head_scan_task(
+    session,
+    *,
+    bvid: str,
+    now: datetime,
+    anchors: list[dict[str, object]],
+) -> tuple[CommentScanRun, FrontierState, CollectionTask]:
+    parent, frontier, _parent_task = await _seed_scan_task(
+        session,
+        bvid=bvid,
+        now=now,
+    )
+    parent = await LatestScanRunRepository(session).mark_running(
+        parent.id,
+        now=now,
+        oid=777,
+    )
+    parent.start_anchor_set = anchors
+    parent.start_frontier_rpid = int(anchors[0]["rpid"])
+    handoff = await LatestScanRunRepository(session).complete_tail_and_create_head(
+        parent.id,
+        frontier_state=frontier,
+        expected_version=frontier.version,
+        now=now,
+    )
+    assert handoff is not None
+    task = await session.scalar(
+        select(CollectionTask).where(
+            CollectionTask.comment_scan_run_id == handoff.scan.id
+        )
+    )
+    assert task is not None
+    return handoff.scan, handoff.frontier_state, task
+
+
 def _collector(
     tmp_path,
     client: FakeLatestClient,
@@ -399,14 +434,63 @@ async def test_baseline_tail_persists_anchors_counters_and_scan_evidence(
         assert scan.items_observed == 7
         assert scan.raw_payloads_saved == 2
         assert scan.slice_count == 1
-        assert frontier.active_scan_run_id is None
+        child = await session.scalar(
+            select(CommentScanRun).where(CommentScanRun.parent_scan_run_id == scan.id)
+        )
+        assert child is not None
+        assert child.mode is CommentScanMode.BASELINE_HEAD_SWEEP
+        assert child.status is CommentScanStatus.PLANNED
+        assert frontier.active_scan_run_id == child.id
         assert frontier.cursor == ""
-        assert frontier.last_scan_status == "baseline_tail_complete"
+        assert frontier.last_scan_status == CommentScanStatus.PLANNED.value
         assert frontier.extra["baseline_status"] == "baseline_tail_complete"
         assert all(page.scan_run_id == scan_id for page in raw_pages)
         assert all(row.scan_run_id == scan_id for row in observations)
         assert media_link is not None
         assert media_link.rpid == 1106
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_empty_baseline_tail_establishes_complete_empty_frontier(
+    tmp_path,
+) -> None:
+    engine, session_factory = await _database()
+    now = datetime(2026, 7, 14, 8, 0, tzinfo=UTC)
+    client = FakeLatestClient({"": latest_body(rpids=[], next_offset="", is_end=True)})
+
+    async with session_factory.begin() as session:
+        parent, _frontier, task = await _seed_scan_task(
+            session,
+            bvid="BV-EMPTY-BASELINE",
+            now=now,
+        )
+        parent_id = parent.id
+        task_id = task.id
+
+    async with session_factory.begin() as session:
+        task = await session.get(CollectionTask, task_id)
+        assert task is not None
+        draft = await _collector(tmp_path, client).collect(task, session)
+        assert draft.reason == "tail_reached"
+        assert draft.items_observed == 0
+
+    async with session_factory() as session:
+        parent = await session.get(CommentScanRun, parent_id)
+        frontier = await session.scalar(select(FrontierState))
+        assert parent is not None
+        assert parent.status is CommentScanStatus.COMPLETE
+        assert parent.start_anchor_set == []
+        assert frontier is not None
+        assert frontier.active_scan_run_id is None
+        assert frontier.frontier_anchor_set == []
+        assert frontier.frontier_rpid is None
+        assert frontier.cursor is None
+        assert frontier.last_scan_status == "baseline_complete"
+        assert frontier.extra["baseline_status"] == "baseline_complete"
+        assert await session.scalar(select(func.count(CommentScanRun.id))) == 1
+        assert await session.scalar(select(func.count(CollectionTask.id))) == 1
 
     await engine.dispose()
 
@@ -747,5 +831,188 @@ async def test_parse_failure_keeps_raw_but_not_page_or_frontier_progress(
         assert scan.pages_succeeded == 0
         assert frontier.version == original_version
         assert frontier.cursor is None
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_head_sweep_matches_any_retained_anchor_and_completes_baseline(
+    tmp_path,
+) -> None:
+    engine, session_factory = await _database()
+    now = datetime(2026, 7, 14, 8, 0, tzinfo=UTC)
+    anchors = [
+        {"rpid": 1905 - index, "platform_created_at": None} for index in range(5)
+    ]
+    client = FakeLatestClient(
+        {
+            "": latest_body(
+                rpids=[2105, 2104, 2103, 2102, 2101],
+                next_offset="head-2",
+            ),
+            "head-2": latest_body(
+                rpids=[1901],
+                next_offset="",
+                is_end=True,
+            ),
+        }
+    )
+
+    async with session_factory.begin() as session:
+        child, _frontier, child_task = await _seed_head_scan_task(
+            session,
+            bvid="BV-HEAD-MATCH",
+            now=now,
+            anchors=anchors,
+        )
+        child_id = child.id
+        child_task_id = child_task.id
+
+    async with session_factory.begin() as session:
+        child_task = await session.get(CollectionTask, child_task_id)
+        assert child_task is not None
+        draft = await _collector(tmp_path, client).collect(child_task, session)
+        assert draft.reason == "start_anchor_reached"
+        assert draft.frontier_reached is True
+
+    async with session_factory() as session:
+        child = await session.get(CommentScanRun, child_id)
+        frontier = await session.scalar(select(FrontierState))
+        assert child is not None
+        assert frontier is not None
+        assert child.status is CommentScanStatus.COMPLETE
+        assert child.outcome == "start_anchor_reached"
+        assert [item["rpid"] for item in child.result_anchor_set] == [
+            2105,
+            2104,
+            2103,
+            2102,
+            2101,
+        ]
+        assert child.extra["head_captured_at"] == (
+            datetime(2026, 7, 14, 8, 1, tzinfo=UTC).isoformat()
+        )
+        assert [item["rpid"] for item in frontier.frontier_anchor_set] == [
+            2105,
+            2104,
+            2103,
+            2102,
+            2101,
+        ]
+        assert frontier.frontier_rpid == 2105
+        assert frontier.active_scan_run_id is None
+        assert frontier.cursor is None
+        assert frontier.last_scan_status == "baseline_complete"
+        assert frontier.extra["baseline_status"] == "baseline_complete"
+        assert await session.scalar(select(func.count(CollectionTask.id))) == 2
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_head_sweep_pause_preserves_head_candidate_and_resumes(tmp_path) -> None:
+    engine, session_factory = await _database()
+    now = datetime(2026, 7, 14, 8, 0, tzinfo=UTC)
+    clock = MutableClock()
+    client = FakeLatestClient(
+        {
+            "": latest_body(rpids=[2302, 2301], next_offset="head-2"),
+            "head-2": latest_body(rpids=[2201], next_offset="", is_end=True),
+        },
+        clock=clock,
+        advance_after_offsets={""},
+    )
+
+    async with session_factory.begin() as session:
+        child, _frontier, child_task = await _seed_head_scan_task(
+            session,
+            bvid="BV-HEAD-RESUME",
+            now=now,
+            anchors=[{"rpid": 2201, "platform_created_at": None}],
+        )
+        child_id = child.id
+        child_task_id = child_task.id
+
+    async with session_factory.begin() as session:
+        child_task = await session.get(CollectionTask, child_task_id)
+        assert child_task is not None
+        first = await _collector(tmp_path, client, clock=clock).collect(
+            child_task,
+            session,
+        )
+        assert first.reason == "time_slice_yield"
+
+    async with session_factory() as session:
+        child = await session.get(CommentScanRun, child_id)
+        frontier = await session.scalar(select(FrontierState))
+        followup = await session.scalar(
+            select(CollectionTask).where(
+                CollectionTask.comment_scan_run_id == child_id,
+                CollectionTask.scan_slice_no == 1,
+            )
+        )
+        assert child is not None
+        assert child.status is CommentScanStatus.PAUSED
+        assert [item["rpid"] for item in child.result_anchor_set] == [2302, 2301]
+        assert frontier is not None and frontier.cursor == "head-2"
+        assert followup is not None
+        followup_id = followup.id
+
+    clock.value = 0
+    client.advance_after_offsets.clear()
+    async with session_factory.begin() as session:
+        followup = await session.get(CollectionTask, followup_id)
+        assert followup is not None
+        second = await _collector(tmp_path, client, clock=clock).collect(
+            followup,
+            session,
+        )
+        assert second.reason == "start_anchor_reached"
+
+    assert client.latest_offsets == ["", "head-2"]
+    async with session_factory() as session:
+        child = await session.get(CommentScanRun, child_id)
+        assert child is not None
+        assert child.status is CommentScanStatus.COMPLETE
+        assert [item["rpid"] for item in child.result_anchor_set] == [2302, 2301]
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_head_sweep_corrupts_when_all_start_anchors_are_missing(tmp_path) -> None:
+    engine, session_factory = await _database()
+    now = datetime(2026, 7, 14, 8, 0, tzinfo=UTC)
+    client = FakeLatestClient(
+        {"": latest_body(rpids=[2501], next_offset="", is_end=True)}
+    )
+
+    async with session_factory.begin() as session:
+        child, _frontier, child_task = await _seed_head_scan_task(
+            session,
+            bvid="BV-HEAD-MISSING",
+            now=now,
+            anchors=[{"rpid": 2401, "platform_created_at": None}],
+        )
+        child_id = child.id
+        child_task_id = child_task.id
+
+    async with session_factory.begin() as session:
+        child_task = await session.get(CollectionTask, child_task_id)
+        assert child_task is not None
+        draft = await _collector(tmp_path, client).collect(child_task, session)
+        assert draft.corrupted is True
+        assert draft.reason == "start_anchor_missing"
+
+    async with session_factory() as session:
+        child = await session.get(CommentScanRun, child_id)
+        frontier = await session.scalar(select(FrontierState))
+        assert child is not None
+        assert child.status is CommentScanStatus.CORRUPTED
+        assert child.outcome == "start_anchor_missing"
+        assert frontier is not None
+        assert frontier.frontier_anchor_set == []
+        assert frontier.active_scan_run_id is None
+        assert await session.scalar(select(func.count(CollectionTask.id))) == 2
 
     await engine.dispose()

@@ -13,15 +13,23 @@ from books_of_time.db.latest_scan_repositories import (
 )
 from books_of_time.db.models import (
     CollectionPolicyVersion,
+    CollectionTask,
     CommentScanRun,
     KnownVideo,
+    SnapshotCohort,
+    SnapshotCohortComponent,
 )
 from books_of_time.db.repositories import (
+    CollectionTaskRepository,
     FrontierStateRepository,
     FrontierStateUpdate,
     FrontierVersionConflict,
 )
-from books_of_time.domain.enums import CommentScanMode, CommentScanStatus
+from books_of_time.domain.enums import (
+    CommentScanMode,
+    CommentScanStatus,
+    TaskKind,
+)
 
 
 async def _database():
@@ -431,5 +439,211 @@ async def test_claim_rejects_invalid_latest_plan(plan: LatestScanRunPlan) -> Non
                 expected_version=state.version,
                 now=now,
             )
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_complete_tail_atomically_creates_idempotent_head_and_rebinds() -> None:
+    engine, session_factory = await _database()
+    now = datetime(2026, 7, 14, 8, 0, tzinfo=UTC)
+    anchors = [
+        {"rpid": 3005 - index, "platform_created_at": None} for index in range(5)
+    ]
+
+    async with session_factory.begin() as session:
+        cohort = SnapshotCohort(
+            cohort_key="snapshot:BV-LATEST:handoff",
+            bvid="BV-LATEST",
+            scheduled_for=now,
+            reason="routine",
+            age_checkpoint_hours=None,
+            desired_tier="s",
+            effective_tier="s",
+            policy_version="cohort-default-v2",
+            deadline=now + timedelta(minutes=2),
+            status="planned",
+            status_reason=None,
+            started_at=None,
+            finished_at=None,
+            expected_component_count=1,
+            completed_component_count=0,
+            extra={"rollout_mode": "live"},
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(cohort)
+        await session.flush()
+        frontier = await FrontierStateRepository(session).get_or_create(
+            target_type="video",
+            target_id="BV-LATEST",
+            frontier_type="latest_comments",
+            now=now,
+        )
+        repository = LatestScanRunRepository(session)
+        parent_claim = await repository.claim_or_join(
+            _plan(snapshot_cohort_id=cohort.id),
+            frontier_state=frontier,
+            expected_version=frontier.version,
+            now=now,
+        )
+        parent = await repository.mark_running(
+            parent_claim.scan.id,
+            now=now,
+            oid=777,
+        )
+        parent.start_anchor_set = anchors
+        parent.start_frontier_rpid = 3005
+        component = SnapshotCohortComponent(
+            cohort_id=cohort.id,
+            component_kind="latest_current_head",
+            required=True,
+            status="running",
+            scheduled_for=now,
+            deadline=now + timedelta(minutes=2),
+            started_at=now,
+            finished_at=None,
+            skew_seconds=0,
+            planned_pages=1,
+            requested_pages=1,
+            succeeded_pages=1,
+            items_observed=5,
+            raw_payloads_saved=1,
+            comment_scan_run_id=parent.id,
+            failure_reason=None,
+            extra={"task_kind": TaskKind.FETCH_LATEST_COMMENTS.value},
+        )
+        session.add(component)
+        await session.flush()
+        parent_task = await CollectionTaskRepository(session).enqueue(
+            kind=TaskKind.FETCH_LATEST_COMMENTS,
+            target_type="video",
+            target_id="BV-LATEST",
+            priority=100,
+            payload={
+                "bvid": "BV-LATEST",
+                "aid": 777,
+                "scan_mode": CommentScanMode.BASELINE_TAIL.value,
+                "frontier_version": parent_claim.frontier_state.version,
+                "max_scan_seconds": 55,
+                "current_head_required": True,
+            },
+            not_before=now,
+            idempotency_key=f"{parent.id}:baseline_tail:0",
+            snapshot_cohort_id=cohort.id,
+            snapshot_cohort_component_id=component.id,
+            comment_scan_run_id=parent.id,
+            scan_slice_no=0,
+            scan_slice_key=f"{parent.id}:baseline_tail:0",
+        )
+
+        first = await repository.complete_tail_and_create_head(
+            parent.id,
+            frontier_state=parent_claim.frontier_state,
+            expected_version=parent_claim.frontier_state.version,
+            now=now + timedelta(seconds=30),
+        )
+        assert first is not None
+        child = first.scan
+        assert parent.status is CommentScanStatus.COMPLETE
+        assert parent.outcome == "tail_reached"
+        assert child.mode is CommentScanMode.BASELINE_HEAD_SWEEP
+        assert child.parent_scan_run_id == parent.id
+        assert child.start_anchor_set == anchors
+        assert child.start_frontier_rpid == 3005
+        assert child.start_cursor == ""
+        assert first.frontier_state.active_scan_run_id == child.id
+        assert first.frontier_state.cursor == ""
+        assert component.comment_scan_run_id == child.id
+        assert component.status == "joined_active_task"
+
+        child_task = await session.scalar(
+            select(CollectionTask).where(CollectionTask.comment_scan_run_id == child.id)
+        )
+        assert child_task is not None
+        assert child_task.snapshot_cohort_component_id == component.id
+        assert child_task.scan_slice_no == 0
+        assert child_task.scan_slice_key == f"{child.id}:baseline_head_sweep:0"
+        assert child_task.payload["frontier_version"] == first.frontier_state.version
+
+        repeated = await repository.complete_tail_and_create_head(
+            parent.id,
+            frontier_state=first.frontier_state,
+            expected_version=first.frontier_state.version,
+            now=now + timedelta(seconds=31),
+        )
+        assert repeated is not None
+        assert repeated.scan.id == child.id
+        assert repeated.frontier_state.version == first.frontier_state.version
+        assert await session.scalar(select(func.count(CommentScanRun.id))) == 2
+        assert await session.scalar(select(func.count(CollectionTask.id))) == 2
+        assert parent_task.comment_scan_run_id == parent.id
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_complete_empty_tail_establishes_empty_frontier_without_child() -> None:
+    engine, session_factory = await _database()
+    now = datetime(2026, 7, 14, 8, 0, tzinfo=UTC)
+
+    async with session_factory.begin() as session:
+        frontier = await FrontierStateRepository(session).get_or_create(
+            target_type="video",
+            target_id="BV-LATEST",
+            frontier_type="latest_comments",
+            now=now,
+        )
+        repository = LatestScanRunRepository(session)
+        parent_claim = await repository.claim_or_join(
+            _plan(),
+            frontier_state=frontier,
+            expected_version=frontier.version,
+            now=now,
+        )
+        parent = await repository.mark_running(
+            parent_claim.scan.id,
+            now=now,
+            oid=777,
+        )
+        await CollectionTaskRepository(session).enqueue(
+            kind=TaskKind.FETCH_LATEST_COMMENTS,
+            target_type="video",
+            target_id="BV-LATEST",
+            priority=100,
+            payload={
+                "bvid": "BV-LATEST",
+                "aid": 777,
+                "scan_mode": CommentScanMode.BASELINE_TAIL.value,
+                "frontier_version": parent_claim.frontier_state.version,
+            },
+            not_before=now,
+            idempotency_key=f"{parent.id}:baseline_tail:0",
+            comment_scan_run_id=parent.id,
+            scan_slice_no=0,
+            scan_slice_key=f"{parent.id}:baseline_tail:0",
+        )
+
+        result = await repository.complete_tail_and_create_head(
+            parent.id,
+            frontier_state=parent_claim.frontier_state,
+            expected_version=parent_claim.frontier_state.version,
+            now=now + timedelta(seconds=1),
+        )
+
+        assert result is None
+        assert parent.status is CommentScanStatus.COMPLETE
+        assert parent.outcome == "tail_reached"
+        await session.refresh(parent_claim.frontier_state)
+        assert parent_claim.frontier_state.active_scan_run_id is None
+        assert parent_claim.frontier_state.frontier_anchor_set == []
+        assert parent_claim.frontier_state.frontier_rpid is None
+        assert parent_claim.frontier_state.cursor is None
+        assert parent_claim.frontier_state.last_scan_status == "baseline_complete"
+        assert (
+            parent_claim.frontier_state.extra["baseline_status"] == "baseline_complete"
+        )
+        assert await session.scalar(select(func.count(CommentScanRun.id))) == 1
+        assert await session.scalar(select(func.count(CollectionTask.id))) == 1
 
     await engine.dispose()

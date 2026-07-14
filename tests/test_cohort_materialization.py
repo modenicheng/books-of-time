@@ -585,6 +585,74 @@ async def test_repeated_latest_materialization_keeps_terminal_scan_and_task() ->
 
 
 @pytest.mark.asyncio
+async def test_live_repair_completes_interrupted_tail_to_head_handoff() -> None:
+    engine, session_factory = await _database()
+    now = datetime(2026, 7, 14, 6, 0, tzinfo=UTC)
+    bvid = "BV-LATEST-HANDOFF-REPAIR"
+
+    async with session_factory() as session:
+        await _seed_graph(session, bvid=bvid, now=now)
+        repository = SnapshotCohortRepository(session)
+        plan = _latest_only_plan(now, bvid=bvid)
+        first = await repository.materialize(
+            plan,
+            rollout_mode=CohortRolloutMode.LIVE,
+            now=now,
+        )
+        parent = await session.get(
+            CommentScanRun,
+            first.components[0].comment_scan_run_id,
+        )
+        assert parent is not None
+        parent.status = CommentScanStatus.COMPLETE
+        parent.outcome = "tail_reached"
+        parent.finished_at = now + timedelta(seconds=10)
+        parent.start_anchor_set = [
+            {"rpid": 3105 - index, "platform_created_at": None} for index in range(5)
+        ]
+        parent.start_frontier_rpid = 3105
+        first.tasks[0].status = TaskStatus.SUCCEEDED
+        await session.flush()
+
+        repaired = await repository.repair_latest_tail_handoffs(
+            now=now + timedelta(seconds=30),
+            limit=10,
+        )
+        repeated = await repository.materialize(
+            plan,
+            rollout_mode=CohortRolloutMode.LIVE,
+            now=now + timedelta(seconds=31),
+        )
+        no_op_repair = await repository.repair_latest_tail_handoffs(
+            now=now + timedelta(seconds=32),
+            limit=10,
+        )
+
+        child = await session.scalar(
+            select(CommentScanRun).where(CommentScanRun.parent_scan_run_id == parent.id)
+        )
+        frontier = await session.scalar(select(FrontierState))
+        assert repaired == 1
+        assert no_op_repair == 0
+        assert child is not None
+        assert child.mode is CommentScanMode.BASELINE_HEAD_SWEEP
+        assert frontier is not None
+        assert frontier.active_scan_run_id == child.id
+        assert repeated.components[0].comment_scan_run_id == child.id
+        assert repeated.components[0].status == (
+            CohortComponentStatus.JOINED_ACTIVE_TASK.value
+        )
+        assert repeated.tasks_created == 0
+        assert len(repeated.tasks) == 1
+        assert repeated.tasks[0].comment_scan_run_id == child.id
+        assert repeated.tasks[0].scan_slice_key == (f"{child.id}:baseline_head_sweep:0")
+        assert await session.scalar(select(func.count(CommentScanRun.id))) == 2
+        assert await session.scalar(select(func.count(CollectionTask.id))) == 2
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_shadow_latest_component_creates_no_frontier_scan_or_task() -> None:
     engine, session_factory = await _database()
     now = datetime(2026, 7, 14, 6, 0, tzinfo=UTC)

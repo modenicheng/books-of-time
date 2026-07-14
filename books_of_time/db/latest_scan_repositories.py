@@ -10,13 +10,24 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from books_of_time.db.models import CommentScanRun, FrontierState
+from books_of_time.db.models import (
+    CollectionTask,
+    CommentScanRun,
+    FrontierState,
+    SnapshotCohortComponent,
+)
 from books_of_time.db.repositories import (
+    CollectionTaskRepository,
     FrontierStateRepository,
     FrontierStateUpdate,
     FrontierVersionConflict,
 )
-from books_of_time.domain.enums import CommentScanMode, CommentScanStatus
+from books_of_time.domain.cohort_policy import CohortComponentStatus
+from books_of_time.domain.enums import (
+    CommentScanMode,
+    CommentScanStatus,
+    TaskKind,
+)
 from books_of_time.domain.latest_frontier import normalize_anchor_set, primary_anchor
 
 _LATEST_MODES = frozenset(
@@ -144,6 +155,232 @@ class LatestScanRunRepository:
             now=now,
         )
         return LatestScanClaim(scan, state, True)
+
+    async def complete_tail_and_create_head(
+        self,
+        parent_scan_run_id: int,
+        *,
+        frontier_state: FrontierState,
+        expected_version: int,
+        now: datetime,
+    ) -> LatestScanClaim | None:
+        _require_aware(now, "now")
+        state = await self._lock_frontier(frontier_state.id)
+        parent = await self.lock(parent_scan_run_id)
+        if parent.mode is not CommentScanMode.BASELINE_TAIL:
+            raise ValueError("Only a baseline tail can create a head sweep")
+        if state.target_id != parent.bvid:
+            raise ValueError("Baseline tail frontier belongs to a different BVID")
+
+        child_key = f"{parent.scan_key}:baseline_head_sweep"
+        existing_child = await self._find_by_scan_key(child_key, lock=True)
+        repairing = parent.status is CommentScanStatus.COMPLETE
+        if parent.status is CommentScanStatus.COMPLETE:
+            if parent.outcome != "tail_reached":
+                raise ValueError("Completed baseline tail has an incompatible outcome")
+            if not parent.start_anchor_set:
+                return None
+            allowed_owners = {parent.id}
+            if existing_child is not None:
+                allowed_owners.add(existing_child.id)
+            if state.active_scan_run_id not in allowed_owners:
+                raise FrontierVersionConflict(
+                    "Another latest scan owns the interrupted baseline frontier"
+                )
+        else:
+            _require_running(parent)
+        if not repairing and state.version != expected_version:
+            raise FrontierVersionConflict(
+                f"Frontier state {state.id} version changed from {expected_version}"
+            )
+        if not repairing and state.active_scan_run_id != parent.id:
+            raise FrontierVersionConflict(
+                f"Baseline tail {parent.id} no longer owns frontier {state.id}"
+            )
+
+        if not repairing:
+            parent.status = CommentScanStatus.COMPLETE
+            parent.outcome = "tail_reached"
+            parent.finished_at = now
+            parent.updated_at = now
+            await self.session.flush()
+
+        anchors = [
+            deepcopy(item) for item in normalize_anchor_set(parent.start_anchor_set)
+        ]
+        if not anchors:
+            extra = deepcopy(dict(state.extra))
+            extra["baseline_status"] = "baseline_complete"
+            extra["baseline_completed_at"] = now.isoformat()
+            state = await self.frontiers.compare_and_swap(
+                state.id,
+                state.version,
+                FrontierStateUpdate(
+                    frontier_rpid=None,
+                    frontier_time=None,
+                    frontier_anchor_set=[],
+                    active_scan_run_id=None,
+                    cursor=None,
+                    last_scan_at=now,
+                    last_scan_status="baseline_complete",
+                    last_scan_pages=parent.pages_succeeded,
+                    last_scan_truncated=False,
+                    extra=extra,
+                ),
+                now=now,
+            )
+            return None
+
+        if existing_child is None:
+            child = _new_scan(
+                LatestScanRunPlan(
+                    scan_key=child_key,
+                    bvid=parent.bvid,
+                    snapshot_cohort_id=parent.snapshot_cohort_id,
+                    parent_scan_run_id=parent.id,
+                    mode=CommentScanMode.BASELINE_HEAD_SWEEP,
+                    policy_version=parent.policy_version,
+                    reason=parent.reason,
+                    start_frontier_rpid=parent.start_frontier_rpid,
+                    start_anchor_set=anchors,
+                    start_cursor="",
+                    extra=parent.extra,
+                ),
+                anchors,
+                now=now,
+            )
+            child.oid = parent.oid
+            self.session.add(child)
+            await self.session.flush()
+        else:
+            child = existing_child
+            _validate_scan_identity(
+                child,
+                LatestScanRunPlan(
+                    scan_key=child_key,
+                    bvid=parent.bvid,
+                    snapshot_cohort_id=parent.snapshot_cohort_id,
+                    parent_scan_run_id=parent.id,
+                    mode=CommentScanMode.BASELINE_HEAD_SWEEP,
+                    policy_version=parent.policy_version,
+                    reason=parent.reason,
+                    start_frontier_rpid=parent.start_frontier_rpid,
+                    start_anchor_set=anchors,
+                    start_cursor="",
+                    extra=parent.extra,
+                ),
+                anchors,
+            )
+
+        extra = deepcopy(dict(state.extra))
+        extra["baseline_status"] = "baseline_tail_complete"
+        extra["latest_scan_progress"] = {
+            "scan_run_id": child.id,
+            "seen_cursors": [],
+        }
+        if state.active_scan_run_id != child.id:
+            state = await self.frontiers.compare_and_swap(
+                state.id,
+                state.version,
+                FrontierStateUpdate(
+                    frontier_rpid=state.frontier_rpid,
+                    frontier_time=state.frontier_time,
+                    frontier_anchor_set=state.frontier_anchor_set,
+                    active_scan_run_id=child.id,
+                    cursor="",
+                    last_scan_at=now,
+                    last_scan_status=CommentScanStatus.PLANNED.value,
+                    last_scan_pages=0,
+                    last_scan_truncated=False,
+                    extra=extra,
+                ),
+                now=now,
+            )
+
+        components = list(
+            await self.session.scalars(
+                select(SnapshotCohortComponent)
+                .where(
+                    SnapshotCohortComponent.comment_scan_run_id.in_(
+                        {parent.id, child.id}
+                    ),
+                    SnapshotCohortComponent.status.in_(
+                        {
+                            CohortComponentStatus.PENDING.value,
+                            CohortComponentStatus.RUNNING.value,
+                            CohortComponentStatus.JOINED_ACTIVE_TASK.value,
+                        }
+                    ),
+                )
+                .with_for_update()
+            )
+        )
+        for component in components:
+            component.comment_scan_run_id = child.id
+            component.status = CohortComponentStatus.JOINED_ACTIVE_TASK.value
+
+        existing_child_task = await self.session.scalar(
+            select(CollectionTask)
+            .where(
+                CollectionTask.comment_scan_run_id == child.id,
+                CollectionTask.scan_slice_no == 0,
+            )
+            .with_for_update()
+        )
+        if existing_child_task is not None:
+            await self.session.flush()
+            return LatestScanClaim(child, state, False)
+
+        owner_task = await self.session.scalar(
+            select(CollectionTask)
+            .where(CollectionTask.comment_scan_run_id == parent.id)
+            .order_by(CollectionTask.id.asc())
+            .limit(1)
+            .with_for_update()
+        )
+        owner_component = next(
+            (
+                component
+                for component in components
+                if owner_task is not None
+                and component.id == owner_task.snapshot_cohort_component_id
+            ),
+            components[0] if components else None,
+        )
+        priority = owner_task.priority if owner_task is not None else 100
+        budget_cost = owner_task.budget_cost if owner_task is not None else 1
+        max_retries = owner_task.max_retries if owner_task is not None else 3
+        payload = {
+            **(deepcopy(dict(owner_task.payload)) if owner_task is not None else {}),
+            "bvid": child.bvid,
+            "aid": child.oid,
+            "scan_mode": child.mode.value,
+            "frontier_version": state.version,
+            "current_head_required": True,
+        }
+        slice_key = f"{child.id}:{child.mode.value}:0"
+        await CollectionTaskRepository(self.session).enqueue(
+            kind=TaskKind.FETCH_LATEST_COMMENTS,
+            target_type="video",
+            target_id=child.bvid,
+            priority=priority,
+            budget_cost=budget_cost,
+            payload=payload,
+            not_before=now,
+            max_retries=max_retries,
+            idempotency_key=slice_key,
+            snapshot_cohort_id=(
+                owner_task.snapshot_cohort_id if owner_task is not None else None
+            ),
+            snapshot_cohort_component_id=(
+                owner_component.id if owner_component is not None else None
+            ),
+            comment_scan_run_id=child.id,
+            scan_slice_no=0,
+            scan_slice_key=slice_key,
+        )
+        await self.session.flush()
+        return LatestScanClaim(child, state, existing_child is None)
 
     async def lock(self, scan_run_id: int) -> CommentScanRun:
         if isinstance(scan_run_id, bool) or scan_run_id <= 0:

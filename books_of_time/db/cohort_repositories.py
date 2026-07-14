@@ -6,9 +6,10 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import case, select
+from sqlalchemy import and_, case, literal, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from books_of_time.db.comment_scan_repositories import (
     CommentScanRunRepository,
@@ -564,12 +565,16 @@ class SnapshotCohortRepository:
                 ):
                     continue
                 if _is_managed_latest_component(component_plan):
-                    existing_latest_task = await self.session.scalar(
-                        select(CollectionTask)
-                        .where(
-                            CollectionTask.snapshot_cohort_component_id == component.id
+                    existing_task_statement = select(CollectionTask).where(
+                        CollectionTask.snapshot_cohort_component_id == component.id
+                    )
+                    if component.comment_scan_run_id is not None:
+                        existing_task_statement = existing_task_statement.where(
+                            CollectionTask.comment_scan_run_id
+                            == component.comment_scan_run_id
                         )
-                        .order_by(CollectionTask.id.asc())
+                    existing_latest_task = await self.session.scalar(
+                        existing_task_statement.order_by(CollectionTask.id.asc())
                         .limit(1)
                         .with_for_update()
                     )
@@ -723,6 +728,79 @@ class SnapshotCohortRepository:
             components_created=components_created,
             tasks_created=tasks_created,
         )
+
+    async def repair_latest_tail_handoffs(
+        self,
+        *,
+        now: datetime,
+        limit: int = 100,
+    ) -> int:
+        _require_aware(now, "now")
+        if limit <= 0:
+            raise ValueError("repair limit must be positive")
+        child_scan = aliased(CommentScanRun)
+        child_task = aliased(CollectionTask)
+        parents = list(
+            await self.session.scalars(
+                select(CommentScanRun)
+                .outerjoin(
+                    child_scan,
+                    child_scan.scan_key
+                    == CommentScanRun.scan_key + literal(":baseline_head_sweep"),
+                )
+                .outerjoin(
+                    child_task,
+                    and_(
+                        child_task.comment_scan_run_id == child_scan.id,
+                        child_task.scan_slice_no == 0,
+                    ),
+                )
+                .where(
+                    CommentScanRun.mode == CommentScanMode.BASELINE_TAIL,
+                    CommentScanRun.status == CommentScanStatus.COMPLETE,
+                    CommentScanRun.outcome == "tail_reached",
+                    or_(child_scan.id.is_(None), child_task.id.is_(None)),
+                )
+                .order_by(CommentScanRun.finished_at.asc(), CommentScanRun.id.asc())
+                .limit(limit)
+                .with_for_update(of=CommentScanRun)
+            )
+        )
+        repository = LatestScanRunRepository(self.session)
+        repaired = 0
+        for parent in parents:
+            if not parent.start_anchor_set:
+                continue
+            child_key = f"{parent.scan_key}:baseline_head_sweep"
+            existing_child = await self.session.scalar(
+                select(CommentScanRun).where(CommentScanRun.scan_key == child_key)
+            )
+            existing_task = None
+            if existing_child is not None:
+                existing_task = await self.session.scalar(
+                    select(CollectionTask).where(
+                        CollectionTask.comment_scan_run_id == existing_child.id,
+                        CollectionTask.scan_slice_no == 0,
+                    )
+                )
+            if existing_child is not None and existing_task is not None:
+                continue
+            frontier = await FrontierStateRepository(self.session).get_or_create(
+                target_type="video",
+                target_id=parent.bvid,
+                frontier_type="latest_comments",
+                now=now,
+                lock=True,
+            )
+            await repository.complete_tail_and_create_head(
+                parent.id,
+                frontier_state=frontier,
+                expected_version=frontier.version,
+                now=now,
+            )
+            repaired += 1
+        await self.session.flush()
+        return repaired
 
     async def _get_or_create_cohort(
         self,

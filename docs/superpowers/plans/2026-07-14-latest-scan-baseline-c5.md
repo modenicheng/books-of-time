@@ -402,7 +402,7 @@ git commit -m "feat(comments): persist latest scans in numbered slices"
 - Produces idempotent planner repair for a terminal tail missing its derived child run/task.
 - Rebinds all non-terminal components linked to the tail onto the child head scan.
 
-- [ ] **Step 1: Write failing atomic handoff tests**
+- [x] **Step 1: Write failing atomic handoff tests**
 
 Assert the transaction that reaches tail end:
 
@@ -419,7 +419,7 @@ active cohort components now reference child and are joined_active_task
 
 Repeated handoff/repair calls must resolve to the same child and task. Empty baseline tail creates an explicit complete empty frontier, clears the active owner, and does not issue a redundant head request.
 
-- [ ] **Step 2: Write failing head-sweep tests**
+- [x] **Step 2: Write failing head-sweep tests**
 
 Cover:
 
@@ -429,28 +429,28 @@ Cover:
 4. Reaching server end with none of the non-empty start anchors marks `corrupted/start_anchor_missing`.
 5. Completion writes `frontier_anchor_set`, compatibility `frontier_rpid/frontier_time`, `baseline_status=baseline_complete`, clears active owner/cursor, and creates no follow-up.
 
-- [ ] **Step 3: Run focused tests and verify RED**
+- [x] **Step 3: Run focused tests and verify RED**
 
 ```powershell
 uv run pytest tests/test_latest_scan_repositories.py tests/test_latest_scan_worker.py tests/test_snapshot_cohort_planner.py -q
 ```
 
-- [ ] **Step 4: Implement atomic tail transition and empty frontier**
+- [x] **Step 4: Implement atomic tail transition and empty frontier**
 
 Derive child key as `<parent.scan_key>:baseline_head_sweep`. Create the child and slice under savepoints, CAS the frontier owner/cursor, and rebind only pending/running/joined components. The current parent task retains its own scan ID for coverage evidence.
 
-- [ ] **Step 5: Implement head sweep and planner repair**
+- [x] **Step 5: Implement head sweep and planner repair**
 
 Head matching uses RPID membership only; platform time remains evidence, not an equality requirement. The 30-second planner repair finds `complete/tail_reached` parents whose non-empty anchors lack the deterministic child/task and recreates the same identities. Shadow mode records no repairs that create executable work.
 
-- [ ] **Step 6: Run focused verification**
+- [x] **Step 6: Run focused verification**
 
 ```powershell
 uv run pytest tests/test_latest_scan_repositories.py tests/test_latest_scan_worker.py tests/test_snapshot_cohort_planner.py tests/test_cohort_materialization.py -q
 uv run ruff check books_of_time/db/latest_scan_repositories.py books_of_time/collectors/latest_scan.py books_of_time/task_orchestrator/snapshot_cohort_planner.py books_of_time/db/cohort_repositories.py tests/test_latest_scan_repositories.py tests/test_latest_scan_worker.py
 ```
 
-- [ ] **Step 7: Commit the automatic baseline unit**
+- [x] **Step 7: Commit the automatic baseline unit**
 
 ```powershell
 git add books_of_time/db/latest_scan_repositories.py books_of_time/collectors/latest_scan.py books_of_time/task_orchestrator/snapshot_cohort_planner.py books_of_time/db/cohort_repositories.py tests/test_latest_scan_repositories.py tests/test_latest_scan_worker.py tests/test_snapshot_cohort_planner.py

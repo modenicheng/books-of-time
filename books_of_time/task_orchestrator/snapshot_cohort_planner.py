@@ -95,6 +95,11 @@ class SnapshotCohortPlanner:
             self.policy,
             now=now,
         )
+        if effective_rollout is CohortRolloutMode.LIVE:
+            await SnapshotCohortRepository(session).repair_latest_tail_handoffs(
+                now=now,
+                limit=self.batch_limit,
+            )
 
         state_repository = VideoCollectionStateRepository(session)
         videos = await state_repository.list_candidates(limit=self.batch_limit)
