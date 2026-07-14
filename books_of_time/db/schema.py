@@ -35,16 +35,22 @@ _POST_BASELINE_TABLES = {
     "snapshot_cohorts",
     "snapshot_cohort_components",
     "collection_schedule_gaps",
+    "comment_scan_runs",
 }
 _POST_BASELINE_COLUMNS = {
     "collection_tasks": {
         "snapshot_cohort_id",
         "snapshot_cohort_component_id",
+        "comment_scan_run_id",
+        "scan_slice_no",
+        "scan_slice_key",
     },
     "collection_coverage_stats": {
         "snapshot_cohort_id",
         "snapshot_cohort_component_id",
+        "comment_scan_run_id",
     },
+    "raw_page_observations": {"scan_run_id"},
     "comment_entities": {
         "platform_created_at",
         "author_level",
@@ -56,6 +62,7 @@ _POST_BASELINE_COLUMNS = {
         "author_public_metadata_extra",
     },
     "comment_observations": {
+        "scan_run_id",
         "platform_created_at",
         "author_level",
         "author_official_type",
@@ -173,16 +180,36 @@ def _schema_differences(sync_connection) -> list[Any]:
 
 
 def _is_allowed_legacy_difference(difference: Any) -> bool:
+    if difference and isinstance(difference[0], (list, tuple)):
+        return all(_is_allowed_legacy_difference(item) for item in difference)
+
     operation = difference[0]
     if operation == "add_table":
         return difference[1].name in _POST_BASELINE_TABLES
     if operation == "add_index":
-        return difference[1].table.name in _POST_BASELINE_TABLES
+        index = difference[1]
+        return index.table.name in _POST_BASELINE_TABLES or _columns_are_post_baseline(
+            index.table.name,
+            {column.name for column in index.columns},
+        )
+    if operation == "add_fk":
+        constraint = difference[1]
+        return _columns_are_post_baseline(
+            constraint.table.name,
+            {element.parent.name for element in constraint.elements},
+        )
     if operation == "add_column":
         return difference[3].name in _POST_BASELINE_COLUMNS.get(
             difference[2], set()
         ) or _is_frontier_extra_difference(difference)
+    if operation == "modify_type":
+        return difference[2:4] == ("scheduled_jobs", "job_kind")
     return _is_frontier_extra_difference(difference)
+
+
+def _columns_are_post_baseline(table_name: str, column_names: set[str]) -> bool:
+    allowed = _POST_BASELINE_COLUMNS.get(table_name, set())
+    return bool(column_names) and column_names.issubset(allowed)
 
 
 def _is_frontier_extra_difference(difference: Any) -> bool:

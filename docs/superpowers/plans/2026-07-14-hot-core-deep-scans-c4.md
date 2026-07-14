@@ -137,7 +137,7 @@ git commit -m "feat(policy): add tiered hot scan targets"
 - Extends `CollectionTask` with nullable `comment_scan_run_id`, `scan_slice_no`, and globally unique `scan_slice_key`.
 - Extends `CollectionCoverageStat.comment_scan_run_id`, `RawPageObservation.scan_run_id`, and `CommentObservation.scan_run_id`.
 
-- [ ] **Step 1: Write failing model contract tests**
+- [x] **Step 1: Write failing model contract tests**
 
 Assert the model exposes the scan-run fields from design section 6.6:
 
@@ -155,7 +155,7 @@ reason, policy_version, extra, created_at, updated_at
 
 Use an in-memory SQLite database to assert one run persists, task/evidence rows accept its ID, duplicate non-NULL `scan_key` fails, and duplicate non-NULL `scan_slice_key` fails even when the first task is `succeeded`.
 
-- [ ] **Step 2: Run model tests and verify RED**
+- [x] **Step 2: Run model tests and verify RED**
 
 ```powershell
 uv run pytest tests/test_comment_scan_models.py -q
@@ -163,7 +163,7 @@ uv run pytest tests/test_comment_scan_models.py -q
 
 Expected: `CommentScanRun`, scan enums, and new columns do not exist.
 
-- [ ] **Step 3: Implement ORM models and indexes**
+- [x] **Step 3: Implement ORM models and indexes**
 
 Use the existing UTC/JSON/bigint helpers. Required constraints:
 
@@ -178,11 +178,11 @@ CHECK all scan counters >= 0
 
 Use `SET NULL` foreign keys from tasks/coverage/raw pages/comment observations to scan runs. Keep `SnapshotCohortComponent.comment_scan_run_id` as the existing nullable logical link and add an index on it only if metadata does not already contain one.
 
-- [ ] **Step 4: Write the reversible Alembic revision**
+- [x] **Step 4: Write the reversible Alembic revision**
 
 The upgrade creates `comment_scan_runs`, adds the six referring columns, creates indexes and the all-status unique slice index, and updates PostgreSQL enum types with the complete scan mode/status values if native enums are used. The downgrade drops referring indexes/columns before dropping the run table. SQLite uses `batch_alter_table` where required.
 
-- [ ] **Step 5: Verify migration head and round trip**
+- [x] **Step 5: Verify migration head and round trip**
 
 ```powershell
 uv run pytest tests/test_schema_migrations.py::test_hot_comment_scan_revision_round_trip -q
@@ -191,7 +191,7 @@ uv run pytest tests/test_comment_scan_models.py tests/test_schema_migrations.py 
 
 Expected: upgrade to `0011_hot_comment_scans`, downgrade to `0010_snapshot_cohort_planning_job`, and re-upgrade all pass on a disposable SQLite database.
 
-- [ ] **Step 6: Commit the schema unit**
+- [x] **Step 6: Commit the schema unit**
 
 ```powershell
 git add alembic/versions/0011_hot_comment_scans.py books_of_time/db/models.py books_of_time/db/migrations.py books_of_time/domain/enums.py tests/test_schema_migrations.py tests/test_comment_scan_models.py

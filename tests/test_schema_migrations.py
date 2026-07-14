@@ -1,3 +1,4 @@
+import asyncio
 import sqlite3
 import subprocess
 import sys
@@ -25,7 +26,7 @@ async def test_schema_revision_helpers_read_expected_and_current_head(
     tmp_path: Path,
 ) -> None:
     expected = get_expected_schema_revision()
-    assert expected == "0010_snapshot_cohort_planning_job"
+    assert expected == "0011_hot_comment_scans"
 
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as connection:
@@ -397,6 +398,81 @@ def test_snapshot_cohort_planning_job_revision_round_trip(tmp_path: Path) -> Non
     )
 
 
+def test_hot_comment_scan_revision_is_static() -> None:
+    revision_path = (
+        Path(__file__).resolve().parents[1]
+        / "alembic"
+        / "versions"
+        / "0011_hot_comment_scans.py"
+    )
+    source = revision_path.read_text(encoding="utf-8")
+
+    assert (
+        "down_revision: str | Sequence[str] | None = "
+        '"0010_snapshot_cohort_planning_job"' in source
+    )
+    assert 'op.create_table(\n        "comment_scan_runs"' in source
+    assert 'op.batch_alter_table("collection_tasks")' in source
+    assert 'batch_op.add_column(sa.Column("comment_scan_run_id"' in source
+    assert "scan_slice_key" in source
+    assert "Base.metadata" not in source
+
+
+def test_hot_comment_scan_revision_round_trip(tmp_path: Path) -> None:
+    database_path = tmp_path / "hot-comment-scan-cycle.sqlite3"
+    config_path = _write_sqlite_config(
+        tmp_path / "hot-comment-scan-cycle.yaml",
+        database_path,
+    )
+    alembic_config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
+    alembic_config.attributes["bot_config_path"] = str(config_path)
+    alembic_config.attributes["skip_logger_config"] = True
+
+    command.upgrade(alembic_config, "head")
+    assert _sqlite_table_exists(database_path, "comment_scan_runs")
+    assert {
+        "comment_scan_run_id",
+        "scan_slice_no",
+        "scan_slice_key",
+    }.issubset(_sqlite_columns(database_path, "collection_tasks"))
+    assert "comment_scan_run_id" in _sqlite_columns(
+        database_path,
+        "collection_coverage_stats",
+    )
+    assert "scan_run_id" in _sqlite_columns(database_path, "raw_page_observations")
+    assert "scan_run_id" in _sqlite_columns(database_path, "comment_observations")
+    assert "idx_snapshot_cohort_components_scan_run" in _sqlite_indexes(
+        database_path,
+        "snapshot_cohort_components",
+    )
+
+    command.downgrade(alembic_config, "0010_snapshot_cohort_planning_job")
+    assert not _sqlite_table_exists(database_path, "comment_scan_runs")
+    assert "scan_slice_key" not in _sqlite_columns(
+        database_path,
+        "collection_tasks",
+    )
+    assert "comment_scan_run_id" not in _sqlite_columns(
+        database_path,
+        "collection_coverage_stats",
+    )
+    assert "scan_run_id" not in _sqlite_columns(
+        database_path,
+        "raw_page_observations",
+    )
+    assert "scan_run_id" not in _sqlite_columns(
+        database_path,
+        "comment_observations",
+    )
+    assert "idx_snapshot_cohort_components_scan_run" not in _sqlite_indexes(
+        database_path,
+        "snapshot_cohort_components",
+    )
+
+    command.upgrade(alembic_config, "head")
+    assert _sqlite_table_exists(database_path, "comment_scan_runs")
+
+
 def test_large_time_indexes_compile_as_postgresql_brin() -> None:
     expected = {
         "idx_raw_payloads_captured_brin",
@@ -477,60 +553,13 @@ async def test_adopt_legacy_schema_repairs_known_drift_and_upgrades(
     database_path = tmp_path / "legacy.sqlite3"
     database_url = f"sqlite+aiosqlite:///{database_path}"
     config_path = _write_sqlite_config(tmp_path / "legacy.yaml", database_path)
-    engine = create_async_engine(database_url)
-    newer_tables = {
-        "events",
-        "event_targets",
-        "event_videos",
-        "event_keywords",
-        "comment_analysis_flags",
-        "request_budget_states",
-        "operational_alert_states",
-        "known_video_sources",
-        "http_request_attempts",
-        "collection_policy_versions",
-        "video_collection_states",
-        "snapshot_cohorts",
-        "snapshot_cohort_components",
-        "collection_schedule_gaps",
-    }
-    baseline_tables = [
-        table
-        for name, table in Base.metadata.tables.items()
-        if name not in newer_tables
-    ]
-    async with engine.begin() as connection:
-        await connection.run_sync(
-            lambda sync_connection: Base.metadata.create_all(
-                sync_connection,
-                tables=baseline_tables,
-            )
-        )
-        await connection.execute(text("ALTER TABLE frontier_states DROP COLUMN extra"))
-        evidence_columns = (
-            "platform_created_at",
-            "author_level",
-            "author_official_type",
-            "author_official_description",
-            "author_vip_status",
-            "author_vip_type",
-            "author_is_senior_member",
-            "author_public_metadata_extra",
-        )
-        for table_name in ("comment_entities", "comment_observations"):
-            for column_name in evidence_columns:
-                await connection.execute(
-                    text(f"ALTER TABLE {table_name} DROP COLUMN {column_name}")
-                )
-        for table_name in ("collection_tasks", "collection_coverage_stats"):
-            for column_name in (
-                "snapshot_cohort_id",
-                "snapshot_cohort_component_id",
-            ):
-                await connection.execute(
-                    text(f"ALTER TABLE {table_name} DROP COLUMN {column_name}")
-                )
-    await engine.dispose()
+    alembic_config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
+    alembic_config.attributes["bot_config_path"] = str(config_path)
+    alembic_config.attributes["skip_logger_config"] = True
+    await asyncio.to_thread(command.upgrade, alembic_config, "0001_initial")
+    with sqlite3.connect(database_path) as connection:
+        connection.execute("DROP TABLE alembic_version")
+        connection.commit()
 
     await adopt_legacy_schema(str(config_path))
 
@@ -579,4 +608,10 @@ def _sqlite_table_exists(database_path: Path, table_name: str) -> bool:
 def _sqlite_columns(database_path: Path, table_name: str) -> set[str]:
     with sqlite3.connect(database_path) as connection:
         rows = connection.execute(f'PRAGMA table_info("{table_name}")').fetchall()
+    return {str(row[1]) for row in rows}
+
+
+def _sqlite_indexes(database_path: Path, table_name: str) -> set[str]:
+    with sqlite3.connect(database_path) as connection:
+        rows = connection.execute(f'PRAGMA index_list("{table_name}")').fetchall()
     return {str(row[1]) for row in rows}

@@ -25,6 +25,8 @@ from books_of_time.db.base import Base, TimestampMixin
 from books_of_time.db.types import UTCDateTime, bigint_pk_type, json_dict_type
 from books_of_time.domain.enums import (
     BilibiliRequestType,
+    CommentScanMode,
+    CommentScanStatus,
     ScheduledJobKind,
     TaskKind,
     TaskStatus,
@@ -83,6 +85,10 @@ class RawPageObservation(Base):
         bigint_pk_type, primary_key=True, autoincrement=True
     )
     raw_payload_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    scan_run_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        ForeignKey("comment_scan_runs.id", ondelete="SET NULL"),
+    )
     captured_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
     request_type: Mapped[BilibiliRequestType] = mapped_column(
         Enum(BilibiliRequestType, values_callable=lambda x: [e.value for e in x]),
@@ -110,6 +116,7 @@ Index(
     RawPageObservation.captured_at.desc(),
 )
 Index("idx_raw_page_observations_raw_payload", RawPageObservation.raw_payload_id)
+Index("idx_raw_page_observations_scan_run", RawPageObservation.scan_run_id)
 _postgresql_brin_index(
     "idx_raw_page_observations_captured_brin",
     RawPageObservation.captured_at,
@@ -161,6 +168,10 @@ class CommentObservation(Base):
     captured_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
     raw_payload_id: Mapped[int | None] = mapped_column(BigInteger)
     raw_page_observation_id: Mapped[int | None] = mapped_column(BigInteger)
+    scan_run_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        ForeignKey("comment_scan_runs.id", ondelete="SET NULL"),
+    )
     sort_mode: Mapped[str] = mapped_column(Text, nullable=False)
     page_number: Mapped[int | None] = mapped_column(Integer)
     position: Mapped[int | None] = mapped_column(Integer)
@@ -208,6 +219,7 @@ Index(
     "idx_comment_observations_raw_page",
     CommentObservation.raw_page_observation_id,
 )
+Index("idx_comment_observations_scan_run", CommentObservation.scan_run_id)
 _postgresql_brin_index(
     "idx_comment_observations_captured_brin",
     CommentObservation.captured_at,
@@ -555,6 +567,12 @@ _postgresql_brin_index(
 
 class CollectionTask(TimestampMixin, Base):
     __tablename__ = "collection_tasks"
+    __table_args__ = (
+        CheckConstraint(
+            "scan_slice_no IS NULL OR scan_slice_no >= 0",
+            name="ck_collection_tasks_scan_slice_no",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(
         bigint_pk_type, primary_key=True, autoincrement=True
@@ -585,6 +603,12 @@ class CollectionTask(TimestampMixin, Base):
     max_retries: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
     snapshot_cohort_id: Mapped[int | None] = mapped_column(BigInteger)
     snapshot_cohort_component_id: Mapped[int | None] = mapped_column(BigInteger)
+    comment_scan_run_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        ForeignKey("comment_scan_runs.id", ondelete="SET NULL"),
+    )
+    scan_slice_no: Mapped[int | None] = mapped_column(Integer)
+    scan_slice_key: Mapped[str | None] = mapped_column(Text)
 
 
 Index(
@@ -610,6 +634,16 @@ Index(
     postgresql_where=CollectionTask.status.in_(
         [TaskStatus.PENDING, TaskStatus.RUNNING, TaskStatus.BACKOFF]
     ),
+)
+Index(
+    "uq_collection_tasks_scan_slice_key",
+    CollectionTask.scan_slice_key,
+    unique=True,
+)
+Index(
+    "idx_collection_tasks_scan_run_slice",
+    CollectionTask.comment_scan_run_id,
+    CollectionTask.scan_slice_no,
 )
 
 
@@ -648,6 +682,10 @@ class CollectionCoverageStat(TimestampMixin, Base):
     collection_task_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     snapshot_cohort_id: Mapped[int | None] = mapped_column(BigInteger)
     snapshot_cohort_component_id: Mapped[int | None] = mapped_column(BigInteger)
+    comment_scan_run_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        ForeignKey("comment_scan_runs.id", ondelete="SET NULL"),
+    )
     run_id: Mapped[str] = mapped_column(Text, nullable=False)
     task_kind: Mapped[TaskKind] = mapped_column(
         Enum(TaskKind, values_callable=lambda x: [e.value for e in x]),
@@ -686,6 +724,7 @@ Index(
 )
 Index("idx_collection_coverage_task", CollectionCoverageStat.collection_task_id)
 Index("idx_collection_coverage_run", CollectionCoverageStat.run_id)
+Index("idx_collection_coverage_scan_run", CollectionCoverageStat.comment_scan_run_id)
 
 
 class RequestBackoffState(TimestampMixin, Base):
@@ -1440,6 +1479,141 @@ Index(
     "idx_snapshot_cohort_components_status_deadline",
     SnapshotCohortComponent.status,
     SnapshotCohortComponent.deadline,
+)
+Index(
+    "idx_snapshot_cohort_components_scan_run",
+    SnapshotCohortComponent.comment_scan_run_id,
+)
+
+
+class CommentScanRun(Base):
+    __tablename__ = "comment_scan_runs"
+    __table_args__ = (
+        CheckConstraint(
+            "target_pages IS NULL OR target_pages >= 0",
+            name="ck_comment_scan_runs_target_pages",
+        ),
+        CheckConstraint(
+            "next_page_number IS NULL OR next_page_number > 0",
+            name="ck_comment_scan_runs_next_page",
+        ),
+        CheckConstraint(
+            "pages_requested >= 0",
+            name="ck_comment_scan_runs_pages_requested",
+        ),
+        CheckConstraint(
+            "pages_succeeded >= 0",
+            name="ck_comment_scan_runs_pages_succeeded",
+        ),
+        CheckConstraint(
+            "items_observed >= 0",
+            name="ck_comment_scan_runs_items_observed",
+        ),
+        CheckConstraint(
+            "raw_payloads_saved >= 0",
+            name="ck_comment_scan_runs_raw_payloads",
+        ),
+        CheckConstraint(
+            "slice_count >= 0",
+            name="ck_comment_scan_runs_slice_count",
+        ),
+        CheckConstraint(
+            "pages_succeeded <= pages_requested",
+            name="ck_comment_scan_runs_page_counts",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(
+        bigint_pk_type, primary_key=True, autoincrement=True
+    )
+    scan_key: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    bvid: Mapped[str] = mapped_column(
+        Text,
+        ForeignKey("known_videos.bvid", ondelete="CASCADE"),
+        nullable=False,
+    )
+    oid: Mapped[int | None] = mapped_column(BigInteger)
+    snapshot_cohort_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        ForeignKey("snapshot_cohorts.id", ondelete="SET NULL"),
+    )
+    parent_scan_run_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        ForeignKey("comment_scan_runs.id", ondelete="SET NULL"),
+    )
+    mode: Mapped[CommentScanMode] = mapped_column(
+        Enum(CommentScanMode, values_callable=lambda x: [e.value for e in x]),
+        nullable=False,
+    )
+    status: Mapped[CommentScanStatus] = mapped_column(
+        Enum(CommentScanStatus, values_callable=lambda x: [e.value for e in x]),
+        nullable=False,
+        default=CommentScanStatus.PLANNED,
+    )
+    outcome: Mapped[str | None] = mapped_column(String(64))
+    started_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    start_frontier_rpid: Mapped[int | None] = mapped_column(BigInteger)
+    result_frontier_rpid: Mapped[int | None] = mapped_column(BigInteger)
+    start_anchor_set: Mapped[list[dict[str, Any]]] = mapped_column(
+        json_dict_type,
+        nullable=False,
+        default=list,
+        server_default=text("'[]'"),
+    )
+    result_anchor_set: Mapped[list[dict[str, Any]]] = mapped_column(
+        json_dict_type,
+        nullable=False,
+        default=list,
+        server_default=text("'[]'"),
+    )
+    start_cursor: Mapped[str | None] = mapped_column(Text)
+    result_cursor: Mapped[str | None] = mapped_column(Text)
+    target_pages: Mapped[int | None] = mapped_column(Integer)
+    next_page_number: Mapped[int | None] = mapped_column(Integer)
+    pages_requested: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    pages_succeeded: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    items_observed: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    raw_payloads_saved: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+        default=0,
+    )
+    slice_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    truncated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    last_error_type: Mapped[str | None] = mapped_column(String(120))
+    last_error_message: Mapped[str | None] = mapped_column(Text)
+    reason: Mapped[str | None] = mapped_column(String(64))
+    policy_version: Mapped[str] = mapped_column(
+        Text,
+        ForeignKey("collection_policy_versions.version"),
+        nullable=False,
+    )
+    extra: Mapped[dict[str, Any]] = mapped_column(
+        json_dict_type,
+        nullable=False,
+        default=dict,
+        server_default=text("'{}'"),
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+Index(
+    "idx_comment_scan_runs_bvid_mode_status",
+    CommentScanRun.bvid,
+    CommentScanRun.mode,
+    CommentScanRun.status,
+)
+Index("idx_comment_scan_runs_cohort", CommentScanRun.snapshot_cohort_id)
+Index(
+    "idx_comment_scan_runs_status_updated",
+    CommentScanRun.status,
+    CommentScanRun.updated_at,
 )
 
 

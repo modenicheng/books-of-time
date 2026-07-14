@@ -34,6 +34,28 @@ class TaskStatus(StrEnum):
     BACKOFF = "backoff"
 
 
+class CommentScanMode(StrEnum):
+    HOT_CORE = "hot_core"
+    HOT_DEEP = "hot_deep"
+    BASELINE_TAIL = "baseline_tail"
+    BASELINE_HEAD_SWEEP = "baseline_head_sweep"
+    INCREMENTAL = "incremental"
+    FULL_RECONCILIATION = "full_reconciliation"
+    SEGMENTED_RECONCILIATION = "segmented_reconciliation"
+    REPLY_REFRESH = "reply_refresh"
+    VISIBILITY_PROBE = "visibility_probe"
+
+
+class CommentScanStatus(StrEnum):
+    PLANNED = "planned"
+    RUNNING = "running"
+    PAUSED = "paused"
+    COMPLETE = "complete"
+    PARTIAL = "partial"
+    FAILED = "failed"
+    CORRUPTED = "corrupted"
+
+
 class ScheduledJobKind(StrEnum):
     UID_DISCOVERY = "uid_discovery"
     VIDEO_SNAPSHOT_SWEEP = "video_snapshot_sweep"
