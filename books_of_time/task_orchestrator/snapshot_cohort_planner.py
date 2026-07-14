@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select
@@ -44,6 +45,7 @@ from books_of_time.domain.cohort_policy import (
     desired_tier,
     determine_life_stage,
     effective_interval,
+    hot_page_plan,
     next_aligned_slot,
     recovery_cohort_key,
     routine_cohort_key,
@@ -109,6 +111,7 @@ class SnapshotCohortPlanner:
 
         for video in videos:
             state = await state_repository.lock(video.bvid)
+            first_adoption = state is None
             if state is None:
                 state = await state_repository.adopt(
                     bvid=video.bvid,
@@ -130,6 +133,7 @@ class SnapshotCohortPlanner:
                 signals=signals,
                 now=now,
                 rollout_mode=effective_rollout,
+                first_active_adoption=first_adoption,
             )
             for key, value in video_totals.items():
                 totals[key] += value
@@ -252,6 +256,7 @@ class SnapshotCohortPlanner:
         signals: _PlanningSignals,
         now: datetime,
         rollout_mode: CohortRolloutMode,
+        first_active_adoption: bool,
     ) -> tuple[dict[str, int], datetime | None, int | None]:
         totals = {
             "cohorts_created": 0,
@@ -276,7 +281,7 @@ class SnapshotCohortPlanner:
             policy=self.policy,
             next_checkpoint_at=next_checkpoint_at,
         )
-        overdue_missing: set[str] = set()
+        overdue_component_plans: dict[str, CohortComponentPlan] = {}
         latest_overdue_hours: int | None = None
         last_checkpoint_hours = state.last_checkpoint_hours
         coalesced_routine = False
@@ -343,22 +348,33 @@ class SnapshotCohortPlanner:
                 "hot_core",
                 "latest_reconciliation",
             )
+            checkpoint_desired_tier = (
+                CollectionTier(existing.desired_tier)
+                if existing is not None
+                else signals.assessment.desired
+            )
+            checkpoint_effective_tier = (
+                CollectionTier(existing.effective_tier)
+                if existing is not None
+                else signals.assessment.effective
+            )
+            checkpoint_component_plans = _component_plans_for_kinds(
+                component_kinds,
+                policy=self.policy,
+                tier=checkpoint_effective_tier,
+                include_hot_deep=True,
+                dormant=False,
+                status=component_status,
+                priority_for=_checkpoint_priority,
+            )
             plan = SnapshotCohortPlan(
                 cohort_key=checkpoint_cohort_key(video.bvid, checkpoint_hours),
                 bvid=video.bvid,
                 scheduled_for=scheduled_for,
                 reason="age_checkpoint",
                 age_checkpoint_hours=checkpoint_hours,
-                desired_tier=(
-                    CollectionTier(existing.desired_tier)
-                    if existing is not None
-                    else signals.assessment.desired
-                ),
-                effective_tier=(
-                    CollectionTier(existing.effective_tier)
-                    if existing is not None
-                    else signals.assessment.effective
-                ),
+                desired_tier=checkpoint_desired_tier,
+                effective_tier=checkpoint_effective_tier,
                 policy_version=self.policy.policy_version,
                 deadline=deadline,
                 status=target_status,
@@ -367,14 +383,7 @@ class SnapshotCohortPlanner:
                     "checkpoint_hours": checkpoint_hours,
                     "coalesced_routine_bucket": in_current_bucket,
                 },
-                components=tuple(
-                    _component_plan(
-                        kind,
-                        status=component_status,
-                        priority=_checkpoint_priority(kind),
-                    )
-                    for kind in component_kinds
-                ),
+                components=checkpoint_component_plans,
             )
             result = await materializer.materialize(
                 plan,
@@ -389,14 +398,29 @@ class SnapshotCohortPlanner:
                     latest_overdue_hours or 0,
                     checkpoint_hours,
                 )
-                missing = await _missing_component_kinds(
-                    session,
-                    cohort=result.cohort,
-                    default_kinds=component_kinds,
+                missing_plans = _missing_component_plans(
+                    result.components,
+                    checkpoint_component_plans,
                 )
-                overdue_missing.update(missing)
+                for missing_plan in missing_plans:
+                    recovery_candidate = replace(
+                        missing_plan,
+                        status=CohortComponentStatus.PENDING,
+                        priority=_recovery_priority(missing_plan.component_kind),
+                    )
+                    existing_candidate = overdue_component_plans.get(
+                        missing_plan.component_kind
+                    )
+                    overdue_component_plans[missing_plan.component_kind] = (
+                        recovery_candidate
+                        if existing_candidate is None
+                        else _prefer_recovery_component_plan(
+                            existing_candidate,
+                            recovery_candidate,
+                        )
+                    )
 
-        if overdue_missing and latest_overdue_hours is not None:
+        if overdue_component_plans and latest_overdue_hours is not None:
             recovery_key = recovery_cohort_key(video.bvid, latest_overdue_hours)
             existing_recovery = await session.scalar(
                 select(SnapshotCohort).where(SnapshotCohort.cohort_key == recovery_key)
@@ -435,12 +459,8 @@ class SnapshotCohortPlanner:
                     "coalesced_routine_bucket": recovery_coalesces_routine,
                 },
                 components=tuple(
-                    _component_plan(
-                        kind,
-                        status=CohortComponentStatus.PENDING,
-                        priority=_recovery_priority(kind),
-                    )
-                    for kind in _ordered_component_kinds(overdue_missing)
+                    overdue_component_plans[kind]
+                    for kind in _ordered_component_kinds(set(overdue_component_plans))
                 ),
             )
             result = await materializer.materialize(
@@ -497,15 +517,20 @@ class SnapshotCohortPlanner:
                     status=CohortStatus.PLANNED,
                     status_reason=None,
                     extra={"planner_bucket_seconds": self.policy.planning_seconds},
-                    components=tuple(
-                        _component_plan(
+                    components=_component_plans_for_kinds(
+                        component_kinds,
+                        policy=self.policy,
+                        tier=signals.assessment.effective,
+                        include_hot_deep=(
+                            first_active_adoption
+                            and signals.life_stage is VideoLifeStage.ACTIVE
+                        ),
+                        dormant=signals.life_stage is VideoLifeStage.DORMANT,
+                        status=CohortComponentStatus.PENDING,
+                        priority_for=lambda kind: _routine_priority(
+                            signals.assessment.effective,
                             kind,
-                            status=CohortComponentStatus.PENDING,
-                            priority=_routine_priority(
-                                signals.assessment.effective, kind
-                            ),
-                        )
-                        for kind in component_kinds
+                        ),
                     ),
                 )
                 result = await materializer.materialize(
@@ -528,6 +553,7 @@ def _component_plan(
     task_kind = {
         "video_metrics": TaskKind.FETCH_VIDEO_STATS,
         "hot_core": TaskKind.FETCH_HOT_COMMENTS,
+        "hot_deep": TaskKind.FETCH_HOT_COMMENTS,
         "latest_current_head": TaskKind.FETCH_LATEST_COMMENTS,
         "latest_reconciliation": TaskKind.FETCH_LATEST_COMMENTS,
     }[component_kind]
@@ -541,6 +567,106 @@ def _component_plan(
         status=status,
         priority=priority,
         payload=payload,
+    )
+
+
+def _component_plans_for_kinds(
+    component_kinds: tuple[str, ...],
+    *,
+    policy: CohortPolicy,
+    tier: CollectionTier,
+    include_hot_deep: bool,
+    dormant: bool,
+    status: CohortComponentStatus,
+    priority_for: Callable[[str], int],
+) -> tuple[CohortComponentPlan, ...]:
+    plans: list[CohortComponentPlan] = []
+    for kind in component_kinds:
+        if kind == "hot_core":
+            plans.extend(
+                _hot_component_plans(
+                    policy,
+                    tier,
+                    include_deep=include_hot_deep,
+                    dormant=dormant,
+                    status=status,
+                    priority_for=priority_for,
+                )
+            )
+            continue
+        plans.append(
+            _component_plan(
+                kind,
+                status=status,
+                priority=priority_for(kind),
+            )
+        )
+    return tuple(plans)
+
+
+def _hot_component_plans(
+    policy: CohortPolicy,
+    tier: CollectionTier,
+    *,
+    include_deep: bool,
+    dormant: bool,
+    status: CohortComponentStatus,
+    priority_for: Callable[[str], int],
+) -> tuple[CohortComponentPlan, ...]:
+    page_plan = hot_page_plan(
+        policy,
+        tier,
+        include_deep=include_deep,
+        dormant=dormant,
+    )
+    ranges = [
+        ("hot_core", page_plan.core_start_page, page_plan.core_pages),
+    ]
+    if page_plan.deep_pages > 0:
+        ranges.append(("hot_deep", page_plan.deep_start_page, page_plan.deep_pages))
+    return tuple(
+        _hot_component_plan(
+            kind,
+            start_page=start_page,
+            target_pages=target_pages,
+            policy=policy,
+            status=status,
+            priority=priority_for(kind),
+        )
+        for kind, start_page, target_pages in ranges
+    )
+
+
+def _hot_component_plan(
+    component_kind: str,
+    *,
+    start_page: int,
+    target_pages: int,
+    policy: CohortPolicy,
+    status: CohortComponentStatus,
+    priority: int,
+) -> CohortComponentPlan:
+    end_page = start_page + target_pages - 1
+    scan_settings = {
+        "scan_mode": component_kind,
+        "start_page": start_page,
+        "end_page": end_page,
+        "target_pages": target_pages,
+        "max_pages_per_slice": policy.hot_comments.max_pages_per_slice,
+        "max_scan_seconds": policy.hot_comments.max_slice_seconds,
+    }
+    return CohortComponentPlan(
+        component_kind=component_kind,
+        task_kind=TaskKind.FETCH_HOT_COMMENTS,
+        planned_pages=target_pages,
+        status=status,
+        priority=priority,
+        payload={
+            **scan_settings,
+            "page": start_page,
+            "page_limit": target_pages,
+        },
+        extra=scan_settings,
     )
 
 
@@ -579,30 +705,67 @@ def _next_due(
     return current_bucket + interval
 
 
-async def _missing_component_kinds(
-    session: AsyncSession,
-    *,
-    cohort: SnapshotCohort,
-    default_kinds: tuple[str, ...],
-) -> set[str]:
-    components = list(
-        await session.scalars(
-            select(SnapshotCohortComponent).where(
-                SnapshotCohortComponent.cohort_id == cohort.id
-            )
-        )
-    )
+def _missing_component_plans(
+    components: tuple[SnapshotCohortComponent, ...],
+    default_plans: tuple[CohortComponentPlan, ...],
+) -> tuple[CohortComponentPlan, ...]:
+    plans_by_kind = {plan.component_kind: plan for plan in default_plans}
     if not components:
-        return set(default_kinds)
-    return {
-        component.component_kind
-        for component in components
-        if component.status
-        not in {
+        return default_plans
+    missing: list[CohortComponentPlan] = []
+    for component in components:
+        if component.status in {
             CohortComponentStatus.COMPLETE.value,
             CohortComponentStatus.NOT_APPLICABLE.value,
-        }
-    }
+        }:
+            continue
+        fallback = plans_by_kind[component.component_kind]
+        if component.component_kind in {"hot_core", "hot_deep"}:
+            scan_keys = (
+                "scan_mode",
+                "start_page",
+                "end_page",
+                "target_pages",
+                "max_pages_per_slice",
+                "max_scan_seconds",
+            )
+            scan_settings = {
+                key: component.extra[key] for key in scan_keys if key in component.extra
+            }
+            if len(scan_settings) == len(scan_keys):
+                fallback = replace(
+                    fallback,
+                    planned_pages=component.planned_pages,
+                    payload={
+                        **scan_settings,
+                        "page": scan_settings["start_page"],
+                        "page_limit": component.planned_pages,
+                    },
+                    extra=scan_settings,
+                )
+        else:
+            fallback = replace(fallback, planned_pages=component.planned_pages)
+        missing.append(fallback)
+    return tuple(missing)
+
+
+def _prefer_recovery_component_plan(
+    current: CohortComponentPlan,
+    candidate: CohortComponentPlan,
+) -> CohortComponentPlan:
+    if current.component_kind != candidate.component_kind:
+        raise ValueError("recovery component kinds must match")
+    if current.component_kind not in {"hot_core", "hot_deep"}:
+        return current
+
+    def range_rank(plan: CohortComponentPlan) -> tuple[int, int, int]:
+        return (
+            int(plan.extra["end_page"]),
+            plan.planned_pages,
+            -int(plan.extra["start_page"]),
+        )
+
+    return candidate if range_rank(candidate) > range_rank(current) else current
 
 
 async def _finalize_expired_checkpoint(
@@ -658,6 +821,7 @@ def _ordered_component_kinds(component_kinds: set[str]) -> tuple[str, ...]:
     order = (
         "video_metrics",
         "hot_core",
+        "hot_deep",
         "latest_current_head",
         "latest_reconciliation",
     )
@@ -686,6 +850,7 @@ def _component_priority_offset(component_kind: str) -> int:
     return {
         "video_metrics": 2,
         "hot_core": 1,
+        "hot_deep": 0,
         "latest_current_head": 0,
         "latest_reconciliation": 0,
     }[component_kind]

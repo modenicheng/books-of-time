@@ -285,7 +285,7 @@ git commit -m "feat(tasks): add all-status scan slice identity"
 - Live materialization creates one `CommentScanRun`, links `SnapshotCohortComponent.comment_scan_run_id`, and enqueues slice zero atomically.
 - Shadow materialization persists component page targets but creates no scan run and no task.
 
-- [ ] **Step 1: Write failing tier matrix planner tests**
+- [x] **Step 1: Write failing tier matrix planner tests**
 
 For each effective tier, assert active routine components:
 
@@ -307,7 +307,7 @@ C hot_core page 1 and no hot_deep component
 
 Assert dormant routine is one core page and archived has no hot component. Assert checkpoint components created from an existing cohort keep its frozen tier instead of a later reassessment.
 
-- [ ] **Step 2: Run planner tests and verify RED**
+- [x] **Step 2: Run planner tests and verify RED**
 
 ```powershell
 uv run pytest tests/test_snapshot_cohort_planner.py -q
@@ -315,7 +315,7 @@ uv run pytest tests/test_snapshot_cohort_planner.py -q
 
 Expected: every hot component still plans one page and no `hot_deep` exists.
 
-- [ ] **Step 3: Implement component plan generation**
+- [x] **Step 3: Implement component plan generation**
 
 Replace the one-page special case in `_component_plan()` with hot-specific builders. Persist in each component `extra` and first task payload:
 
@@ -332,7 +332,7 @@ Replace the one-page special case in `_component_plan()` with hot-specific build
 
 Use `hot_deep` only when its remainder is positive. Add it to recovery ordering. When recovery combines overdue checkpoint components, preserve the missed component's frozen page range and choose the maximum required range for that recovery key rather than recalculating from the current tier.
 
-- [ ] **Step 4: Write failing live materialization tests**
+- [x] **Step 4: Write failing live materialization tests**
 
 Materialize one live S checkpoint and assert:
 
@@ -346,11 +346,11 @@ repeated materialization creates zero new runs/tasks
 shadow materialization creates zero runs/tasks
 ```
 
-- [ ] **Step 5: Implement atomic hot scan materialization**
+- [x] **Step 5: Implement atomic hot scan materialization**
 
 After a hot component row exists and before its first task is inserted, materialize the run using scan key `{cohort_key}:{component_kind}`. Set `component.comment_scan_run_id`, enqueue slice zero with all three scan fields, and retain the existing component-level active idempotency key as a secondary guard. Caller commit/rollback remains authoritative.
 
-- [ ] **Step 6: Run planner/materialization tests**
+- [x] **Step 6: Run planner/materialization tests**
 
 ```powershell
 uv run pytest tests/test_snapshot_cohort_planner.py tests/test_cohort_materialization.py tests/test_comment_scan_repositories.py -q
@@ -359,7 +359,7 @@ uv run ruff check books_of_time/task_orchestrator/snapshot_cohort_planner.py boo
 
 Expected: all tests pass and shadow still creates no executable work.
 
-- [ ] **Step 7: Commit the planner unit**
+- [x] **Step 7: Commit the planner unit**
 
 ```powershell
 git add books_of_time/task_orchestrator/snapshot_cohort_planner.py books_of_time/db/cohort_repositories.py tests/test_snapshot_cohort_planner.py tests/test_cohort_materialization.py

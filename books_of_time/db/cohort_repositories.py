@@ -10,6 +10,10 @@ from sqlalchemy import case, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from books_of_time.db.comment_scan_repositories import (
+    CommentScanRunRepository,
+    HotScanRunPlan,
+)
 from books_of_time.db.models import (
     CollectionCoverageStat,
     CollectionPolicyVersion,
@@ -34,7 +38,7 @@ from books_of_time.domain.cohort_policy import (
     aggregate_cohort_status,
     component_key,
 )
-from books_of_time.domain.enums import TaskKind
+from books_of_time.domain.enums import CommentScanMode, TaskKind
 
 
 @dataclass(frozen=True, slots=True)
@@ -531,6 +535,7 @@ class SnapshotCohortRepository:
             and plan.status is CohortStatus.PLANNED
         ):
             task_repository = CollectionTaskRepository(self.session)
+            scan_repository = CommentScanRunRepository(self.session)
             for component_plan, component in zip(
                 plan.components,
                 ordered_components,
@@ -541,6 +546,22 @@ class SnapshotCohortRepository:
                     or component_plan.task_kind is None
                 ):
                     continue
+                scan = None
+                if _is_managed_hot_component(component_plan):
+                    scan, _created = await scan_repository.materialize_hot(
+                        _hot_scan_run_plan(
+                            plan,
+                            cohort=cohort,
+                            component_plan=component_plan,
+                        ),
+                        now=now,
+                    )
+                    if component.comment_scan_run_id is None:
+                        component.comment_scan_run_id = scan.id
+                    elif component.comment_scan_run_id != scan.id:
+                        raise ValueError(
+                            "Cohort component belongs to another comment scan run"
+                        )
                 existing_task = await self.session.scalar(
                     select(CollectionTask)
                     .where(CollectionTask.snapshot_cohort_component_id == component.id)
@@ -549,6 +570,12 @@ class SnapshotCohortRepository:
                     .with_for_update()
                 )
                 if existing_task is not None:
+                    if scan is not None:
+                        _validate_existing_hot_task(
+                            existing_task,
+                            scan_run_id=scan.id,
+                            scan_mode=scan.mode,
+                        )
                     tasks.append(existing_task)
                     continue
 
@@ -578,6 +605,11 @@ class SnapshotCohortRepository:
                     ),
                     snapshot_cohort_id=cohort.id,
                     snapshot_cohort_component_id=component.id,
+                    comment_scan_run_id=scan.id if scan is not None else None,
+                    scan_slice_no=0 if scan is not None else None,
+                    scan_slice_key=(
+                        f"{scan.id}:{scan.mode.value}:0" if scan is not None else None
+                    ),
                 )
                 tasks.append(task)
                 tasks_created += 1
@@ -1031,16 +1063,69 @@ def _validate_existing_component(
     task_kind = (
         component_plan.task_kind.value if component_plan.task_kind is not None else None
     )
+    immutable_extra_matches = all(
+        component.extra.get(key) == value for key, value in component_plan.extra.items()
+    )
     if (
         component.required != component_plan.required
         or component.scheduled_for != plan.scheduled_for
         or component.deadline != (component_plan.deadline or plan.deadline)
         or component.planned_pages != component_plan.planned_pages
         or component.extra.get("task_kind") != task_kind
+        or not immutable_extra_matches
     ):
         raise ValueError(
             f"component plan conflict: {plan.cohort_key}:{component_plan.component_kind}"
         )
+
+
+def _is_managed_hot_component(component_plan: CohortComponentPlan) -> bool:
+    return component_plan.extra.get("scan_mode") in {"hot_core", "hot_deep"}
+
+
+def _hot_scan_run_plan(
+    plan: SnapshotCohortPlan,
+    *,
+    cohort: SnapshotCohort,
+    component_plan: CohortComponentPlan,
+) -> HotScanRunPlan:
+    try:
+        mode = CommentScanMode(str(component_plan.extra["scan_mode"]))
+        start_page = int(component_plan.extra["start_page"])
+        end_page = int(component_plan.extra["end_page"])
+        target_pages = int(component_plan.extra["target_pages"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("Managed hot component has invalid scan settings") from exc
+    if mode.value != component_plan.component_kind:
+        raise ValueError("Managed hot component mode does not match component kind")
+    if target_pages != component_plan.planned_pages:
+        raise ValueError("Managed hot component target does not match planned pages")
+    return HotScanRunPlan(
+        scan_key=component_key(plan.cohort_key, component_plan.component_kind),
+        bvid=plan.bvid,
+        snapshot_cohort_id=cohort.id,
+        mode=mode,
+        target_pages=target_pages,
+        start_page=start_page,
+        end_page=end_page,
+        policy_version=plan.policy_version,
+        extra=component_plan.extra,
+    )
+
+
+def _validate_existing_hot_task(
+    task: CollectionTask,
+    *,
+    scan_run_id: int,
+    scan_mode: CommentScanMode,
+) -> None:
+    expected_slice_key = f"{scan_run_id}:{scan_mode.value}:0"
+    if (
+        task.comment_scan_run_id != scan_run_id
+        or task.scan_slice_no != 0
+        or task.scan_slice_key != expected_slice_key
+    ):
+        raise ValueError("Existing hot task belongs to another scan slice")
 
 
 def _require_aware(value: datetime, field_name: str) -> None:

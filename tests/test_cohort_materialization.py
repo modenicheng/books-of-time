@@ -16,6 +16,7 @@ from books_of_time.db.cohort_repositories import (
 from books_of_time.db.models import (
     CollectionPolicyVersion,
     CollectionTask,
+    CommentScanRun,
     KnownVideo,
     SnapshotCohort,
     SnapshotCohortComponent,
@@ -118,6 +119,59 @@ def _routine_plan(now: datetime, *, bvid: str = "BV-C3") -> SnapshotCohortPlan:
     )
 
 
+def _hot_checkpoint_plan(
+    now: datetime,
+    *,
+    bvid: str,
+) -> SnapshotCohortPlan:
+    def hot_component(
+        kind: str,
+        start_page: int,
+        end_page: int,
+        priority: int,
+    ) -> CohortComponentPlan:
+        target_pages = end_page - start_page + 1
+        scan_settings = {
+            "scan_mode": kind,
+            "start_page": start_page,
+            "end_page": end_page,
+            "target_pages": target_pages,
+            "max_pages_per_slice": 10,
+            "max_scan_seconds": 55,
+        }
+        return CohortComponentPlan(
+            kind,
+            TaskKind.FETCH_HOT_COMMENTS,
+            target_pages,
+            priority=priority,
+            payload={
+                **scan_settings,
+                "page": start_page,
+                "page_limit": target_pages,
+            },
+            extra=scan_settings,
+        )
+
+    return SnapshotCohortPlan(
+        cohort_key=f"snapshot:{bvid}:age:6h",
+        bvid=bvid,
+        scheduled_for=now,
+        reason="age_checkpoint",
+        age_checkpoint_hours=6,
+        desired_tier=CollectionTier.S,
+        effective_tier=CollectionTier.S,
+        policy_version="cohort-default-v1",
+        deadline=now + timedelta(minutes=60),
+        status=CohortStatus.PLANNED,
+        status_reason=None,
+        extra={"checkpoint_hours": 6},
+        components=(
+            hot_component("hot_core", 1, 3, 121),
+            hot_component("hot_deep", 4, 20, 120),
+        ),
+    )
+
+
 @pytest.mark.asyncio
 async def test_shadow_materialization_is_idempotent_and_creates_no_tasks() -> None:
     engine, session_factory = await _database()
@@ -208,6 +262,86 @@ async def test_live_materialization_links_tasks_and_never_recreates_initial_task
         assert len(second.tasks) == 3
         assert (
             await session.scalar(select(func.count()).select_from(CollectionTask)) == 3
+        )
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_live_hot_components_materialize_scan_runs_and_slice_zero_once() -> None:
+    engine, session_factory = await _database()
+    now = datetime(2026, 7, 14, 6, 0, tzinfo=UTC)
+
+    async with session_factory() as session:
+        await _seed_graph(session, bvid="BV-HOT-LIVE", now=now)
+        repository = SnapshotCohortRepository(session)
+        plan = _hot_checkpoint_plan(now, bvid="BV-HOT-LIVE")
+
+        first = await repository.materialize(
+            plan,
+            rollout_mode=CohortRolloutMode.LIVE,
+            now=now,
+        )
+        second = await repository.materialize(
+            plan,
+            rollout_mode=CohortRolloutMode.LIVE,
+            now=now + timedelta(seconds=1),
+        )
+
+        scans = list(
+            await session.scalars(select(CommentScanRun).order_by(CommentScanRun.mode))
+        )
+        components = {
+            component.component_kind: component for component in first.components
+        }
+        tasks = {task.payload["component_kind"]: task for task in first.tasks}
+
+        assert first.tasks_created == 2
+        assert second.tasks_created == 0
+        assert len(scans) == 2
+        assert len(second.tasks) == 2
+        assert await session.scalar(select(func.count(CollectionTask.id))) == 2
+        for scan in scans:
+            component = components[scan.mode.value]
+            task = tasks[scan.mode.value]
+            assert scan.scan_key == f"{plan.cohort_key}:{scan.mode.value}"
+            assert scan.snapshot_cohort_id == first.cohort.id
+            assert component.comment_scan_run_id == scan.id
+            assert task.comment_scan_run_id == scan.id
+            assert task.scan_slice_no == 0
+            assert task.scan_slice_key == f"{scan.id}:{scan.mode.value}:0"
+            assert task.idempotency_key == f"{plan.cohort_key}:{scan.mode.value}"
+            assert task.payload["start_page"] == scan.extra["start_page"]
+            assert task.payload["end_page"] == scan.extra["end_page"]
+            assert task.payload["target_pages"] == scan.target_pages
+
+        core = next(scan for scan in scans if scan.mode.value == "hot_core")
+        deep = next(scan for scan in scans if scan.mode.value == "hot_deep")
+        assert (core.extra["start_page"], core.extra["end_page"]) == (1, 3)
+        assert (deep.extra["start_page"], deep.extra["end_page"]) == (4, 20)
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_shadow_hot_components_create_plans_without_runs_or_tasks() -> None:
+    engine, session_factory = await _database()
+    now = datetime(2026, 7, 14, 6, 0, tzinfo=UTC)
+
+    async with session_factory() as session:
+        await _seed_graph(session, bvid="BV-HOT-SHADOW", now=now)
+        result = await SnapshotCohortRepository(session).materialize(
+            _hot_checkpoint_plan(now, bvid="BV-HOT-SHADOW"),
+            rollout_mode=CohortRolloutMode.SHADOW,
+            now=now,
+        )
+
+        assert {component.planned_pages for component in result.components} == {3, 17}
+        assert result.tasks_created == 0
+        assert await session.scalar(select(func.count(CommentScanRun.id))) == 0
+        assert await session.scalar(select(func.count(CollectionTask.id))) == 0
+        assert all(
+            component.comment_scan_run_id is None for component in result.components
         )
 
     await engine.dispose()

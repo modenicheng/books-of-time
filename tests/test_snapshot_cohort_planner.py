@@ -11,6 +11,7 @@ from books_of_time.db.models import (
     CollectionPolicyVersion,
     CollectionScheduleGap,
     CollectionTask,
+    CommentScanRun,
     KnownVideo,
     KnownVideoSource,
     SnapshotCohort,
@@ -19,12 +20,16 @@ from books_of_time.db.models import (
     VideoMetricSnapshot,
 )
 from books_of_time.domain.cohort_policy import (
+    CohortComponentStatus,
     CohortPolicy,
     CohortRolloutMode,
     CohortStatus,
+    CollectionTier,
 )
 from books_of_time.task_orchestrator.snapshot_cohort_planner import (
     SnapshotCohortPlanner,
+    _hot_component_plans,
+    _prefer_recovery_component_plan,
 )
 
 
@@ -96,6 +101,225 @@ async def _cohorts(session, bvid: str) -> list[SnapshotCohort]:
             .order_by(SnapshotCohort.scheduled_for, SnapshotCohort.id)
         )
     )
+
+
+@pytest.mark.parametrize(
+    ("tier", "routine_pages", "checkpoint_ranges"),
+    [
+        (CollectionTier.S, 3, (("hot_core", 1, 3), ("hot_deep", 4, 20))),
+        (CollectionTier.A, 2, (("hot_core", 1, 2), ("hot_deep", 3, 10))),
+        (CollectionTier.B, 1, (("hot_core", 1, 1), ("hot_deep", 2, 3))),
+        (CollectionTier.C, 1, (("hot_core", 1, 1),)),
+    ],
+)
+def test_hot_component_plan_matrix(
+    tier: CollectionTier,
+    routine_pages: int,
+    checkpoint_ranges: tuple[tuple[str, int, int], ...],
+) -> None:
+    policy = _policy(policy_version="cohort-default-v2")
+
+    def priority_for(kind: str) -> int:
+        return 101 if kind == "hot_core" else 100
+
+    routine = _hot_component_plans(
+        policy,
+        tier,
+        include_deep=False,
+        dormant=False,
+        status=CohortComponentStatus.PENDING,
+        priority_for=priority_for,
+    )
+    checkpoint = _hot_component_plans(
+        policy,
+        tier,
+        include_deep=True,
+        dormant=False,
+        status=CohortComponentStatus.PENDING,
+        priority_for=priority_for,
+    )
+
+    assert [(plan.component_kind, plan.planned_pages) for plan in routine] == [
+        ("hot_core", routine_pages)
+    ]
+    assert [
+        (
+            plan.component_kind,
+            plan.extra["start_page"],
+            plan.extra["end_page"],
+        )
+        for plan in checkpoint
+    ] == list(checkpoint_ranges)
+    for plan in (*routine, *checkpoint):
+        assert plan.extra == {
+            "scan_mode": plan.component_kind,
+            "start_page": plan.payload["start_page"],
+            "end_page": plan.payload["end_page"],
+            "target_pages": plan.planned_pages,
+            "max_pages_per_slice": 10,
+            "max_scan_seconds": 55,
+        }
+        assert plan.payload["page"] == plan.extra["start_page"]
+        assert plan.payload["page_limit"] == plan.planned_pages
+
+
+def test_dormant_hot_plan_is_one_core_page_and_no_deep() -> None:
+    plans = _hot_component_plans(
+        _policy(policy_version="cohort-default-v2"),
+        CollectionTier.S,
+        include_deep=True,
+        dormant=True,
+        status=CohortComponentStatus.PENDING,
+        priority_for=lambda _kind: 100,
+    )
+
+    assert len(plans) == 1
+    assert plans[0].component_kind == "hot_core"
+    assert plans[0].planned_pages == 1
+    assert plans[0].extra["start_page"] == 1
+    assert plans[0].extra["end_page"] == 1
+
+
+def test_recovery_prefers_larger_persisted_hot_range_without_recalculation() -> None:
+    policy = _policy(policy_version="cohort-default-v2")
+
+    def priority_for(_kind: str) -> int:
+        return 100
+
+    a_deep = _hot_component_plans(
+        policy,
+        CollectionTier.A,
+        include_deep=True,
+        dormant=False,
+        status=CohortComponentStatus.PENDING,
+        priority_for=priority_for,
+    )[1]
+    s_deep = _hot_component_plans(
+        policy,
+        CollectionTier.S,
+        include_deep=True,
+        dormant=False,
+        status=CohortComponentStatus.PENDING,
+        priority_for=priority_for,
+    )[1]
+
+    preferred = _prefer_recovery_component_plan(a_deep, s_deep)
+    assert preferred.extra["start_page"] == 4
+    assert preferred.extra["end_page"] == 20
+    assert preferred.planned_pages == 17
+
+
+@pytest.mark.asyncio
+async def test_first_active_s_adoption_plans_checkpoint_depth_in_shadow() -> None:
+    engine, session_factory = await _database()
+    now = datetime(2026, 7, 14, 4, 0, tzinfo=UTC)
+
+    async with session_factory() as session:
+        await _seed_video(
+            session,
+            bvid="BV-FIRST-S",
+            pubdate=now - timedelta(hours=2),
+            monitored_official=True,
+        )
+        await SnapshotCohortPlanner(
+            _policy(policy_version="cohort-default-v2")
+        ).plan_due(
+            session,
+            now=now,
+            rollout_mode=CohortRolloutMode.SHADOW,
+        )
+
+        cohort = (await _cohorts(session, "BV-FIRST-S"))[0]
+        components = {
+            component.component_kind: component
+            for component in await session.scalars(
+                select(SnapshotCohortComponent).where(
+                    SnapshotCohortComponent.cohort_id == cohort.id
+                )
+            )
+        }
+        assert components["hot_core"].planned_pages == 3
+        assert components["hot_core"].extra["end_page"] == 3
+        assert components["hot_deep"].planned_pages == 17
+        assert components["hot_deep"].extra["start_page"] == 4
+        assert components["hot_deep"].extra["end_page"] == 20
+        assert await session.scalar(select(func.count(CommentScanRun.id))) == 0
+        assert await session.scalar(select(func.count(CollectionTask.id))) == 0
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_existing_checkpoint_keeps_its_frozen_hot_tier_ranges() -> None:
+    engine, session_factory = await _database()
+    now = datetime(2026, 7, 14, 6, 0, tzinfo=UTC)
+    policy = _policy(policy_version="cohort-default-v2")
+
+    async with session_factory() as session:
+        await _seed_video(
+            session,
+            bvid="BV-FROZEN-HOT",
+            pubdate=now - timedelta(hours=6),
+        )
+        session.add(
+            VideoCollectionState(
+                bvid="BV-FROZEN-HOT",
+                desired_tier=CollectionTier.S.value,
+                effective_tier=CollectionTier.S.value,
+                candidate_downgrade_tier=None,
+                consecutive_downgrade_count=0,
+                pinned_tier=CollectionTier.S.value,
+                life_stage="active",
+                schedule_anchor_at=now - timedelta(hours=6),
+                next_due_at=now,
+                last_planned_at=None,
+                last_completed_cohort_at=None,
+                last_checkpoint_hours=None,
+                policy_version="cohort-default-v2",
+                extra={},
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        await session.flush()
+        planner = SnapshotCohortPlanner(policy)
+        await planner.plan_due(
+            session,
+            now=now,
+            rollout_mode=CohortRolloutMode.SHADOW,
+        )
+        state = await session.get(VideoCollectionState, "BV-FROZEN-HOT")
+        assert state is not None
+        state.pinned_tier = CollectionTier.C.value
+        state.desired_tier = CollectionTier.C.value
+        state.effective_tier = CollectionTier.C.value
+        await session.flush()
+
+        await planner.plan_due(
+            session,
+            now=now + timedelta(seconds=30),
+            rollout_mode=CohortRolloutMode.SHADOW,
+        )
+
+        checkpoint = next(
+            cohort
+            for cohort in await _cohorts(session, "BV-FROZEN-HOT")
+            if cohort.reason == "age_checkpoint"
+        )
+        components = {
+            component.component_kind: component
+            for component in await session.scalars(
+                select(SnapshotCohortComponent).where(
+                    SnapshotCohortComponent.cohort_id == checkpoint.id
+                )
+            )
+        }
+        assert checkpoint.effective_tier == CollectionTier.S.value
+        assert components["hot_core"].planned_pages == 3
+        assert components["hot_deep"].planned_pages == 17
+        assert components["hot_deep"].extra["end_page"] == 20
+
+    await engine.dispose()
 
 
 @pytest.mark.asyncio
