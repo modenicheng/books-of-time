@@ -157,6 +157,149 @@ async def test_task_repository_recovers_from_concurrent_idempotency_insert() -> 
 
 
 @pytest.mark.asyncio
+async def test_task_repository_reuses_terminal_task_with_same_scan_slice_key() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    now = datetime(2026, 7, 14, 4, 0, tzinfo=UTC)
+
+    async with session_factory() as session:
+        repository = CollectionTaskRepository(session)
+        first = await repository.enqueue(
+            kind=TaskKind.FETCH_HOT_COMMENTS,
+            target_type="video",
+            target_id="BV-SLICE",
+            priority=100,
+            payload={"page": 1},
+            not_before=now,
+            idempotency_key="scan:hot_core:active:0",
+            snapshot_cohort_id=11,
+            snapshot_cohort_component_id=22,
+            comment_scan_run_id=33,
+            scan_slice_no=0,
+            scan_slice_key="33:hot_core:0",
+        )
+        first.status = TaskStatus.SUCCEEDED
+        await session.commit()
+
+        second = await repository.enqueue(
+            kind=TaskKind.FETCH_HOT_COMMENTS,
+            target_type="video",
+            target_id="BV-SLICE",
+            priority=200,
+            payload={"page": 99},
+            not_before=now + timedelta(minutes=1),
+            idempotency_key="scan:hot_core:active:0",
+            snapshot_cohort_id=11,
+            snapshot_cohort_component_id=22,
+            comment_scan_run_id=33,
+            scan_slice_no=0,
+            scan_slice_key="33:hot_core:0",
+        )
+        tasks = list(await session.scalars(select(CollectionTask)))
+
+        assert second.id == first.id
+        assert len(tasks) == 1
+        assert second.status is TaskStatus.SUCCEEDED
+        assert second.payload == {"page": 1}
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"comment_scan_run_id": 34},
+        {"scan_slice_no": 1},
+        {"snapshot_cohort_component_id": 23},
+    ],
+)
+async def test_task_repository_rejects_scan_slice_owner_conflicts(overrides) -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    now = datetime(2026, 7, 14, 4, 0, tzinfo=UTC)
+    identity = {
+        "snapshot_cohort_id": 11,
+        "snapshot_cohort_component_id": 22,
+        "comment_scan_run_id": 33,
+        "scan_slice_no": 0,
+        "scan_slice_key": "33:hot_core:0",
+    }
+
+    async with session_factory() as session:
+        repository = CollectionTaskRepository(session)
+        await repository.enqueue(
+            kind=TaskKind.FETCH_HOT_COMMENTS,
+            target_type="video",
+            target_id="BV-SLICE",
+            priority=100,
+            payload={},
+            not_before=now,
+            **identity,
+        )
+
+        with pytest.raises(ValueError, match="scan slice key belongs"):
+            await repository.enqueue(
+                kind=TaskKind.FETCH_HOT_COMMENTS,
+                target_type="video",
+                target_id="BV-SLICE",
+                priority=100,
+                payload={},
+                not_before=now,
+                **{**identity, **overrides},
+            )
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_task_repository_recovers_from_concurrent_scan_slice_insert() -> None:
+    now = datetime(2026, 7, 14, 4, 0, tzinfo=UTC)
+    existing = CollectionTask(
+        id=42,
+        kind=TaskKind.FETCH_HOT_COMMENTS,
+        target_type="video",
+        target_id="BV-RACE",
+        idempotency_key="scan:hot_core:active:0",
+        priority=10,
+        payload={"winner": True},
+        not_before=now,
+        status=TaskStatus.SUCCEEDED,
+        snapshot_cohort_id=11,
+        snapshot_cohort_component_id=22,
+        comment_scan_run_id=33,
+        scan_slice_no=0,
+        scan_slice_key="33:hot_core:0",
+    )
+    session = _IdempotencyRaceSession(existing)
+
+    task = await CollectionTaskRepository(session).enqueue(
+        kind=TaskKind.FETCH_HOT_COMMENTS,
+        target_type="video",
+        target_id="BV-RACE",
+        priority=99,
+        payload={"winner": False},
+        not_before=now,
+        idempotency_key="scan:hot_core:active:0",
+        snapshot_cohort_id=11,
+        snapshot_cohort_component_id=22,
+        comment_scan_run_id=33,
+        scan_slice_no=0,
+        scan_slice_key="33:hot_core:0",
+    )
+
+    assert task is existing
+    assert session.scalar_calls == 2
+    assert session.nested_transactions == 1
+
+
+@pytest.mark.asyncio
 async def test_task_repository_persists_optional_cohort_links() -> None:
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as conn:

@@ -289,23 +289,35 @@ class CollectionTaskRepository:
         idempotency_key: str | None = None,
         snapshot_cohort_id: int | None = None,
         snapshot_cohort_component_id: int | None = None,
+        comment_scan_run_id: int | None = None,
+        scan_slice_no: int | None = None,
+        scan_slice_key: str | None = None,
     ) -> CollectionTask:
-        if idempotency_key is not None:
-            existing = await self.session.scalar(
-                select(CollectionTask)
-                .where(
-                    CollectionTask.idempotency_key == idempotency_key,
-                    CollectionTask.status.in_(
-                        (
-                            TaskStatus.PENDING,
-                            TaskStatus.RUNNING,
-                            TaskStatus.BACKOFF,
-                        )
-                    ),
+        self._validate_scan_slice_arguments(
+            comment_scan_run_id=comment_scan_run_id,
+            scan_slice_no=scan_slice_no,
+            scan_slice_key=scan_slice_key,
+        )
+        if scan_slice_key is not None:
+            existing = await self._find_scan_slice(
+                scan_slice_key,
+                skip_locked=True,
+            )
+            if existing is not None:
+                self._validate_scan_slice_owner(
+                    existing,
+                    snapshot_cohort_id=snapshot_cohort_id,
+                    snapshot_cohort_component_id=snapshot_cohort_component_id,
+                    comment_scan_run_id=comment_scan_run_id,
+                    scan_slice_no=scan_slice_no,
+                    scan_slice_key=scan_slice_key,
                 )
-                .order_by(CollectionTask.created_at.asc(), CollectionTask.id.asc())
-                .limit(1)
-                .with_for_update(skip_locked=True)
+                return existing
+
+        if scan_slice_key is None and idempotency_key is not None:
+            existing = await self._find_active_idempotency_task(
+                idempotency_key,
+                skip_locked=True,
             )
             if existing is not None:
                 self._validate_idempotency_owner(
@@ -328,8 +340,11 @@ class CollectionTaskRepository:
             status=TaskStatus.PENDING,
             snapshot_cohort_id=snapshot_cohort_id,
             snapshot_cohort_component_id=snapshot_cohort_component_id,
+            comment_scan_run_id=comment_scan_run_id,
+            scan_slice_no=scan_slice_no,
+            scan_slice_key=scan_slice_key,
         )
-        if idempotency_key is None:
+        if idempotency_key is None and scan_slice_key is None:
             self.session.add(task)
             await self.session.flush()
             return task
@@ -339,31 +354,124 @@ class CollectionTaskRepository:
                 self.session.add(task)
                 await self.session.flush()
         except IntegrityError:
-            existing = await self.session.scalar(
-                select(CollectionTask)
-                .where(
-                    CollectionTask.idempotency_key == idempotency_key,
-                    CollectionTask.status.in_(
-                        (
-                            TaskStatus.PENDING,
-                            TaskStatus.RUNNING,
-                            TaskStatus.BACKOFF,
-                        )
-                    ),
+            if scan_slice_key is not None:
+                existing = await self._find_scan_slice(
+                    scan_slice_key,
+                    skip_locked=False,
                 )
-                .order_by(CollectionTask.created_at.asc(), CollectionTask.id.asc())
-                .limit(1)
-                .with_for_update()
-            )
-            if existing is None:
-                raise
-            self._validate_idempotency_owner(
-                existing,
-                snapshot_cohort_id=snapshot_cohort_id,
-                snapshot_cohort_component_id=snapshot_cohort_component_id,
-            )
-            return existing
+                if existing is not None:
+                    self._validate_scan_slice_owner(
+                        existing,
+                        snapshot_cohort_id=snapshot_cohort_id,
+                        snapshot_cohort_component_id=snapshot_cohort_component_id,
+                        comment_scan_run_id=comment_scan_run_id,
+                        scan_slice_no=scan_slice_no,
+                        scan_slice_key=scan_slice_key,
+                    )
+                    return existing
+            if idempotency_key is not None:
+                existing = await self._find_active_idempotency_task(
+                    idempotency_key,
+                    skip_locked=False,
+                )
+                if existing is not None:
+                    self._validate_idempotency_owner(
+                        existing,
+                        snapshot_cohort_id=snapshot_cohort_id,
+                        snapshot_cohort_component_id=snapshot_cohort_component_id,
+                    )
+                    if scan_slice_key is not None:
+                        self._validate_scan_slice_owner(
+                            existing,
+                            snapshot_cohort_id=snapshot_cohort_id,
+                            snapshot_cohort_component_id=snapshot_cohort_component_id,
+                            comment_scan_run_id=comment_scan_run_id,
+                            scan_slice_no=scan_slice_no,
+                            scan_slice_key=scan_slice_key,
+                        )
+                    return existing
+            raise
         return task
+
+    async def _find_scan_slice(
+        self,
+        scan_slice_key: str,
+        *,
+        skip_locked: bool,
+    ) -> CollectionTask | None:
+        return await self.session.scalar(
+            select(CollectionTask)
+            .where(CollectionTask.scan_slice_key == scan_slice_key)
+            .with_for_update(skip_locked=skip_locked)
+        )
+
+    async def _find_active_idempotency_task(
+        self,
+        idempotency_key: str,
+        *,
+        skip_locked: bool,
+    ) -> CollectionTask | None:
+        return await self.session.scalar(
+            select(CollectionTask)
+            .where(
+                CollectionTask.idempotency_key == idempotency_key,
+                CollectionTask.status.in_(
+                    (
+                        TaskStatus.PENDING,
+                        TaskStatus.RUNNING,
+                        TaskStatus.BACKOFF,
+                    )
+                ),
+            )
+            .order_by(CollectionTask.created_at.asc(), CollectionTask.id.asc())
+            .limit(1)
+            .with_for_update(skip_locked=skip_locked)
+        )
+
+    @staticmethod
+    def _validate_scan_slice_arguments(
+        *,
+        comment_scan_run_id: int | None,
+        scan_slice_no: int | None,
+        scan_slice_key: str | None,
+    ) -> None:
+        if scan_slice_no is not None and scan_slice_no < 0:
+            raise ValueError("scan_slice_no must be non-negative")
+        if scan_slice_key is None:
+            return
+        if not scan_slice_key.strip():
+            raise ValueError("scan_slice_key must not be empty")
+        if comment_scan_run_id is None or scan_slice_no is None:
+            raise ValueError(
+                "scan_slice_key requires comment_scan_run_id and scan_slice_no"
+            )
+
+    @staticmethod
+    def _validate_scan_slice_owner(
+        task: CollectionTask,
+        *,
+        snapshot_cohort_id: int | None,
+        snapshot_cohort_component_id: int | None,
+        comment_scan_run_id: int | None,
+        scan_slice_no: int | None,
+        scan_slice_key: str,
+    ) -> None:
+        stored = (
+            task.snapshot_cohort_id,
+            task.snapshot_cohort_component_id,
+            task.comment_scan_run_id,
+            task.scan_slice_no,
+            task.scan_slice_key,
+        )
+        expected = (
+            snapshot_cohort_id,
+            snapshot_cohort_component_id,
+            comment_scan_run_id,
+            scan_slice_no,
+            scan_slice_key,
+        )
+        if stored != expected:
+            raise ValueError("Task scan slice key belongs to another scan or component")
 
     @staticmethod
     def _validate_idempotency_owner(

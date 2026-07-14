@@ -216,7 +216,7 @@ git commit -m "feat(scans): add persistent comment scan runs"
 - Produces `mark_running`, `record_page_requested`, `record_page_succeeded`, `mark_paused`, `mark_complete`, and `mark_failed` methods that flush but never commit.
 - Extends `CollectionTaskRepository.enqueue(..., comment_scan_run_id=None, scan_slice_no=None, scan_slice_key=None)`.
 
-- [ ] **Step 1: Write failing repository tests**
+- [x] **Step 1: Write failing repository tests**
 
 Cover these cases with real SQLite sessions:
 
@@ -229,7 +229,7 @@ Cover these cases with real SQLite sessions:
 7. An injected unique-key race is recovered with a savepoint and reload, preserving the caller transaction.
 8. When `BOT_TEST_POSTGRESQL_URL` is set, two independent PostgreSQL sessions racing on one slice key resolve to one row inside an isolated schema; otherwise this integration test skips with a clear reason.
 
-- [ ] **Step 2: Run repository tests and verify RED**
+- [x] **Step 2: Run repository tests and verify RED**
 
 ```powershell
 uv run pytest tests/test_comment_scan_repositories.py tests/test_task_queue.py -q
@@ -237,15 +237,15 @@ uv run pytest tests/test_comment_scan_repositories.py tests/test_task_queue.py -
 
 Expected: repository imports and enqueue parameters fail.
 
-- [ ] **Step 3: Implement scan-run state methods**
+- [x] **Step 3: Implement scan-run state methods**
 
 `materialize_hot()` uses a savepoint around insert and reloads the unique winner. Identity validation compares BVID, cohort, mode, target pages, start page, end page, and policy version. Counter methods reject regressions, page numbers outside `[start_page, end_page]`, and updates after terminal status.
 
-- [ ] **Step 4: Implement all-status slice enqueue**
+- [x] **Step 4: Implement all-status slice enqueue**
 
 When `scan_slice_key` is non-NULL, require `comment_scan_run_id` and `scan_slice_no`. Query it across every task status before insert. On `IntegrityError`, reload by `scan_slice_key` first, then fall back to active `idempotency_key` recovery only when no slice winner exists. Validate scan/cohort ownership before returning an existing task.
 
-- [ ] **Step 5: Run focused repository and queue tests**
+- [x] **Step 5: Run focused repository and queue tests**
 
 ```powershell
 uv run pytest tests/test_comment_scan_repositories.py tests/test_task_queue.py -q
@@ -262,7 +262,7 @@ uv run pytest tests/test_hot_scan_postgresql.py -q
 Remove-Item Env:BOT_TEST_POSTGRESQL_URL
 ```
 
-- [ ] **Step 6: Commit the repository unit**
+- [x] **Step 6: Commit the repository unit**
 
 ```powershell
 git add books_of_time/db/comment_scan_repositories.py books_of_time/db/repositories.py tests/test_comment_scan_repositories.py tests/test_hot_scan_postgresql.py tests/test_task_queue.py
