@@ -111,7 +111,7 @@ scheduler 启动时 bootstrap 以下稳定 job：
 | `uid-discovery` | `scheduler.discovery_scan_seconds`，默认 60 秒 | 仅在 10:00（含）到 22:00（不含）为静态/event UID 生成 discovery task；每个重点时点生成 T+0/T+30 两次高优先级检查 |
 | `video-snapshot-sweep` | 60 秒 | 全天为到期 known video 生成指标 task |
 | `daily-terminal-snapshot` | 60 秒检查 | 22:00 后生成额外的当日日终快照，不停止常规 sweep |
-| `snapshot-cohort-planning` | `snapshot_cohorts.planning_seconds`，默认 30 秒 | 仅在 `snapshot_cohorts.enabled=true` 时注册；C3 只写 shadow planning 证据，不创建 task |
+| `snapshot-cohort-planning` | `snapshot_cohorts.planning_seconds`，默认 30 秒 | 仅在 `snapshot_cohorts.enabled=true` 时注册；C4 写入含热门页范围的 shadow planning 证据，不创建 scan/task |
 | `operational-alert-evaluation` | 默认 60 秒 | 评估持久告警，可关闭 |
 | `account-cookie-refresh:<id>` | 默认 21600 秒 | 校验/刷新 Cookie，可关闭 |
 
@@ -122,12 +122,12 @@ job 使用 PostgreSQL lease，失败后默认 300 秒重试。成功时按照原
 ```yaml
 snapshot_cohorts:
   enabled: true
-  policy_version: cohort-default-v1
+  policy_version: cohort-default-v2
   rollout_mode: shadow
   planning_seconds: 30
 ```
 
-重启 scheduler 后检查 `snapshot-cohort-planning` 连续成功，并确认 `snapshot_cohorts.status='shadow_planned'` 持续增加、`collection_tasks.snapshot_cohort_id` 没有新增非 NULL 行。C3 明确拒绝 `rollout_mode: live`；不要修改代码绕过检查，因为旧 sweep/collector owner 尚未迁移，会产生重复请求。
+重启 scheduler 后检查 `snapshot-cohort-planning` 连续成功，并确认 `snapshot_cohorts.status='shadow_planned'` 持续增加、`comment_scan_runs` 没有新增行、`collection_tasks.snapshot_cohort_id` 没有新增非 NULL 行。C4 明确拒绝 `rollout_mode: live`；不要修改代码绕过检查，因为旧 sweep/外部评论调度 owner 尚未迁移，会产生重复请求。
 
 planner 使用 UTC 30 秒 bucket 和持久化 `video_collection_states`，重启不会重置 pubdate anchor、tier、checkpoint 或下一到期时间。停机期间漏过的普通 routine 被压缩为 `collection_schedule_gaps`，逾期 checkpoint 保留 missed/not-applicable 证据并生成一个当前 recovery，而不是瞬间补发整段历史请求。有限候选批次先接管尚无 state 的视频，再按最早 `next_due_at` 处理已接管视频，避免长期服务中较老视频永久占满批次。
 
@@ -203,6 +203,9 @@ SELECT COUNT(*) AS executable_cohort_tasks
 FROM collection_tasks
 WHERE snapshot_cohort_id IS NOT NULL;
 
+SELECT COUNT(*) AS executable_comment_scans
+FROM comment_scan_runs;
+
 SELECT bvid, next_due_at, last_planned_at, last_checkpoint_hours,
        desired_tier, effective_tier, life_stage, policy_version
 FROM video_collection_states
@@ -210,7 +213,7 @@ ORDER BY last_planned_at DESC NULLS LAST
 LIMIT 50;
 ```
 
-在纯 C3 shadow 运行中，第二个查询应为 0；若不为 0，先区分测试/手工底层 live 数据，再确认没有绕过 service 配置边界。不要删除 shadow 历史来“清零”。
+在纯 C4 shadow 运行中，第二、三个计数都应为 0；若不为 0，先区分测试/手工底层 live 数据，再确认没有绕过 service 配置边界。不要删除 shadow 历史来“清零”。component 的 `extra` 应能看到 `hot_core` / `hot_deep` 固定页范围：routine S/A/B/C 为 3/2/1/1 页，checkpoint 和首次 active 采纳总量为 20/10/3/1 页，deep 只保存扣除 core 后的余量。
 
 ## 6. Comment Collection Scheduling
 
@@ -224,6 +227,29 @@ uv run python main.py collect-latest-comments <BVID> --max-scan-seconds 55
 这些命令只执行数据库 enqueue，适合 systemd timer、cron、Windows Task Scheduler 或现有编排平台；不要从 timer 启动第二个 `worker loop`。常驻 worker 全天领取这些任务，评论调度器本身不应增加任何 10:00 到 22:00 的窗口判断。
 
 活动 idempotency key 会吸收重叠调用：上次同目标任务仍 pending/running 时，不会再插入第二条活动任务。任务结束后，下一次 timer 可创建新快照。
+
+C4 的 scan-backed hot task 目前只在底层 live 验收中启用，service 仍保持 shadow。C7 迁移所有权后，一个逻辑 `hot_core` / `hot_deep` scan 会按最多 10 页、最多 55 秒拆成编号 slice。每次成功页立即推进 `comment_scan_runs.next_page_number`；请求失败后同一 task 重试该页，服务重启后也从该字段继续。下一 slice 的插入和 scan 暂停状态在同一 worker 事务提交，`scan_slice_key` 对所有 task 状态唯一，因此不要手工复制、删除或改号来“恢复”续片。
+
+届时可用以下只读查询核对逻辑扫描，而不是只看最后一个 task：
+
+```sql
+SELECT id, bvid, mode, status, outcome,
+       target_pages, next_page_number,
+       pages_requested, pages_succeeded,
+       items_observed, raw_payloads_saved, slice_count,
+       last_error_type, updated_at
+FROM comment_scan_runs
+ORDER BY updated_at DESC
+LIMIT 100;
+
+SELECT comment_scan_run_id, scan_slice_no, scan_slice_key,
+       status, retry_count, not_before, lease_owner, lease_until
+FROM collection_tasks
+WHERE comment_scan_run_id IS NOT NULL
+ORDER BY comment_scan_run_id, scan_slice_no;
+```
+
+`paused/time_slice_yield` 是正常的非终态；`complete/server_end` 表示平台明确末页或成功空页，末页仍计入 requested/succeeded；`failed` 与 `corrupted` 才需要结合 task、coverage、HTTP attempt 和 raw 检查。若 scan 为 running/paused 且没有可继续的 pending/running/backoff task，不要直接改数据库进度，应先保留现场并按故障处理。PostgreSQL 支持多 worker 竞争和全局唯一键；SQLite 没有足够的行锁语义，只允许单进程开发与确定性测试。
 
 建议按研究优先级设频率：
 

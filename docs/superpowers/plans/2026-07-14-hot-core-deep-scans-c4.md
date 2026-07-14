@@ -538,11 +538,11 @@ git commit -m "feat(cohorts): track hot scan completion across slices"
 - Documents page targets, first-adoption/checkpoint behavior, numbered slices, scan statuses/outcomes, server-end semantics, evidence links, and C4/C7 ownership boundary.
 - Marks only C4 complete; C5-C9 remain unchecked.
 
-- [ ] **Step 1: Run the opt-in PostgreSQL race test**
+- [x] **Step 1: Run the opt-in PostgreSQL race test**
 
 When `BOT_TEST_POSTGRESQL_URL` is set, the Task 3 integration test creates an isolated schema, runs revision head, and uses two independent sessions to enqueue the same `scan_slice_key`. Both callers must resolve to one task row and the surrounding transaction must remain usable. A skip is acceptable only when the environment variable is absent; the standard SQLite suite remains mandatory.
 
-- [ ] **Step 2: Run migration and focused C4 verification**
+- [x] **Step 2: Run migration and focused C4 verification**
 
 ```powershell
 uv run pytest tests/test_schema_migrations.py::test_hot_comment_scan_revision_round_trip -q
@@ -557,7 +557,7 @@ uv run pytest tests/test_hot_scan_postgresql.py -q
 Remove-Item Env:BOT_TEST_POSTGRESQL_URL
 ```
 
-- [ ] **Step 3: Document the complete operator and data flow**
+- [x] **Step 3: Document the complete operator and data flow**
 
 Document:
 
@@ -574,11 +574,11 @@ shadow creates plans only and C7 still owns live activation
 PostgreSQL multi-worker expectations and SQLite single-process limit
 ```
 
-- [ ] **Step 4: Perform a P0/P1 audit**
+- [x] **Step 4: Perform a P0/P1 audit**
 
 Review duplicate next-slice prevention, task retry after partial page success, scan counter monotonicity, server-end off-by-one behavior, first-adoption deep planning, checkpoint total versus remainder, recovery frozen ranges, shadow no-run/no-task enforcement, terminal worker failure, and scan evidence propagation. Every confirmed P0/P1 bug receives a failing regression test, a separate code commit, and a numbered `docs/fix/2026-07-14_<no>.md` record.
 
-- [ ] **Step 5: Run complete verification**
+- [x] **Step 5: Run complete verification**
 
 ```powershell
 uv run pytest
@@ -589,11 +589,11 @@ git diff --check
 
 Expected: full suite passes, Ruff is clean, every file is formatted, and no whitespace error exists.
 
-- [ ] **Step 6: Mark C4 complete and C5 next**
+- [x] **Step 6: Mark C4 complete and C5 next**
 
 Change C4 from `[ ]` to `[x]`, leave C5-C9 unchecked, and update Near-term Sprint to identify C5 Latest Scan Runs And Automatic Baseline as the next stage. Do not mark the overall Collection-First Snapshot Cohorts mainline complete.
 
-- [ ] **Step 7: Commit documentation and completion state**
+- [x] **Step 7: Commit documentation and completion state**
 
 ```powershell
 git add docs/CONFIGURATION.md docs/COLLECTION.md docs/DATA_MODEL.md docs/OPERATIONS.md docs/TODO.md docs/superpowers/plans/2026-07-14-hot-core-deep-scans-c4.md

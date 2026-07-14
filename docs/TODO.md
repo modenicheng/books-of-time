@@ -198,7 +198,7 @@
 - [x] **C1 Evidence Foundations**：补齐评论平台时间与稳定公开作者字段、视频多来源/游戏归属、无响应 HTTP attempt 证据及可回溯迁移。
 - [x] **C2 Cohort State And Policy**：建立 policy version、video collection state、snapshot cohort/component、schedule gap 模型和纯函数时间/评级/生命周期策略。
 - [x] **C3 Persistent Planner And Shadow Mode**：增加 30 秒持久化 cohort planner、幂等组件任务、checkpoint 恢复和 shadow planning，不与旧 sweep 重复调度。
-- [ ] **C4 Hot Core And Deep Scans**：实现 S/A/B/C 常规多页热门采集、checkpoint 20/10/3/1 页目标、55 秒编号切片和 all-status slice 幂等键。
+- [x] **C4 Hot Core And Deep Scans**：实现 S/A/B/C routine 3/2/1/1 页、checkpoint/首次 active 采纳 20/10/3/1 页总目标、`hot_core` / `hot_deep` 固定范围、10 页/55 秒编号切片、持久恢复、all-status slice 幂等键和 scan 证据链；service 仍保持 shadow-only，live 所有权留给 C7。
 - [ ] **C5 Latest Scan Runs And Automatic Baseline**：建立 scan run、CAS frontier、多锚点 baseline tail -> linked head sweep、增量 continuation 和单 BVID 活跃扫描约束。
 - [ ] **C6 Visibility And Reconciliation**：建立 visibility watchlist/check、10/30 分钟高优先级复核、两次独立证据确认删除及 100 页内全量/超限分段 reconciliation。
 - [ ] **C7 Capacity, Fairness And Storage Gates**：实现 15 分钟容量预测、游戏间 deficit round-robin、显式 miss/gap、raw storage 请求前熔断和新旧调度所有权迁移。
@@ -296,7 +296,7 @@
 2. [x] P2 Event Archive：事件目标池调度、事件级覆盖率和基础时间线。
 3. [x] 补全 Important Replies 的点赞增长、争议关键词和最近出现优先级。
 4. [x] 在可用 Docker daemon 上执行镜像 build，并完成 Windows Ctrl+C、PostgreSQL service run 和容器连接宿主机 PostgreSQL 环境烟测。
-5. [~] P1 Collection-First Snapshot Cohorts：C1-C3 已完成，下一阶段为 C4 Hot Core And Deep Scans，随后继续按 C5-C9 分阶段验收。
+5. [~] P1 Collection-First Snapshot Cohorts：C1-C4 已完成，下一阶段为 C5 Latest Scan Runs And Automatic Baseline，随后继续按 C6-C9 分阶段验收。
 
 ## Completion Audit Follow-up
 
