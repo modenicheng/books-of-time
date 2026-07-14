@@ -331,6 +331,38 @@ async def test_overdue_checkpoints_collapse_into_idempotent_latest_recovery() ->
 
 
 @pytest.mark.asyncio
+async def test_new_recovery_coalesces_same_cycle_current_routine() -> None:
+    engine, session_factory = await _database()
+    now = datetime(2026, 7, 14, 7, 0, 1, tzinfo=UTC)
+    pubdate = now - timedelta(hours=7, seconds=1)
+
+    async with session_factory() as session:
+        await _seed_video(session, bvid="BV-RECOVERY-ROUTINE", pubdate=pubdate)
+        summary = await SnapshotCohortPlanner(_policy(rollout_mode="live")).plan_due(
+            session,
+            now=now,
+            rollout_mode=CohortRolloutMode.LIVE,
+        )
+
+        cohorts = await _cohorts(session, "BV-RECOVERY-ROUTINE")
+        tasks = list(await session.scalars(select(CollectionTask)))
+        assert summary.recovery_cohorts_created == 1
+        assert summary.routine_cohorts_created == 0
+        assert {cohort.reason for cohort in cohorts} == {
+            "age_checkpoint",
+            "recovery",
+        }
+        assert len(tasks) == 3
+        assert {task.payload["component_kind"] for task in tasks} == {
+            "video_metrics",
+            "hot_core",
+            "latest_reconciliation",
+        }
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_live_pending_checkpoint_expires_as_capacity_miss_before_recovery() -> (
     None
 ):

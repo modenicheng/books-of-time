@@ -417,6 +417,7 @@ class SnapshotCohortPlanner:
                 recovery_deadline = existing_recovery.deadline
                 recovery_desired = CollectionTier(existing_recovery.desired_tier)
                 recovery_effective = CollectionTier(existing_recovery.effective_tier)
+            recovery_coalesces_routine = recovery_scheduled_for == current_bucket
             recovery_plan = SnapshotCohortPlan(
                 cohort_key=recovery_key,
                 bvid=video.bvid,
@@ -429,7 +430,10 @@ class SnapshotCohortPlanner:
                 deadline=recovery_deadline,
                 status=CohortStatus.PLANNED,
                 status_reason="checkpoint_recovery",
-                extra={"latest_overdue_hours": latest_overdue_hours},
+                extra={
+                    "latest_overdue_hours": latest_overdue_hours,
+                    "coalesced_routine_bucket": recovery_coalesces_routine,
+                },
                 components=tuple(
                     _component_plan(
                         kind,
@@ -446,6 +450,7 @@ class SnapshotCohortPlanner:
             )
             _accumulate_result(totals, result)
             totals["recovery_cohorts_created"] += int(result.cohort_created)
+            coalesced_routine = coalesced_routine or recovery_coalesces_routine
 
         routine_due = state.next_due_at is None or state.next_due_at <= now
         next_due_at = state.next_due_at
