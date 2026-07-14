@@ -516,6 +516,8 @@ class LatestCommentCollector:
             not_before=datetime.now(UTC),
             budget_cost=task.budget_cost,
             max_retries=task.max_retries,
+            snapshot_cohort_id=task.snapshot_cohort_id,
+            snapshot_cohort_component_id=task.snapshot_cohort_component_id,
             idempotency_key=(
                 f"{TaskKind.FETCH_LATEST_COMMENTS.value}:"
                 f"{task.target_type}:{task.target_id}:latest_followup"

@@ -214,6 +214,45 @@ async def build_worker_with_task(
 
 
 @pytest.mark.asyncio
+async def test_latest_followup_preserves_cohort_component_links(tmp_path) -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    now = datetime(2026, 7, 14, 4, 0, tzinfo=UTC)
+
+    async with session_factory() as session:
+        task = await CollectionTaskRepository(session).enqueue(
+            kind=TaskKind.FETCH_LATEST_COMMENTS,
+            target_type="video",
+            target_id="BV-COHORT-FOLLOWUP",
+            priority=100,
+            payload={"bvid": "BV-COHORT-FOLLOWUP", "mode": "latest"},
+            not_before=now,
+            snapshot_cohort_id=11,
+            snapshot_cohort_component_id=22,
+        )
+        collector = LatestCommentCollector(
+            client=FakeLatestClient({}),
+            raw_store=RawPayloadFileStore(tmp_path),
+            run_id="cohort-followup",
+        )
+
+        await collector._enqueue_followup(session, task)
+        tasks = list(
+            await session.scalars(
+                select(CollectionTask).order_by(CollectionTask.id.asc())
+            )
+        )
+
+        assert len(tasks) == 2
+        assert tasks[1].snapshot_cohort_id == 11
+        assert tasks[1].snapshot_cohort_component_id == 22
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_baseline_pauses_at_time_budget_and_enqueues_followup(tmp_path) -> None:
     client = FakeLatestClient(
         {
