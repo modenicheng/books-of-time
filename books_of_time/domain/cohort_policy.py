@@ -162,6 +162,22 @@ class CohortPolicy:
             section.get("tier_policy", {}),
             "snapshot_cohorts.tier_policy",
         )
+        unknown_tier_policy_keys = _unknown_keys(
+            tier_policy,
+            {
+                "official_s_age_hours",
+                "reassess_after_24h_minutes",
+                "hot_turnover_confirmations",
+                "s",
+                "a",
+                "b",
+            },
+        )
+        if unknown_tier_policy_keys:
+            raise ValueError(
+                "snapshot_cohorts.tier_policy has unknown keys: "
+                + ", ".join(unknown_tier_policy_keys)
+            )
         official_s_age = timedelta(
             hours=_positive_int(
                 tier_policy,
@@ -559,6 +575,10 @@ def _mapping(value: object, path: str) -> Mapping[str, Any]:
     return value
 
 
+def _unknown_keys(values: Mapping[str, Any], allowed: set[str]) -> list[str]:
+    return sorted(str(key) for key in values if key not in allowed)
+
+
 def _positive_int(
     mapping: Mapping[str, Any],
     key: str,
@@ -748,6 +768,15 @@ def _clock_time(value: object, boundary: str) -> time:
 
 def _tier_intervals(value: object) -> dict[CollectionTier, TierInterval]:
     intervals = _mapping(value, "snapshot_cohorts.tier_intervals_minutes")
+    unknown_tier_keys = _unknown_keys(
+        intervals,
+        {tier.value for tier in _TIER_INTERVAL_DEFAULTS},
+    )
+    if unknown_tier_keys:
+        raise ValueError(
+            "snapshot_cohorts.tier_intervals_minutes has unknown tier keys: "
+            + ", ".join(unknown_tier_keys)
+        )
     result: dict[CollectionTier, TierInterval] = {}
     for tier, (active_default, normal_default) in _TIER_INTERVAL_DEFAULTS.items():
         tier_values = _mapping(

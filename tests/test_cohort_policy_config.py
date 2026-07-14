@@ -115,6 +115,14 @@ def test_cohort_policy_accepts_partial_overrides() -> None:
             "snapshot_cohorts.tier_intervals_minutes.b.active must not exceed normal",
         ),
         (
+            {"tier_intervals_minutes": {"invalid": {"active": 1, "normal": 1}}},
+            "snapshot_cohorts.tier_intervals_minutes has unknown tier keys: invalid",
+        ),
+        (
+            {"tier_policy": {"invalid": {"view_growth_per_hour": 1}}},
+            "snapshot_cohorts.tier_policy has unknown keys: invalid",
+        ),
+        (
             {"tier_policy": {"s": {"view_growth_per_hour": 1000}}},
             "tier view growth thresholds must descend from s to a to b",
         ),
