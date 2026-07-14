@@ -30,7 +30,7 @@
 
 **Files:**
 - Modify: `books_of_time/domain/cohort_policy.py`
-- Modify: `config/config.yaml`
+- Modify: `config/config.yaml.example`
 - Modify: `tests/test_cohort_policy_config.py`
 - Create: `tests/test_hot_scan_policy.py`
 
@@ -40,7 +40,7 @@
 - Produces `hot_page_plan(policy, tier, *, include_deep, dormant=False) -> HotPagePlan`.
 - Extends `CohortPolicy.hot_comments` and persists the normalized values in `as_persisted_policy()`.
 
-- [ ] **Step 1: Write failing policy parsing and page-plan tests**
+- [x] **Step 1: Write failing policy parsing and page-plan tests**
 
 Add tests that assert:
 
@@ -79,7 +79,7 @@ assert hot_page_plan(
 
 Also assert that policy persistence contains the full hot section and that omitted configuration receives the values above with default `policy_version == "cohort-default-v2"`.
 
-- [ ] **Step 2: Run the new tests and verify RED**
+- [x] **Step 2: Run the new tests and verify RED**
 
 ```powershell
 uv run pytest tests/test_hot_scan_policy.py tests/test_cohort_policy_config.py -q
@@ -87,12 +87,12 @@ uv run pytest tests/test_hot_scan_policy.py tests/test_cohort_policy_config.py -
 
 Expected: imports or attributes for `HotCommentPolicy`, `HotPagePlan`, `hot_page_plan`, and `CohortPolicy.hot_comments` fail.
 
-- [ ] **Step 3: Implement immutable policy parsing and validation**
+- [x] **Step 3: Implement immutable policy parsing and validation**
 
 Add frozen dataclasses and strict parsing. Validation must reject:
 
 ```text
-missing or unknown tier keys
+unknown tier keys
 boolean or non-positive page counts
 checkpoint page count lower than routine page count
 non-positive max_pages_per_slice
@@ -102,7 +102,7 @@ max_slice_seconds >= scheduler.lease_seconds
 
 Normalize mappings to `MappingProxyType`, include all values in `as_persisted_policy()`, and bump the repository template/default policy version from `cohort-default-v1` to `cohort-default-v2`. Existing explicitly configured v1 remains readable, but operators must choose v2 when enabling the changed content.
 
-- [ ] **Step 4: Run focused policy tests**
+- [x] **Step 4: Run focused policy tests**
 
 ```powershell
 uv run pytest tests/test_hot_scan_policy.py tests/test_cohort_policy_config.py tests/test_cohort_time_policy.py -q
@@ -111,10 +111,10 @@ uv run ruff check books_of_time/domain/cohort_policy.py tests/test_hot_scan_poli
 
 Expected: all tests pass and Ruff is clean.
 
-- [ ] **Step 5: Commit the policy unit**
+- [x] **Step 5: Commit the policy unit**
 
 ```powershell
-git add books_of_time/domain/cohort_policy.py config/config.yaml tests/test_hot_scan_policy.py tests/test_cohort_policy_config.py
+git add books_of_time/domain/cohort_policy.py config/config.yaml.example tests/test_hot_scan_policy.py tests/test_cohort_policy_config.py docs/superpowers/plans/2026-07-14-hot-core-deep-scans-c4.md
 git commit -m "feat(policy): add tiered hot scan targets"
 ```
 

@@ -84,6 +84,23 @@ class LifecyclePolicy:
 
 
 @dataclass(frozen=True)
+class HotCommentPolicy:
+    routine_pages: Mapping[CollectionTier, int]
+    checkpoint_pages: Mapping[CollectionTier, int]
+    max_pages_per_slice: int
+    max_slice_seconds: int
+
+
+@dataclass(frozen=True)
+class HotPagePlan:
+    core_start_page: int
+    core_pages: int
+    deep_start_page: int
+    deep_pages: int
+    total_pages: int
+
+
+@dataclass(frozen=True)
 class TierSignals:
     monitored_official: bool = False
     publish_age: timedelta | None = None
@@ -126,6 +143,7 @@ class CohortPolicy:
     hot_turnover_confirmations: int
     reassessment_interval: timedelta
     tier_thresholds: Mapping[CollectionTier, TierThreshold]
+    hot_comments: HotCommentPolicy
     lifecycle: LifecyclePolicy
     activity_windows: tuple[ActivityWindow, ...]
     tier_intervals: Mapping[CollectionTier, TierInterval]
@@ -139,7 +157,7 @@ class CohortPolicy:
         if not isinstance(enabled, bool):
             raise ValueError("snapshot_cohorts.enabled must be a boolean")
 
-        policy_version_value = section.get("policy_version", "cohort-default-v1")
+        policy_version_value = section.get("policy_version", "cohort-default-v2")
         if (
             not isinstance(policy_version_value, str)
             or not policy_version_value.strip()
@@ -226,6 +244,17 @@ class CohortPolicy:
             )
         )
         tier_thresholds = _tier_thresholds(tier_policy)
+        scheduler = _mapping(root.get("scheduler", {}), "scheduler")
+        lease_seconds = _positive_int(
+            scheduler,
+            "lease_seconds",
+            120,
+            "scheduler.lease_seconds",
+        )
+        hot_comments = _hot_comment_policy(
+            section.get("hot_comments", {}),
+            lease_seconds=lease_seconds,
+        )
         lifecycle = _lifecycle(section.get("lifecycle", {}))
         activity_windows = _activity_windows(section.get("activity_windows", {}))
         tier_intervals = _tier_intervals(section.get("tier_intervals_minutes", {}))
@@ -243,6 +272,7 @@ class CohortPolicy:
             hot_turnover_confirmations=hot_turnover_confirmations,
             reassessment_interval=reassessment_interval,
             tier_thresholds=MappingProxyType(tier_thresholds),
+            hot_comments=hot_comments,
             lifecycle=lifecycle,
             activity_windows=activity_windows,
             tier_intervals=MappingProxyType(tier_intervals),
@@ -282,6 +312,18 @@ class CohortPolicy:
                     for tier, threshold in self.tier_thresholds.items()
                 },
             },
+            "hot_comments": {
+                "routine_pages": {
+                    tier.value: pages
+                    for tier, pages in self.hot_comments.routine_pages.items()
+                },
+                "checkpoint_pages": {
+                    tier.value: pages
+                    for tier, pages in self.hot_comments.checkpoint_pages.items()
+                },
+                "max_pages_per_slice": self.hot_comments.max_pages_per_slice,
+                "max_slice_seconds": self.hot_comments.max_slice_seconds,
+            },
             "lifecycle": {
                 "dormant_after_days": int(
                     self.lifecycle.dormant_after.total_seconds() // 86400
@@ -314,6 +356,28 @@ class CohortPolicy:
                 for tier, interval in self.tier_intervals.items()
             },
         }
+
+
+def hot_page_plan(
+    policy: CohortPolicy,
+    tier: CollectionTier,
+    *,
+    include_deep: bool,
+    dormant: bool = False,
+) -> HotPagePlan:
+    core_pages = 1 if dormant else policy.hot_comments.routine_pages[tier]
+    total_pages = (
+        core_pages
+        if dormant or not include_deep
+        else policy.hot_comments.checkpoint_pages[tier]
+    )
+    return HotPagePlan(
+        core_start_page=1,
+        core_pages=core_pages,
+        deep_start_page=core_pages + 1,
+        deep_pages=total_pages - core_pages,
+        total_pages=total_pages,
+    )
 
 
 def is_activity_window(now: datetime, policy: CohortPolicy) -> bool:
@@ -596,6 +660,20 @@ _TIER_INTERVAL_DEFAULTS = {
     CollectionTier.A: (10, 30),
     CollectionTier.B: (30, 60),
     CollectionTier.C: (60, 120),
+}
+
+_HOT_ROUTINE_PAGE_DEFAULTS = {
+    CollectionTier.S: 3,
+    CollectionTier.A: 2,
+    CollectionTier.B: 1,
+    CollectionTier.C: 1,
+}
+
+_HOT_CHECKPOINT_PAGE_DEFAULTS = {
+    CollectionTier.S: 20,
+    CollectionTier.A: 10,
+    CollectionTier.B: 3,
+    CollectionTier.C: 1,
 }
 
 _TIER_RANK = {
@@ -907,3 +985,89 @@ def _tier_intervals(value: object) -> dict[CollectionTier, TierInterval]:
             normal=timedelta(minutes=normal),
         )
     return result
+
+
+def _hot_comment_policy(
+    value: object,
+    *,
+    lease_seconds: int,
+) -> HotCommentPolicy:
+    hot_comments = _mapping(value, "snapshot_cohorts.hot_comments")
+    unknown_keys = _unknown_keys(
+        hot_comments,
+        {
+            "routine_pages",
+            "checkpoint_pages",
+            "max_pages_per_slice",
+            "max_slice_seconds",
+        },
+    )
+    if unknown_keys:
+        raise ValueError(
+            "snapshot_cohorts.hot_comments has unknown keys: " + ", ".join(unknown_keys)
+        )
+
+    routine_pages = _tier_page_counts(
+        hot_comments.get("routine_pages", {}),
+        path="snapshot_cohorts.hot_comments.routine_pages",
+        defaults=_HOT_ROUTINE_PAGE_DEFAULTS,
+    )
+    checkpoint_pages = _tier_page_counts(
+        hot_comments.get("checkpoint_pages", {}),
+        path="snapshot_cohorts.hot_comments.checkpoint_pages",
+        defaults=_HOT_CHECKPOINT_PAGE_DEFAULTS,
+    )
+    for tier in CollectionTier:
+        if checkpoint_pages[tier] < routine_pages[tier]:
+            raise ValueError(
+                "snapshot_cohorts.hot_comments.checkpoint_pages."
+                f"{tier.value} must be at least routine_pages.{tier.value}"
+            )
+
+    max_pages_per_slice = _positive_int(
+        hot_comments,
+        "max_pages_per_slice",
+        10,
+        "snapshot_cohorts.hot_comments.max_pages_per_slice",
+        message="snapshot_cohorts.hot_comments.max_pages_per_slice must be positive",
+    )
+    max_slice_seconds = _positive_int(
+        hot_comments,
+        "max_slice_seconds",
+        55,
+        "snapshot_cohorts.hot_comments.max_slice_seconds",
+        message="snapshot_cohorts.hot_comments.max_slice_seconds must be positive",
+    )
+    if max_slice_seconds >= lease_seconds:
+        raise ValueError(
+            "snapshot_cohorts.hot_comments.max_slice_seconds must be less than "
+            "scheduler.lease_seconds"
+        )
+    return HotCommentPolicy(
+        routine_pages=MappingProxyType(routine_pages),
+        checkpoint_pages=MappingProxyType(checkpoint_pages),
+        max_pages_per_slice=max_pages_per_slice,
+        max_slice_seconds=max_slice_seconds,
+    )
+
+
+def _tier_page_counts(
+    value: object,
+    *,
+    path: str,
+    defaults: Mapping[CollectionTier, int],
+) -> dict[CollectionTier, int]:
+    values = _mapping(value, path)
+    unknown_tiers = _unknown_keys(values, {tier.value for tier in CollectionTier})
+    if unknown_tiers:
+        raise ValueError(f"{path} has unknown tier keys: " + ", ".join(unknown_tiers))
+    return {
+        tier: _positive_int(
+            values,
+            tier.value,
+            defaults[tier],
+            f"{path}.{tier.value}",
+            message=f"{path}.{tier.value} must be positive",
+        )
+        for tier in CollectionTier
+    }

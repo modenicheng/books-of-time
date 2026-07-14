@@ -130,13 +130,18 @@ request_budget:
 snapshot_cohorts:
   # C3 may be enabled only in shadow mode; live ownership moves in C7.
   enabled: false
-  policy_version: cohort-default-v1
+  policy_version: cohort-default-v2
   rollout_mode: shadow
   planning_seconds: 30
   timezone: Asia/Shanghai
   checkpoint_hours: [6, 12, 18, 24]
   checkpoint_max_lateness_minutes: 60
   downgrade_confirmations: 2
+  hot_comments:
+    routine_pages: {s: 3, a: 2, b: 1, c: 1}
+    checkpoint_pages: {s: 20, a: 10, b: 3, c: 1}
+    max_pages_per_slice: 10
+    max_slice_seconds: 55
   tier_policy:
     official_s_age_hours: 6
     reassess_after_24h_minutes: 60

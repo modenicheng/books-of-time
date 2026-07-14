@@ -18,7 +18,7 @@ def test_cohort_policy_defaults_match_approved_contract() -> None:
     policy = CohortPolicy.from_config(None)
 
     assert policy.enabled is False
-    assert policy.policy_version == "cohort-default-v1"
+    assert policy.policy_version == "cohort-default-v2"
     assert policy.rollout_mode is CohortRolloutMode.SHADOW
     assert policy.planning_seconds == 30
     assert policy.timezone.key == "Asia/Shanghai"
@@ -42,6 +42,15 @@ def test_cohort_policy_defaults_match_approved_contract() -> None:
     assert policy.tier_thresholds[CollectionTier.S].view_growth_per_hour == 6000
     assert policy.tier_thresholds[CollectionTier.A].hot_top20_turnover_ratio == 0.20
     assert policy.tier_thresholds[CollectionTier.B].hot_top20_turnover_ratio is None
+    assert policy.hot_comments.routine_pages == {
+        CollectionTier.S: 3,
+        CollectionTier.A: 2,
+        CollectionTier.B: 1,
+        CollectionTier.C: 1,
+    }
+    assert policy.hot_comments.checkpoint_pages[CollectionTier.S] == 20
+    assert policy.hot_comments.max_pages_per_slice == 10
+    assert policy.hot_comments.max_slice_seconds == 55
 
     persisted = policy.as_persisted_policy()
     assert persisted["timezone"] == "Asia/Shanghai"
@@ -55,6 +64,12 @@ def test_cohort_policy_defaults_match_approved_contract() -> None:
         "start": "21:30",
         "end": "00:30",
     }
+    assert persisted["hot_comments"]["checkpoint_pages"] == {
+        "s": 20,
+        "a": 10,
+        "b": 3,
+        "c": 1,
+    }
 
 
 def test_example_config_keeps_c3_shadow_planner_disabled() -> None:
@@ -63,7 +78,7 @@ def test_example_config_keeps_c3_shadow_planner_disabled() -> None:
     policy = CohortPolicy.from_config(load_config(config_path, environ={}))
 
     assert policy.enabled is False
-    assert policy.policy_version == "cohort-default-v1"
+    assert policy.policy_version == "cohort-default-v2"
     assert policy.rollout_mode is CohortRolloutMode.SHADOW
 
 
