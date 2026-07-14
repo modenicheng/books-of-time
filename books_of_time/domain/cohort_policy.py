@@ -101,6 +101,13 @@ class TierAssessment:
 
 
 @dataclass(frozen=True)
+class ComponentOutcome:
+    status: CohortComponentStatus
+    required: bool
+    started: bool
+
+
+@dataclass(frozen=True)
 class CohortPolicy:
     enabled: bool
     planning_seconds: int
@@ -380,6 +387,94 @@ def apply_tier_assessment(
     )
 
 
+def determine_life_stage(
+    publish_age: timedelta,
+    *,
+    low_growth_evidence: bool | None,
+    policy: CohortPolicy,
+    active_event: bool = False,
+    operator_pinned: bool = False,
+    renewed_growth: bool = False,
+) -> VideoLifeStage:
+    if active_event or operator_pinned or renewed_growth:
+        return VideoLifeStage.ACTIVE
+    if low_growth_evidence is not True:
+        return VideoLifeStage.ACTIVE
+    if publish_age >= policy.lifecycle.archive_after:
+        return VideoLifeStage.ARCHIVED
+    if publish_age >= policy.lifecycle.dormant_after:
+        return VideoLifeStage.DORMANT
+    return VideoLifeStage.ACTIVE
+
+
+def component_kinds_for_stage(
+    stage: VideoLifeStage,
+    *,
+    frontier_complete: bool,
+) -> tuple[str, ...]:
+    if stage is VideoLifeStage.ARCHIVED:
+        return ("video_metrics",)
+    components = ("video_metrics", "hot_core")
+    if stage is VideoLifeStage.ACTIVE or frontier_complete:
+        return (*components, "latest_current_head")
+    return components
+
+
+def aggregate_cohort_status(
+    outcomes: Sequence[ComponentOutcome],
+) -> CohortStatus:
+    required = tuple(outcome for outcome in outcomes if outcome.required)
+    if not required:
+        raise ValueError("at least one required component is needed")
+
+    statuses = tuple(outcome.status for outcome in required)
+    if CohortComponentStatus.CORRUPTED in statuses:
+        return CohortStatus.CORRUPTED
+    if any(status in _ACTIVE_COMPONENT_STATUSES for status in statuses):
+        return CohortStatus.RUNNING
+    if all(status is CohortComponentStatus.PENDING for status in statuses):
+        return CohortStatus.PLANNED
+    if all(status is CohortComponentStatus.NOT_APPLICABLE for status in statuses):
+        return CohortStatus.NOT_APPLICABLE
+
+    applicable = tuple(
+        outcome
+        for outcome in required
+        if outcome.status is not CohortComponentStatus.NOT_APPLICABLE
+    )
+    any_started = any(_component_started(outcome) for outcome in required)
+    if (
+        not any_started
+        and applicable
+        and all(
+            outcome.status is CohortComponentStatus.BLOCKED for outcome in applicable
+        )
+    ):
+        return CohortStatus.BLOCKED
+    if not any_started and any(
+        outcome.status in _MISSED_COMPONENT_STATUSES for outcome in applicable
+    ):
+        return CohortStatus.MISSED
+    if all(
+        status in {CohortComponentStatus.COMPLETE, CohortComponentStatus.NOT_APPLICABLE}
+        for status in statuses
+    ):
+        return CohortStatus.COMPLETE
+    if any_started and CohortComponentStatus.PENDING in statuses:
+        return CohortStatus.RUNNING
+    if not any_started and all(
+        status
+        in {
+            CohortComponentStatus.PENDING,
+            CohortComponentStatus.BLOCKED,
+            CohortComponentStatus.NOT_APPLICABLE,
+        }
+        for status in statuses
+    ):
+        return CohortStatus.PLANNED
+    return CohortStatus.PARTIAL
+
+
 _TIER_THRESHOLD_DEFAULTS = {
     CollectionTier.S: (6000, 60, 0.35),
     CollectionTier.A: (1200, 20, 0.20),
@@ -398,6 +493,25 @@ _TIER_RANK = {
     CollectionTier.A: 1,
     CollectionTier.B: 2,
     CollectionTier.C: 3,
+}
+
+_ACTIVE_COMPONENT_STATUSES = {
+    CohortComponentStatus.RUNNING,
+    CohortComponentStatus.JOINED_ACTIVE_TASK,
+}
+
+_MISSED_COMPONENT_STATUSES = {
+    CohortComponentStatus.MISSED_DUE_TO_CAPACITY,
+    CohortComponentStatus.MISSED_DUE_TO_SERVICE_GAP,
+}
+
+_IMPLICITLY_STARTED_COMPONENT_STATUSES = {
+    CohortComponentStatus.RUNNING,
+    CohortComponentStatus.COMPLETE,
+    CohortComponentStatus.PARTIAL,
+    CohortComponentStatus.JOINED_ACTIVE_TASK,
+    CohortComponentStatus.FAILED,
+    CohortComponentStatus.CORRUPTED,
 }
 
 _ACTIVITY_WINDOW_DEFAULTS = (
@@ -433,6 +547,10 @@ def _require_positive_hours(value: int) -> None:
 
 def _meets_threshold(value: int | None, threshold: int) -> bool:
     return value is not None and value >= threshold
+
+
+def _component_started(outcome: ComponentOutcome) -> bool:
+    return outcome.started or outcome.status in _IMPLICITLY_STARTED_COMPONENT_STATUSES
 
 
 def _mapping(value: object, path: str) -> Mapping[str, Any]:

@@ -399,7 +399,7 @@ git commit -m "feat(policy): add cohort tier assessment"
 - Produces `component_kinds_for_stage(stage, *, frontier_complete: bool) -> tuple[str, ...]`.
 - Produces frozen `ComponentOutcome` and `aggregate_cohort_status(outcomes: Sequence[ComponentOutcome]) -> CohortStatus`.
 
-- [ ] **Step 1: Write failing lifecycle and aggregation tests**
+- [x] **Step 1: Write failing lifecycle and aggregation tests**
 
 Lifecycle cases:
 
@@ -428,7 +428,7 @@ Aggregation precedence tests:
 - all applicable required complete and remaining required not-applicable => complete;
 - every required component not-applicable => not_applicable.
 
-- [ ] **Step 2: Run lifecycle tests to verify RED**
+- [x] **Step 2: Run lifecycle tests to verify RED**
 
 ```powershell
 uv run pytest tests/test_cohort_lifecycle_policy.py -q
@@ -436,13 +436,13 @@ uv run pytest tests/test_cohort_lifecycle_policy.py -q
 
 Expected: lifecycle/component/status APIs are missing.
 
-- [ ] **Step 3: Implement pure lifecycle and aggregation rules**
+- [x] **Step 3: Implement pure lifecycle and aggregation rules**
 
 `determine_life_stage` uses immutable publish age and explicit evidence booleans. Reactivation rules win before age thresholds. Do not treat capacity or a missed cohort as lifecycle evidence.
 
 `ComponentOutcome` carries `status`, `required`, and `started`. Aggregation ignores optional components for completeness, follows spec section 6.3 precedence, and raises `ValueError` for an empty required set instead of inventing a complete cohort.
 
-- [ ] **Step 4: Verify lifecycle GREEN**
+- [x] **Step 4: Verify lifecycle GREEN**
 
 ```powershell
 uv run pytest tests/test_cohort_lifecycle_policy.py tests/test_cohort_tier_policy.py tests/test_cohort_time_policy.py -q
@@ -451,7 +451,7 @@ uv run ruff check books_of_time/domain/cohort_policy.py tests/test_cohort_lifecy
 
 Expected: lifecycle eligibility and cohort status are deterministic with no scheduler dependency.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add books_of_time/domain/cohort_policy.py tests/test_cohort_lifecycle_policy.py docs/superpowers/plans/2026-07-14-cohort-state-and-policy-c2.md
