@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from books_of_time.db.models import (
     CollectionPolicyVersion,
+    CollectionScheduleGap,
     CollectionTask,
     KnownVideo,
     SnapshotCohort,
@@ -21,6 +22,7 @@ from books_of_time.db.models import (
 from books_of_time.db.repositories import CollectionTaskRepository
 from books_of_time.domain.cohort_policy import (
     CohortComponentStatus,
+    CohortPolicy,
     CohortRolloutMode,
     CohortStatus,
     CollectionTier,
@@ -184,6 +186,63 @@ class CollectionPolicyVersionRepository:
             )
         )
 
+    async def ensure_configured(
+        self,
+        policy: CohortPolicy,
+        *,
+        now: datetime,
+    ) -> CollectionPolicyVersion:
+        persisted_policy = policy.as_persisted_policy()
+        target = await self.session.scalar(
+            select(CollectionPolicyVersion)
+            .where(CollectionPolicyVersion.version == policy.policy_version)
+            .with_for_update()
+        )
+        if target is None:
+            try:
+                async with self.session.begin_nested():
+                    target = await self.create(
+                        version=policy.policy_version,
+                        policy_kind="snapshot_cohort",
+                        scope_type="global",
+                        scope_id="global",
+                        timezone=policy.timezone.key,
+                        policy=persisted_policy,
+                        algorithm="configured-fixed-v1",
+                        created_at=now,
+                    )
+            except IntegrityError:
+                target = await self.session.scalar(
+                    select(CollectionPolicyVersion)
+                    .where(CollectionPolicyVersion.version == policy.policy_version)
+                    .with_for_update()
+                )
+                if target is None:
+                    raise
+
+        expected_identity = (
+            "snapshot_cohort",
+            "global",
+            "global",
+            policy.timezone.key,
+            persisted_policy,
+            "configured-fixed-v1",
+        )
+        stored_identity = (
+            target.policy_kind,
+            target.scope_type,
+            target.scope_id,
+            target.timezone,
+            target.policy,
+            target.algorithm,
+        )
+        if stored_identity != expected_identity:
+            raise ValueError(
+                "Configured cohort policy content differs from the immutable "
+                f"version {policy.policy_version}; choose a new policy_version"
+            )
+        return await self.activate(policy.policy_version, activated_at=now)
+
 
 class VideoCollectionStateRepository:
     def __init__(self, session: AsyncSession) -> None:
@@ -226,6 +285,24 @@ class VideoCollectionStateRepository:
         await self.session.flush()
         return state
 
+    async def list_candidates(self, *, limit: int = 5000) -> list[KnownVideo]:
+        if limit <= 0:
+            raise ValueError("candidate limit must be positive")
+        return list(
+            await self.session.scalars(
+                select(KnownVideo)
+                .order_by(KnownVideo.first_seen_at.asc(), KnownVideo.bvid.asc())
+                .limit(limit)
+            )
+        )
+
+    async def lock(self, bvid: str) -> VideoCollectionState | None:
+        return await self.session.scalar(
+            select(VideoCollectionState)
+            .where(VideoCollectionState.bvid == _required_text(bvid, "bvid"))
+            .with_for_update()
+        )
+
     async def apply_assessment(
         self,
         *,
@@ -257,6 +334,93 @@ class VideoCollectionStateRepository:
         state.updated_at = updated_at
         await self.session.flush()
         return state
+
+    async def record_planning(
+        self,
+        *,
+        bvid: str,
+        assessment: TierAssessment,
+        life_stage: VideoLifeStage,
+        policy_version: str,
+        next_due_at: datetime | None,
+        last_planned_at: datetime,
+        last_checkpoint_hours: int | None,
+        updated_at: datetime,
+    ) -> VideoCollectionState:
+        state = await self.apply_assessment(
+            bvid=bvid,
+            assessment=assessment,
+            life_stage=life_stage,
+            policy_version=policy_version,
+            next_due_at=next_due_at,
+            updated_at=updated_at,
+        )
+        state.last_planned_at = last_planned_at
+        state.last_checkpoint_hours = last_checkpoint_hours
+        await self.session.flush()
+        return state
+
+
+class CollectionScheduleGapRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def record(
+        self,
+        *,
+        bvid: str,
+        gap_start: datetime,
+        gap_end: datetime,
+        expected_cohort_count: int,
+        reason: str,
+        policy_version: str,
+        created_at: datetime,
+        service_instance_id: str | None = None,
+    ) -> tuple[CollectionScheduleGap, bool]:
+        if gap_end <= gap_start:
+            raise ValueError("schedule gap end must be after start")
+        if expected_cohort_count <= 0:
+            raise ValueError("schedule gap expected count must be positive")
+        identity = (
+            CollectionScheduleGap.bvid == _required_text(bvid, "bvid"),
+            CollectionScheduleGap.gap_start == gap_start,
+            CollectionScheduleGap.gap_end == gap_end,
+            CollectionScheduleGap.reason == _required_text(reason, "reason"),
+            CollectionScheduleGap.policy_version
+            == _required_text(policy_version, "policy_version"),
+        )
+        existing = await self.session.scalar(
+            select(CollectionScheduleGap).where(*identity).with_for_update()
+        )
+        if existing is not None:
+            if existing.expected_cohort_count != expected_cohort_count:
+                raise ValueError("schedule gap identity has a different expected count")
+            return existing, False
+
+        row = CollectionScheduleGap(
+            bvid=bvid,
+            gap_start=gap_start,
+            gap_end=gap_end,
+            expected_cohort_count=expected_cohort_count,
+            reason=reason,
+            service_instance_id=service_instance_id,
+            policy_version=policy_version,
+            created_at=created_at,
+        )
+        try:
+            async with self.session.begin_nested():
+                self.session.add(row)
+                await self.session.flush()
+            return row, True
+        except IntegrityError:
+            existing = await self.session.scalar(
+                select(CollectionScheduleGap).where(*identity).with_for_update()
+            )
+            if existing is None:
+                raise
+            if existing.expected_cohort_count != expected_cohort_count:
+                raise ValueError("schedule gap identity has a different expected count")
+            return existing, False
 
 
 class SnapshotCohortRepository:

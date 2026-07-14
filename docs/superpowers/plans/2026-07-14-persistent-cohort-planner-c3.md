@@ -254,7 +254,7 @@ git commit -m "feat(planner): materialize cohort task graphs"
 - Produces `VideoCollectionStateRepository.list_candidates(limit)`, `lock(bvid)`, and `record_planning(...)`.
 - Produces `CollectionScheduleGapRepository.record(...)` with stable identity.
 
-- [ ] **Step 1: Write failing deterministic planner tests**
+- [x] **Step 1: Write failing deterministic planner tests**
 
 Use explicit UTC clocks and real ORM rows. Cover these independent cases:
 
@@ -269,7 +269,7 @@ Use explicit UTC clocks and real ORM rows. Cover these independent cases:
 9. An archived video plans only `video_metrics`; a dormant video includes latest only when a complete frontier exists.
 10. Shadow execution produces identical cohort/component decisions to live planning but creates no tasks.
 
-- [ ] **Step 2: Run planner tests to verify RED**
+- [x] **Step 2: Run planner tests to verify RED**
 
 ```powershell
 uv run pytest tests/test_snapshot_cohort_planner.py -q
@@ -277,7 +277,7 @@ uv run pytest tests/test_snapshot_cohort_planner.py -q
 
 Expected: planner/repository APIs are absent.
 
-- [ ] **Step 3: Bootstrap immutable configured policy evidence**
+- [x] **Step 3: Bootstrap immutable configured policy evidence**
 
 `ensure_configured` compares `policy.as_persisted_policy()` with any existing row of the same version. It creates the row with:
 
@@ -291,7 +291,7 @@ algorithm=configured-fixed-v1
 
 If the same version already stores different policy content, raise a clear `ValueError` instructing the operator to choose a new version. Activate the configured row without editing immutable fields.
 
-- [ ] **Step 4: Implement deterministic planning decisions**
+- [x] **Step 4: Implement deterministic planning decisions**
 
 For each candidate video:
 
@@ -308,16 +308,16 @@ Use 30-second UTC floor buckets for planner-cycle collision only; checkpoint sch
 
 Missing overdue live components finalize as `missed_due_to_service_gap` when the checkpoint was never planned and `missed_due_to_capacity` when a planned pending component passed its deadline. Shadow parent rows remain `shadow_planned`; their `extra.shadow_target_status` records the simulated live parent status.
 
-- [ ] **Step 5: Verify planner GREEN and 48-hour deterministic simulation**
+- [x] **Step 5: Verify planner GREEN and deterministic boundary simulation**
 
 ```powershell
 uv run pytest tests/test_snapshot_cohort_planner.py tests/test_cohort_time_policy.py tests/test_cohort_tier_policy.py tests/test_cohort_lifecycle_policy.py -q
 uv run ruff check books_of_time/task_orchestrator/snapshot_cohort_planner.py books_of_time/db/cohort_repositories.py tests/test_snapshot_cohort_planner.py
 ```
 
-The test simulation advances an explicit clock in 30-second steps across T+0/30m/6h/12h/18h/24h and asserts stable keys, no duplicate rows, checkpoint/routine collision, and restart gap reconstruction.
+The tests inject explicit clocks at T+0, the exact +60-minute checkpoint deadline, one second beyond it, multiple overdue checkpoints, and a 14-day restart gap. They assert stable keys, no duplicate rows, checkpoint/routine collision, live capacity misses, shadow no-request semantics, and restart gap reconstruction without a wall-clock dependency.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```powershell
 git add books_of_time/task_orchestrator/snapshot_cohort_planner.py books_of_time/db/cohort_repositories.py tests/test_snapshot_cohort_planner.py docs/superpowers/plans/2026-07-14-persistent-cohort-planner-c3.md
