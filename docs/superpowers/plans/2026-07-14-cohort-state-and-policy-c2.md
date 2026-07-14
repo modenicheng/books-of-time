@@ -475,7 +475,7 @@ git commit -m "feat(policy): add cohort lifecycle and status rules"
 - Produces `VideoCollectionStateRepository.adopt(...)` and `apply_assessment(...)`.
 - Consumes C2 ORM models and `TierAssessment`; produces no task or cohort rows.
 
-- [ ] **Step 1: Write failing repository tests**
+- [x] **Step 1: Write failing repository tests**
 
 Using real in-memory ORM:
 
@@ -487,7 +487,7 @@ Using real in-memory ORM:
 6. Re-adopt after changing the supplied timestamp and assert immutable anchor remains unchanged.
 7. Apply a `TierAssessment` and lifecycle change; assert desired/effective/candidate/count update, while anchor and pinned tier remain unchanged.
 
-- [ ] **Step 2: Run repository tests to verify RED**
+- [x] **Step 2: Run repository tests to verify RED**
 
 ```powershell
 uv run pytest tests/test_cohort_repositories.py -q
@@ -495,7 +495,7 @@ uv run pytest tests/test_cohort_repositories.py -q
 
 Expected: repository module does not exist.
 
-- [ ] **Step 3: Implement transaction-local repositories**
+- [x] **Step 3: Implement transaction-local repositories**
 
 `create` inserts immutable policy content and scoped evidence counters. `activate` locks active/target rows where supported, supersedes the old active row, and activates the existing target row; it never edits `policy`, algorithm, training bounds, or evidence counts. Normalize global scope to sentinel `scope_id="global"` and reject other global IDs.
 
@@ -503,7 +503,7 @@ Expected: repository module does not exist.
 
 C2 repository methods only flush. Their caller owns commit/rollback. No method enqueues `CollectionTask` or creates `SnapshotCohort`; C3 adds planner transactions.
 
-- [ ] **Step 4: Verify repository GREEN**
+- [x] **Step 4: Verify repository GREEN**
 
 ```powershell
 uv run pytest tests/test_cohort_repositories.py tests/test_cohort_models.py -q
@@ -512,7 +512,7 @@ uv run ruff check books_of_time/db/cohort_repositories.py tests/test_cohort_repo
 
 Expected: version rollback preserves immutable rows and adoption preserves publish anchor.
 
-- [ ] **Step 5: Document C2's active and inactive surfaces**
+- [x] **Step 5: Document C2's active and inactive surfaces**
 
 Document:
 
@@ -522,7 +522,7 @@ Document:
 - existing video snapshot sweep remains the only routine owner until C3 shadow planner and later ownership migration;
 - current repository transactions are caller-owned and planner concurrency arrives in C3.
 
-- [ ] **Step 6: Run isolated migration and full verification**
+- [x] **Step 6: Run isolated migration and full verification**
 
 ```powershell
 uv run pytest tests/test_schema_migrations.py::test_cohort_state_revision_round_trip -q
@@ -533,11 +533,11 @@ git diff --check
 
 Expected: isolated migration cycle, complete suite, Ruff, and whitespace checks pass. Do not downgrade the user's configured PostgreSQL database.
 
-- [ ] **Step 7: Mark only C2 complete in TODO**
+- [x] **Step 7: Mark only C2 complete in TODO**
 
 Change C2 from `[ ]` to `[x]`, keep C3-C9 unchecked, and update Near-term Sprint to say C2 complete/C3 next. Do not mark the overall P1 mainline complete.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```powershell
 git add books_of_time/db/cohort_repositories.py tests/test_cohort_repositories.py docs/CONFIGURATION.md docs/COLLECTION.md docs/DATA_MODEL.md docs/TODO.md docs/superpowers/plans/2026-07-14-cohort-state-and-policy-c2.md

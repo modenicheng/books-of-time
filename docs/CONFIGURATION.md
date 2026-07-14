@@ -280,6 +280,60 @@ request_budget:
 
 `per_round`、`latest_pages` 和 `reply_roots` 当前是保留的规划元数据，不会限制 collector。latest 使用时间片和 frontier；重点回复由 watchlist 自动派生。不要依赖这些保留字段施加请求上限。
 
+## Snapshot Cohort Policy
+
+```yaml
+snapshot_cohorts:
+  enabled: false
+  planning_seconds: 30
+  timezone: Asia/Shanghai
+  checkpoint_hours: [6, 12, 18, 24]
+  checkpoint_max_lateness_minutes: 60
+  downgrade_confirmations: 2
+  tier_policy:
+    official_s_age_hours: 6
+    reassess_after_24h_minutes: 60
+    hot_turnover_confirmations: 2
+    s: {view_growth_per_hour: 6000, comment_growth_per_hour: 60, hot_top20_turnover_ratio: 0.35}
+    a: {view_growth_per_hour: 1200, comment_growth_per_hour: 20, hot_top20_turnover_ratio: 0.20}
+    b: {view_growth_per_hour: 300, comment_growth_per_hour: 5}
+  lifecycle:
+    dormant_after_days: 7
+    archive_after_days: 30
+    dormant_interval_minutes: 1440
+    archived_metric_probe_minutes: 10080
+  activity_windows:
+    defaults:
+      - {name: lunch, start: "11:30", end: "13:30"}
+      - {name: dinner, start: "17:30", end: "20:30"}
+      - {name: night, start: "21:30", end: "00:30"}
+  tier_intervals_minutes:
+    s: {active: 2, normal: 10}
+    a: {active: 10, normal: 30}
+    b: {active: 30, normal: 60}
+    c: {active: 60, normal: 120}
+```
+
+C2 已实现 `CohortPolicy.from_config()` 的冻结值对象和严格校验，但尚未把 planner 接入 service。当前模板必须保持 `enabled: false`；C3 才会先引入 shadow planner，后续阶段完成所有权迁移后才允许执行 cohort task。仅把该值改成 `true` 在 C2 不会自动调度请求。
+
+| 键 | 含义 |
+| --- | --- |
+| `planning_seconds` | 未来 planner 的固定评估周期；默认 30 秒 |
+| `timezone` | 活跃窗口使用的 IANA 时区；持久化时间仍为 UTC |
+| `checkpoint_hours` | 从不可变 Bilibili `pubdate` 起算的强制年龄点，必须为严格递增正整数 |
+| `checkpoint_max_lateness_minutes` | checkpoint 允许开始请求的最大延迟 |
+| `downgrade_confirmations` | effective tier 降级所需连续相同评估次数；升级立即生效 |
+| `official_s_age_hours` | monitored official 视频从发布时刻起自动为 S 的时长；发现时间不重置 |
+| `hot_turnover_confirmations` | turnover 信号可参与评级前所需连续完整 hot pair 数 |
+| `reassess_after_24h_minutes` | 24 小时后的默认评级复评间隔 |
+| `lifecycle.*` | active 到 dormant/archive 的低增长年龄门槛及低频探测间隔 |
+| `activity_windows.defaults` | 本地时间半开区间 `[start, end)`；允许跨午夜和重叠，重叠只算一个 active 状态 |
+| `tier_intervals_minutes` | 各 tier 在 active/normal 时间的最大采集间隔；active 不得大于 normal |
+
+每个 tier 的播放增长、评论增长和可用 turnover 信号使用 OR 语义，并按 S、A、B 首个命中；未命中为 C。阈值必须从 S 到 B 单调不增，turnover ratio 必须在 `[0, 1]`。机器人、立场、协调和“带节奏”模型输出不是调度输入。
+
+纯时间策略仍保留现有年龄/播放增长间隔，再与 tier ceiling 和下一 checkpoint 取最小值。生命周期要求明确低增长证据；缺失证据不会把旧视频归档，事件、人工 pin 或增长恢复会立即回到 active。
+
 ## Important Reply Watchlist
 
 ```yaml
