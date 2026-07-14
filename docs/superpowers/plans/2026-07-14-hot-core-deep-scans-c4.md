@@ -461,7 +461,7 @@ git commit -m "feat(comments): collect hot scans in numbered slices"
 - A paused/running scan keeps the component and cohort active even when the current task coverage is partial.
 - A complete/partial/failed/corrupted scan maps to the corresponding terminal component state.
 
-- [ ] **Step 1: Write failing two-slice lifecycle tests**
+- [x] **Step 1: Write failing two-slice lifecycle tests**
 
 Run a live S hot-deep component through two worker tasks and assert after slice zero:
 
@@ -479,7 +479,7 @@ After slice one, assert scan/component complete, component counters equal 17 suc
 
 Add terminal retry exhaustion and parse-corruption cases. A terminal task failure must mark the active scan failed before component aggregation; a raw-saved parse failure must retain raw/scan evidence and must not become complete.
 
-- [ ] **Step 2: Run lifecycle tests and verify RED**
+- [x] **Step 2: Run lifecycle tests and verify RED**
 
 ```powershell
 uv run pytest tests/test_worker_cohort_lifecycle.py tests/test_coverage_repositories.py -q
@@ -487,11 +487,11 @@ uv run pytest tests/test_worker_cohort_lifecycle.py tests/test_coverage_reposito
 
 Expected: the first partial slice prematurely marks the component/cohort partial and coverage lacks scan ID.
 
-- [ ] **Step 3: Propagate scan identity into coverage**
+- [x] **Step 3: Propagate scan identity into coverage**
 
 Set `comment_scan_run_id=task.comment_scan_run_id` in success and failed coverage insertion paths. Existing rows/tasks remain nullable.
 
-- [ ] **Step 4: Implement scan-authoritative component aggregation**
+- [x] **Step 4: Implement scan-authoritative component aggregation**
 
 When a linked task has a scan run:
 
@@ -506,7 +506,7 @@ corrupted scan -> component corrupted
 
 Do not sum the same cumulative scan counters per slice. Non-scan components retain the existing incremental coverage path. On a terminal worker exception, mark a non-terminal linked scan failed with `outcome=retry_exhausted` before recomputing the cohort.
 
-- [ ] **Step 5: Run worker, coverage, and hot scan tests**
+- [x] **Step 5: Run worker, coverage, and hot scan tests**
 
 ```powershell
 uv run pytest tests/test_worker_cohort_lifecycle.py tests/test_coverage_repositories.py tests/test_hot_comments_worker.py -q
@@ -515,7 +515,7 @@ uv run ruff check books_of_time/db/repositories.py books_of_time/db/cohort_repos
 
 Expected: all tests pass and multi-slice components remain active until the logical scan closes.
 
-- [ ] **Step 6: Commit the lifecycle unit**
+- [x] **Step 6: Commit the lifecycle unit**
 
 ```powershell
 git add books_of_time/db/repositories.py books_of_time/db/cohort_repositories.py books_of_time/worker.py tests/test_worker_cohort_lifecycle.py tests/test_coverage_repositories.py

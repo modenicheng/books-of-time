@@ -19,6 +19,7 @@ from books_of_time.db.models import (
     CollectionPolicyVersion,
     CollectionScheduleGap,
     CollectionTask,
+    CommentScanRun,
     HttpRequestAttempt,
     KnownVideo,
     SnapshotCohort,
@@ -38,7 +39,11 @@ from books_of_time.domain.cohort_policy import (
     aggregate_cohort_status,
     component_key,
 )
-from books_of_time.domain.enums import CommentScanMode, TaskKind
+from books_of_time.domain.enums import (
+    CommentScanMode,
+    CommentScanStatus,
+    TaskKind,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -804,17 +809,29 @@ class SnapshotCohortExecutionRepository:
         if linked is None:
             return None
         cohort, component = linked
-        self._add_coverage(component, coverage)
-        if coverage.status == "corrupted":
-            component.status = CohortComponentStatus.CORRUPTED.value
-            component.failure_reason = coverage.reason or "corrupted"
-        elif coverage.status == "partial":
-            component.status = CohortComponentStatus.PARTIAL.value
-            component.failure_reason = coverage.reason or "partial"
+        scan = await self._load_linked_scan(
+            task,
+            cohort=cohort,
+            component=component,
+        )
+        if scan is not None:
+            self._sync_component_from_scan(
+                component,
+                scan,
+                finished_at=finished_at,
+            )
         else:
-            component.status = CohortComponentStatus.COMPLETE.value
-            component.failure_reason = None
-        component.finished_at = finished_at
+            self._add_coverage(component, coverage)
+            if coverage.status == "corrupted":
+                component.status = CohortComponentStatus.CORRUPTED.value
+                component.failure_reason = coverage.reason or "corrupted"
+            elif coverage.status == "partial":
+                component.status = CohortComponentStatus.PARTIAL.value
+                component.failure_reason = coverage.reason or "partial"
+            else:
+                component.status = CohortComponentStatus.COMPLETE.value
+                component.failure_reason = None
+            component.finished_at = finished_at
         await self._recompute_cohort(cohort, finished_at=finished_at)
         return component
 
@@ -830,19 +847,58 @@ class SnapshotCohortExecutionRepository:
         if linked is None:
             return None
         cohort, component = linked
-        self._add_coverage(component, coverage)
+        scan = await self._load_linked_scan(
+            task,
+            cohort=cohort,
+            component=component,
+        )
         component.extra = {
             **component.extra,
             "failure_attempts": int(component.extra.get("failure_attempts") or 0) + 1,
             "last_failure_reason": coverage.reason,
         }
-        component.failure_reason = coverage.reason
-        if terminal:
-            component.status = CohortComponentStatus.FAILED.value
-            component.finished_at = finished_at
+        if scan is not None:
+            if terminal and scan.status in {
+                CommentScanStatus.PLANNED,
+                CommentScanStatus.RUNNING,
+                CommentScanStatus.PAUSED,
+            }:
+                scan = await CommentScanRunRepository(self.session).mark_failed(
+                    scan.id,
+                    outcome="retry_exhausted",
+                    error_type=str(
+                        coverage.extra.get("exception_type")
+                        or coverage.reason
+                        or "collector_error"
+                    ),
+                    error_message=str(coverage.extra.get("message") or ""),
+                    status=(
+                        CommentScanStatus.CORRUPTED
+                        if coverage.reason == "parse_error"
+                        else CommentScanStatus.FAILED
+                    ),
+                    now=finished_at,
+                )
+            self._sync_component_from_scan(
+                component,
+                scan,
+                finished_at=finished_at,
+            )
+            if scan.status in {
+                CommentScanStatus.PLANNED,
+                CommentScanStatus.RUNNING,
+                CommentScanStatus.PAUSED,
+            }:
+                component.failure_reason = coverage.reason
         else:
-            component.status = CohortComponentStatus.RUNNING.value
-            component.finished_at = None
+            self._add_coverage(component, coverage)
+            component.failure_reason = coverage.reason
+            if terminal:
+                component.status = CohortComponentStatus.FAILED.value
+                component.finished_at = finished_at
+            else:
+                component.status = CohortComponentStatus.RUNNING.value
+                component.finished_at = None
         await self._recompute_cohort(cohort, finished_at=finished_at)
         return component
 
@@ -896,6 +952,59 @@ class SnapshotCohortExecutionRepository:
         component.succeeded_pages += coverage.pages_succeeded
         component.items_observed += coverage.items_observed
         component.raw_payloads_saved += coverage.raw_payloads_saved
+
+    async def _load_linked_scan(
+        self,
+        task: CollectionTask,
+        *,
+        cohort: SnapshotCohort,
+        component: SnapshotCohortComponent,
+    ) -> CommentScanRun | None:
+        if task.comment_scan_run_id is None:
+            return None
+        if component.comment_scan_run_id != task.comment_scan_run_id:
+            raise ValueError("Task and cohort component reference different scan runs")
+        scan = await CommentScanRunRepository(self.session).lock(
+            task.comment_scan_run_id
+        )
+        if scan.snapshot_cohort_id != cohort.id or scan.bvid != cohort.bvid:
+            raise ValueError("Comment scan run does not belong to the task cohort")
+        return scan
+
+    @staticmethod
+    def _sync_component_from_scan(
+        component: SnapshotCohortComponent,
+        scan: CommentScanRun,
+        *,
+        finished_at: datetime,
+    ) -> None:
+        component.requested_pages = scan.pages_requested
+        component.succeeded_pages = scan.pages_succeeded
+        component.items_observed = scan.items_observed
+        component.raw_payloads_saved = scan.raw_payloads_saved
+        component.comment_scan_run_id = scan.id
+        if scan.status in {
+            CommentScanStatus.PLANNED,
+            CommentScanStatus.RUNNING,
+            CommentScanStatus.PAUSED,
+        }:
+            component.status = CohortComponentStatus.RUNNING.value
+            component.finished_at = None
+            component.failure_reason = None
+            return
+        status_map = {
+            CommentScanStatus.COMPLETE: CohortComponentStatus.COMPLETE,
+            CommentScanStatus.PARTIAL: CohortComponentStatus.PARTIAL,
+            CommentScanStatus.FAILED: CohortComponentStatus.FAILED,
+            CommentScanStatus.CORRUPTED: CohortComponentStatus.CORRUPTED,
+        }
+        component.status = status_map[scan.status].value
+        component.finished_at = scan.finished_at or finished_at
+        component.failure_reason = (
+            None
+            if scan.status is CommentScanStatus.COMPLETE
+            else scan.outcome or scan.last_error_type or scan.status.value
+        )
 
     async def _recompute_cohort(
         self,
