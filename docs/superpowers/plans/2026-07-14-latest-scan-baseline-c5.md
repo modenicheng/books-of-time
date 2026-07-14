@@ -42,7 +42,7 @@
 - Produces `page_matches_anchor(comments, anchors) -> bool`.
 - Produces `latest_slice_seconds(effective_interval_seconds: float | int | None) -> int`.
 
-- [ ] **Step 1: Write failing anchor and timing tests**
+- [x] **Step 1: Write failing anchor and timing tests**
 
 Assert:
 
@@ -74,7 +74,7 @@ assert latest_slice_seconds(1) == 10
 
 Also reject Boolean/non-positive intervals, malformed anchor JSON, more than five anchors, duplicate/non-positive RPIDs, and naive/invalid timestamp strings.
 
-- [ ] **Step 2: Run tests and verify RED**
+- [x] **Step 2: Run tests and verify RED**
 
 ```powershell
 uv run pytest tests/test_latest_frontier_policy.py -q
@@ -82,11 +82,11 @@ uv run pytest tests/test_latest_frontier_policy.py -q
 
 Expected: import failure for `books_of_time.domain.latest_frontier`.
 
-- [ ] **Step 3: Implement the pure helpers**
+- [x] **Step 3: Implement the pure helpers**
 
 Store timestamps as UTC ISO-8601 strings, preserve order, return immutable tuples, and do not infer ordering from RPIDs or cursor values. `latest_slice_seconds()` uses `math.floor`, clamps to `[10, 55]`, and treats `None` as the 55-second default.
 
-- [ ] **Step 4: Run focused tests and Ruff**
+- [x] **Step 4: Run focused tests and Ruff**
 
 ```powershell
 uv run pytest tests/test_latest_frontier_policy.py -q
@@ -95,7 +95,7 @@ uv run ruff check books_of_time/domain/latest_frontier.py tests/test_latest_fron
 
 Expected: all tests pass and Ruff is clean.
 
-- [ ] **Step 5: Commit the pure policy unit**
+- [x] **Step 5: Commit the pure policy unit**
 
 ```powershell
 git add books_of_time/domain/latest_frontier.py tests/test_latest_frontier_policy.py docs/superpowers/plans/2026-07-14-latest-scan-baseline-c5.md
