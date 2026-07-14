@@ -95,6 +95,33 @@ async def test_task_repository_reuses_active_task_with_same_idempotency_key() ->
 
 
 @pytest.mark.asyncio
+async def test_task_repository_persists_optional_cohort_links() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    now = datetime(2026, 7, 14, 4, 0, tzinfo=UTC)
+
+    async with session_factory() as session:
+        task = await CollectionTaskRepository(session).enqueue(
+            kind=TaskKind.FETCH_VIDEO_STATS,
+            target_type="video",
+            target_id="BV-LINKED",
+            priority=100,
+            payload={"bvid": "BV-LINKED"},
+            not_before=now,
+            snapshot_cohort_id=11,
+            snapshot_cohort_component_id=22,
+        )
+
+        assert task.snapshot_cohort_id == 11
+        assert task.snapshot_cohort_component_id == 22
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_task_repository_allows_reenqueue_after_success() -> None:
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as conn:

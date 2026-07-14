@@ -160,7 +160,7 @@ git commit -m "feat(planner): add cohort rollout configuration"
 - Produces `SnapshotCohortRepository.materialize(plan, *, rollout_mode, now) -> CohortMaterializationResult`.
 - Extends `CollectionTaskRepository.enqueue(..., snapshot_cohort_id: int | None = None, snapshot_cohort_component_id: int | None = None)`.
 
-- [ ] **Step 1: Write failing materialization tests**
+- [x] **Step 1: Write failing materialization tests**
 
 Use a real in-memory ORM graph with one policy version, known video, and adopted state. Build this exact routine plan:
 
@@ -198,7 +198,7 @@ Assert:
 6. A recovery plan with the same stable key may add a newly missing component, updating `expected_component_count`, but cannot mutate existing component identity or planned pages.
 7. Repository methods flush only; caller rollback removes the whole graph.
 
-- [ ] **Step 2: Run materialization tests to verify RED**
+- [x] **Step 2: Run materialization tests to verify RED**
 
 ```powershell
 uv run pytest tests/test_cohort_materialization.py tests/test_task_queue.py -q
@@ -206,7 +206,7 @@ uv run pytest tests/test_cohort_materialization.py tests/test_task_queue.py -q
 
 Expected: plan value objects, materializer, and enqueue link parameters are missing.
 
-- [ ] **Step 3: Implement caller-owned atomic materialization**
+- [x] **Step 3: Implement caller-owned atomic materialization**
 
 `materialize` must:
 
@@ -223,14 +223,14 @@ Use nested savepoints around first inserts so unique-constraint races can be rel
 
 Task payload is copied from the component plan and augmented with `bvid`, `reason`, `scheduled_for`, `cohort_key`, and `component_kind`. Do not store cookies, authenticated URLs, or headers.
 
-- [ ] **Step 4: Verify GREEN**
+- [x] **Step 4: Verify GREEN**
 
 ```powershell
 uv run pytest tests/test_cohort_materialization.py tests/test_task_queue.py tests/test_cohort_repositories.py -q
 uv run ruff check books_of_time/db/cohort_repositories.py books_of_time/db/repositories.py tests/test_cohort_materialization.py tests/test_task_queue.py
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add books_of_time/db/cohort_repositories.py books_of_time/db/repositories.py tests/test_cohort_materialization.py tests/test_task_queue.py docs/superpowers/plans/2026-07-14-persistent-cohort-planner-c3.md

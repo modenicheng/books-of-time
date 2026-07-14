@@ -282,6 +282,8 @@ class CollectionTaskRepository:
         budget_cost: int = 1,
         max_retries: int = 3,
         idempotency_key: str | None = None,
+        snapshot_cohort_id: int | None = None,
+        snapshot_cohort_component_id: int | None = None,
     ) -> CollectionTask:
         if idempotency_key is not None:
             existing = await self.session.scalar(
@@ -301,6 +303,17 @@ class CollectionTaskRepository:
                 .with_for_update(skip_locked=True)
             )
             if existing is not None:
+                if (
+                    snapshot_cohort_id is not None
+                    and existing.snapshot_cohort_id != snapshot_cohort_id
+                ) or (
+                    snapshot_cohort_component_id is not None
+                    and existing.snapshot_cohort_component_id
+                    != snapshot_cohort_component_id
+                ):
+                    raise ValueError(
+                        "Active task idempotency key belongs to another cohort component"
+                    )
                 return existing
 
         task = CollectionTask(
@@ -314,6 +327,8 @@ class CollectionTaskRepository:
             not_before=not_before,
             max_retries=max_retries,
             status=TaskStatus.PENDING,
+            snapshot_cohort_id=snapshot_cohort_id,
+            snapshot_cohort_component_id=snapshot_cohort_component_id,
         )
         self.session.add(task)
         await self.session.flush()
