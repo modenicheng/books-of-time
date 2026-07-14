@@ -261,7 +261,7 @@ git commit -m "feat(policy): validate cohort policy configuration"
 - Produces `checkpoint_times(anchor: datetime, policy: CohortPolicy) -> tuple[tuple[int, datetime], ...]`.
 - Produces stable key helpers `routine_cohort_key`, `checkpoint_cohort_key`, `recovery_cohort_key`, and `component_key`.
 
-- [ ] **Step 1: Write failing UTC/activity/checkpoint tests**
+- [x] **Step 1: Write failing UTC/activity/checkpoint tests**
 
 Cover:
 
@@ -276,7 +276,7 @@ Cover:
 - checkpoint times are exactly anchor + 6/12/18/24h.
 - keys canonicalize aware datetimes to whole-second UTC `Z` and reject microsecond ambiguity by truncating consistently.
 
-- [ ] **Step 2: Run time tests to verify RED**
+- [x] **Step 2: Run time tests to verify RED**
 
 ```powershell
 uv run pytest tests/test_cohort_time_policy.py -q
@@ -284,7 +284,7 @@ uv run pytest tests/test_cohort_time_policy.py -q
 
 Expected: the pure functions are missing.
 
-- [ ] **Step 3: Implement time functions without DB access**
+- [x] **Step 3: Implement time functions without DB access**
 
 Reuse the existing age/growth thresholds, but do not call the database-backed video policy. `effective_interval` computes:
 
@@ -305,7 +305,7 @@ snapshot:{bvid}:recovery:through:{hours}h
 {cohort_key}:{component_kind}
 ```
 
-- [ ] **Step 4: Verify time policy GREEN**
+- [x] **Step 4: Verify time policy GREEN**
 
 ```powershell
 uv run pytest tests/test_cohort_time_policy.py tests/test_snapshot_policy.py -q
@@ -314,7 +314,7 @@ uv run ruff check books_of_time/domain/cohort_policy.py tests/test_cohort_time_p
 
 Expected: old cadence remains compatible and C2 interval/key behavior is deterministic.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add books_of_time/domain/cohort_policy.py tests/test_cohort_time_policy.py docs/superpowers/plans/2026-07-14-cohort-state-and-policy-c2.md

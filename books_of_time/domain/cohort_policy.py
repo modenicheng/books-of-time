@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import time, timedelta
+from datetime import UTC, datetime, time, timedelta
 from enum import StrEnum
 from itertools import pairwise
 from types import MappingProxyType
@@ -177,6 +177,107 @@ class CohortPolicy:
         )
 
 
+def is_activity_window(now: datetime, policy: CohortPolicy) -> bool:
+    _require_aware(now)
+    local_time = now.astimezone(policy.timezone).time()
+    return any(
+        _time_in_window(local_time, window) for window in policy.activity_windows
+    )
+
+
+def age_growth_interval(
+    anchor: datetime,
+    now: datetime,
+    recent_view_growth_last_hour: int | None,
+) -> timedelta:
+    _require_aware(anchor)
+    _require_aware(now)
+    age = max(now - anchor, timedelta())
+    if age < timedelta(minutes=30):
+        return timedelta(minutes=1)
+    if age < timedelta(hours=6):
+        return timedelta(minutes=5)
+
+    growth = recent_view_growth_last_hour or 0
+    if growth > 30_000:
+        return timedelta(minutes=5)
+    if growth > 6_000:
+        return timedelta(minutes=15)
+    if growth > 1_200:
+        return timedelta(minutes=30)
+    return timedelta(minutes=120)
+
+
+def effective_interval(
+    anchor: datetime,
+    now: datetime,
+    *,
+    tier: CollectionTier,
+    policy: CohortPolicy,
+    recent_view_growth_last_hour: int | None = None,
+    next_checkpoint_at: datetime | None = None,
+) -> timedelta:
+    age_interval = age_growth_interval(
+        anchor,
+        now,
+        recent_view_growth_last_hour,
+    )
+    tier_interval = policy.tier_intervals[tier]
+    ceiling = (
+        tier_interval.active
+        if is_activity_window(now, policy)
+        else tier_interval.normal
+    )
+    candidates = [age_interval, ceiling]
+    if next_checkpoint_at is not None:
+        _require_aware(next_checkpoint_at)
+        candidates.append(max(next_checkpoint_at - now, timedelta()))
+    return min(candidates)
+
+
+def next_aligned_slot(
+    anchor: datetime,
+    now: datetime,
+    interval: timedelta,
+) -> datetime:
+    _require_aware(anchor)
+    _require_aware(now)
+    if interval <= timedelta():
+        raise ValueError("interval must be positive")
+    if now < anchor:
+        return anchor
+    elapsed_slots = (now - anchor) // interval
+    return anchor + interval * (elapsed_slots + 1)
+
+
+def checkpoint_times(
+    anchor: datetime,
+    policy: CohortPolicy,
+) -> tuple[tuple[int, datetime], ...]:
+    _require_aware(anchor)
+    return tuple(
+        (hours, anchor + timedelta(hours=hours)) for hours in policy.checkpoint_hours
+    )
+
+
+def routine_cohort_key(bvid: str, scheduled_for: datetime) -> str:
+    return f"snapshot:{bvid}:{_canonical_utc_second(scheduled_for)}:routine"
+
+
+def checkpoint_cohort_key(bvid: str, hours: int) -> str:
+    _require_positive_hours(hours)
+    return f"snapshot:{bvid}:age:{hours}h"
+
+
+def recovery_cohort_key(bvid: str, latest_overdue_hours: int) -> str:
+    _require_positive_hours(latest_overdue_hours)
+    return f"snapshot:{bvid}:recovery:through:{latest_overdue_hours}h"
+
+
+def component_key(cohort_key: str, component_kind: str) -> str:
+    return f"{cohort_key}:{component_kind}"
+
+
 _TIER_THRESHOLD_DEFAULTS = {
     CollectionTier.S: (6000, 60, 0.35),
     CollectionTier.A: (1200, 20, 0.20),
@@ -197,6 +298,28 @@ _ACTIVITY_WINDOW_DEFAULTS = (
 )
 
 _TIME_PATTERN = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+
+
+def _require_aware(value: datetime) -> None:
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError("datetime must be timezone-aware")
+
+
+def _time_in_window(value: time, window: ActivityWindow) -> bool:
+    if window.start < window.end:
+        return window.start <= value < window.end
+    return value >= window.start or value < window.end
+
+
+def _canonical_utc_second(value: datetime) -> str:
+    _require_aware(value)
+    normalized = value.astimezone(UTC).replace(microsecond=0)
+    return normalized.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _require_positive_hours(value: int) -> None:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError("hours must be a positive integer")
 
 
 def _mapping(value: object, path: str) -> Mapping[str, Any]:
