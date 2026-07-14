@@ -1,4 +1,5 @@
 import asyncio
+import json
 import sqlite3
 import subprocess
 import sys
@@ -26,7 +27,7 @@ async def test_schema_revision_helpers_read_expected_and_current_head(
     tmp_path: Path,
 ) -> None:
     expected = get_expected_schema_revision()
-    assert expected == "0011_hot_comment_scans"
+    assert expected == "0012_latest_comment_scans"
 
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as connection:
@@ -447,6 +448,113 @@ def test_hot_comment_scan_revision_round_trip(tmp_path: Path) -> None:
 
     command.upgrade(alembic_config, "head")
     assert _sqlite_table_exists(database_path, "comment_scan_runs")
+
+
+def test_latest_comment_scan_revision_is_static() -> None:
+    revision_path = (
+        Path(__file__).resolve().parents[1]
+        / "alembic"
+        / "versions"
+        / "0012_latest_comment_scans.py"
+    )
+    source = revision_path.read_text(encoding="utf-8")
+
+    assert (
+        'down_revision: str | Sequence[str] | None = "0011_hot_comment_scans"' in source
+    )
+    assert "active_scan_run_id" in source
+    assert "frontier_anchor_set" in source
+    assert "uq_comment_scan_runs_active_latest_bvid" in source
+    assert "Base.metadata" not in source
+
+
+def test_latest_comment_scan_revision_round_trip(tmp_path: Path) -> None:
+    database_path = tmp_path / "latest-comment-scan-cycle.sqlite3"
+    config_path = _write_sqlite_config(
+        tmp_path / "latest-comment-scan-cycle.yaml",
+        database_path,
+    )
+    alembic_config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
+    alembic_config.attributes["bot_config_path"] = str(config_path)
+    alembic_config.attributes["skip_logger_config"] = True
+
+    command.upgrade(alembic_config, "0011_hot_comment_scans")
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO frontier_states (
+                target_type,
+                target_id,
+                frontier_type,
+                frontier_rpid,
+                frontier_time,
+                cursor,
+                last_scan_at,
+                last_scan_status,
+                last_scan_pages,
+                last_scan_truncated,
+                extra
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "video",
+                "BV-MIGRATED-FRONTIER",
+                "latest_comments",
+                1001,
+                "2026-07-14 08:00:00+00:00",
+                None,
+                "2026-07-14 08:00:00+00:00",
+                "baseline_complete",
+                1,
+                0,
+                '{"baseline_status": "baseline_complete"}',
+            ),
+        )
+        connection.commit()
+
+    command.upgrade(alembic_config, "head")
+    assert {
+        "active_scan_run_id",
+        "version",
+        "frontier_anchor_set",
+    }.issubset(_sqlite_columns(database_path, "frontier_states"))
+    assert "idx_frontier_states_active_scan" in _sqlite_indexes(
+        database_path,
+        "frontier_states",
+    )
+    assert "uq_comment_scan_runs_active_latest_bvid" in _sqlite_indexes(
+        database_path,
+        "comment_scan_runs",
+    )
+    with sqlite3.connect(database_path) as connection:
+        migrated_anchors = connection.execute(
+            "SELECT frontier_anchor_set FROM frontier_states "
+            "WHERE target_id = 'BV-MIGRATED-FRONTIER'"
+        ).fetchone()
+    assert migrated_anchors is not None
+    assert json.loads(migrated_anchors[0]) == [
+        {"rpid": 1001, "platform_created_at": None}
+    ]
+
+    command.downgrade(alembic_config, "0011_hot_comment_scans")
+    assert "active_scan_run_id" not in _sqlite_columns(
+        database_path,
+        "frontier_states",
+    )
+    assert "idx_frontier_states_active_scan" not in _sqlite_indexes(
+        database_path,
+        "frontier_states",
+    )
+    assert "uq_comment_scan_runs_active_latest_bvid" not in _sqlite_indexes(
+        database_path,
+        "comment_scan_runs",
+    )
+
+    command.upgrade(alembic_config, "head")
+    assert "frontier_anchor_set" in _sqlite_columns(
+        database_path,
+        "frontier_states",
+    )
     assert {
         "comment_scan_run_id",
         "scan_slice_no",

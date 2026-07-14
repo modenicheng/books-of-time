@@ -1615,6 +1615,28 @@ Index(
     CommentScanRun.status,
     CommentScanRun.updated_at,
 )
+_active_latest_scan_predicate = CommentScanRun.mode.in_(
+    (
+        CommentScanMode.BASELINE_TAIL,
+        CommentScanMode.BASELINE_HEAD_SWEEP,
+        CommentScanMode.INCREMENTAL,
+        CommentScanMode.FULL_RECONCILIATION,
+        CommentScanMode.SEGMENTED_RECONCILIATION,
+    )
+) & CommentScanRun.status.in_(
+    (
+        CommentScanStatus.PLANNED,
+        CommentScanStatus.RUNNING,
+        CommentScanStatus.PAUSED,
+    )
+)
+Index(
+    "uq_comment_scan_runs_active_latest_bvid",
+    CommentScanRun.bvid,
+    unique=True,
+    sqlite_where=_active_latest_scan_predicate,
+    postgresql_where=_active_latest_scan_predicate,
+)
 
 
 class CollectionScheduleGap(Base):
@@ -1671,7 +1693,10 @@ Index(
 
 class FrontierState(TimestampMixin, Base):
     __tablename__ = "frontier_states"
-    __table_args__ = (UniqueConstraint("target_type", "target_id", "frontier_type"),)
+    __table_args__ = (
+        UniqueConstraint("target_type", "target_id", "frontier_type"),
+        CheckConstraint("version >= 0", name="ck_frontier_states_version"),
+    )
 
     id: Mapped[int] = mapped_column(
         bigint_pk_type, primary_key=True, autoincrement=True
@@ -1681,6 +1706,22 @@ class FrontierState(TimestampMixin, Base):
     frontier_type: Mapped[str] = mapped_column(Text, nullable=False)
     frontier_rpid: Mapped[int | None] = mapped_column(BigInteger)
     frontier_time: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    frontier_anchor_set: Mapped[list[dict[str, Any]]] = mapped_column(
+        json_dict_type,
+        nullable=False,
+        default=list,
+        server_default=text("'[]'"),
+    )
+    active_scan_run_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        ForeignKey("comment_scan_runs.id", ondelete="SET NULL"),
+    )
+    version: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default=text("0"),
+    )
     cursor: Mapped[str | None] = mapped_column(Text)
     last_scan_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     last_scan_status: Mapped[str | None] = mapped_column(Text)
@@ -1691,3 +1732,6 @@ class FrontierState(TimestampMixin, Base):
         nullable=False,
         default=dict,
     )
+
+
+Index("idx_frontier_states_active_scan", FrontierState.active_scan_run_id)

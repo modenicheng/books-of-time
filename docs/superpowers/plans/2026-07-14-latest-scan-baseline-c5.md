@@ -109,6 +109,7 @@ git commit -m "feat(latest): add multi-anchor frontier policy"
 **Files:**
 - Create: `alembic/versions/0012_latest_comment_scans.py`
 - Modify: `books_of_time/db/models.py`
+- Modify: `books_of_time/db/schema.py`
 - Modify: `tests/test_comment_scan_models.py`
 - Modify: `tests/test_schema_migrations.py`
 
@@ -118,7 +119,7 @@ git commit -m "feat(latest): add multi-anchor frontier policy"
 - Adds partial unique index `uq_comment_scan_runs_active_latest_bvid` for the latest modes `baseline_tail`, `baseline_head_sweep`, `incremental`, `full_reconciliation`, and `segmented_reconciliation` while status is `planned`, `running`, or `paused`.
 - Produces Alembic head `0012_latest_comment_scans`.
 
-- [ ] **Step 1: Write failing model contract tests**
+- [x] **Step 1: Write failing model contract tests**
 
 Use real SQLite sessions to assert:
 
@@ -130,7 +131,7 @@ state.frontier_anchor_set = [{"rpid": 1001, "platform_created_at": None}]
 
 persists and reloads. Assert a second active latest scan for the same BVID fails even with another latest mode, while a terminal latest scan and an active `hot_core` scan may coexist. Assert `version < 0` fails and deleting a scan sets `active_scan_run_id` to NULL.
 
-- [ ] **Step 2: Run model tests and verify RED**
+- [x] **Step 2: Run model tests and verify RED**
 
 ```powershell
 uv run pytest tests/test_comment_scan_models.py -q
@@ -138,7 +139,7 @@ uv run pytest tests/test_comment_scan_models.py -q
 
 Expected: missing frontier columns/index behavior.
 
-- [ ] **Step 3: Implement ORM columns, checks, and indexes**
+- [x] **Step 3: Implement ORM columns, checks, and indexes**
 
 Use the existing JSON and UTC helpers. Required model contract:
 
@@ -150,11 +151,11 @@ frontier_anchor_set JSON NOT NULL DEFAULT []
 
 The partial unique index must use equivalent PostgreSQL and SQLite predicates and must not include hot/reply/visibility modes.
 
-- [ ] **Step 4: Write reversible Alembic revision**
+- [x] **Step 4: Write reversible Alembic revision**
 
-Upgrade adds the columns/FK/check/index and active-latest partial unique index. Downgrade drops indexes/constraints before columns. Use `batch_alter_table` for SQLite and preserve revision round-trip support.
+Upgrade adds the columns/FK/check/index and active-latest partial unique index, then backfills each existing non-NULL `frontier_rpid` as a one-element anchor set with unknown platform time. Downgrade drops indexes/constraints before columns. Use `batch_alter_table` for SQLite and preserve revision round-trip support.
 
-- [ ] **Step 5: Run migration and model verification**
+- [x] **Step 5: Run migration and model verification**
 
 ```powershell
 uv run pytest tests/test_schema_migrations.py::test_latest_comment_scan_revision_round_trip -q
@@ -163,10 +164,10 @@ uv run pytest tests/test_comment_scan_models.py tests/test_schema_migrations.py 
 
 Expected: upgrade to `0012_latest_comment_scans`, downgrade to `0011_hot_comment_scans`, and re-upgrade pass on a disposable SQLite database.
 
-- [ ] **Step 6: Commit the schema unit**
+- [x] **Step 6: Commit the schema unit**
 
 ```powershell
-git add alembic/versions/0012_latest_comment_scans.py books_of_time/db/models.py tests/test_comment_scan_models.py tests/test_schema_migrations.py
+git add alembic/versions/0012_latest_comment_scans.py books_of_time/db/models.py books_of_time/db/schema.py tests/test_comment_scan_models.py tests/test_schema_migrations.py
 git commit -m "feat(scans): add latest frontier ownership"
 ```
 

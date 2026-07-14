@@ -51,6 +51,11 @@ _POST_BASELINE_COLUMNS = {
         "comment_scan_run_id",
     },
     "raw_page_observations": {"scan_run_id"},
+    "frontier_states": {
+        "active_scan_run_id",
+        "version",
+        "frontier_anchor_set",
+    },
     "comment_entities": {
         "platform_created_at",
         "author_level",
