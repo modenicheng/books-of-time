@@ -500,6 +500,47 @@ async def test_stale_routine_creates_one_gap_and_one_current_archived_probe() ->
 
 
 @pytest.mark.asyncio
+async def test_candidate_batch_adopts_unseen_videos_before_revisiting_known_rows() -> (
+    None
+):
+    engine, session_factory = await _database()
+    now = datetime(2026, 7, 14, 4, 0, tzinfo=UTC)
+    planner = SnapshotCohortPlanner(_policy(), batch_limit=1)
+
+    async with session_factory() as session:
+        await _seed_video(
+            session,
+            bvid="BV-OLDEST",
+            pubdate=now - timedelta(hours=2),
+            first_seen_at=now - timedelta(hours=2),
+        )
+        await _seed_video(
+            session,
+            bvid="BV-UNSEEN",
+            pubdate=now - timedelta(hours=1),
+            first_seen_at=now - timedelta(hours=1),
+        )
+
+        await planner.plan_due(
+            session,
+            now=now,
+            rollout_mode=CohortRolloutMode.SHADOW,
+        )
+        assert await session.get(VideoCollectionState, "BV-OLDEST") is not None
+        assert await session.get(VideoCollectionState, "BV-UNSEEN") is None
+
+        await planner.plan_due(
+            session,
+            now=now + timedelta(seconds=30),
+            rollout_mode=CohortRolloutMode.SHADOW,
+        )
+
+        assert await session.get(VideoCollectionState, "BV-UNSEEN") is not None
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_same_policy_version_rejects_changed_policy_content() -> None:
     engine, session_factory = await _database()
     now = datetime(2026, 7, 14, 4, 0, tzinfo=UTC)

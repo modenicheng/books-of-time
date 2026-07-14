@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import case, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -291,10 +291,28 @@ class VideoCollectionStateRepository:
     async def list_candidates(self, *, limit: int = 5000) -> list[KnownVideo]:
         if limit <= 0:
             raise ValueError("candidate limit must be positive")
+        adoption_rank = case(
+            (VideoCollectionState.bvid.is_(None), 0),
+            else_=1,
+        )
+        missing_due_rank = case(
+            (VideoCollectionState.next_due_at.is_(None), 1),
+            else_=0,
+        )
         return list(
             await self.session.scalars(
                 select(KnownVideo)
-                .order_by(KnownVideo.first_seen_at.asc(), KnownVideo.bvid.asc())
+                .outerjoin(
+                    VideoCollectionState,
+                    VideoCollectionState.bvid == KnownVideo.bvid,
+                )
+                .order_by(
+                    adoption_rank.asc(),
+                    missing_due_rank.asc(),
+                    VideoCollectionState.next_due_at.asc(),
+                    KnownVideo.first_seen_at.asc(),
+                    KnownVideo.bvid.asc(),
+                )
                 .limit(limit)
             )
         )
