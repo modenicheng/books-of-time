@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy import case, func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -307,17 +308,11 @@ class CollectionTaskRepository:
                 .with_for_update(skip_locked=True)
             )
             if existing is not None:
-                if (
-                    snapshot_cohort_id is not None
-                    and existing.snapshot_cohort_id != snapshot_cohort_id
-                ) or (
-                    snapshot_cohort_component_id is not None
-                    and existing.snapshot_cohort_component_id
-                    != snapshot_cohort_component_id
-                ):
-                    raise ValueError(
-                        "Active task idempotency key belongs to another cohort component"
-                    )
+                self._validate_idempotency_owner(
+                    existing,
+                    snapshot_cohort_id=snapshot_cohort_id,
+                    snapshot_cohort_component_id=snapshot_cohort_component_id,
+                )
                 return existing
 
         task = CollectionTask(
@@ -334,9 +329,59 @@ class CollectionTaskRepository:
             snapshot_cohort_id=snapshot_cohort_id,
             snapshot_cohort_component_id=snapshot_cohort_component_id,
         )
-        self.session.add(task)
-        await self.session.flush()
+        if idempotency_key is None:
+            self.session.add(task)
+            await self.session.flush()
+            return task
+
+        try:
+            async with self.session.begin_nested():
+                self.session.add(task)
+                await self.session.flush()
+        except IntegrityError:
+            existing = await self.session.scalar(
+                select(CollectionTask)
+                .where(
+                    CollectionTask.idempotency_key == idempotency_key,
+                    CollectionTask.status.in_(
+                        (
+                            TaskStatus.PENDING,
+                            TaskStatus.RUNNING,
+                            TaskStatus.BACKOFF,
+                        )
+                    ),
+                )
+                .order_by(CollectionTask.created_at.asc(), CollectionTask.id.asc())
+                .limit(1)
+                .with_for_update()
+            )
+            if existing is None:
+                raise
+            self._validate_idempotency_owner(
+                existing,
+                snapshot_cohort_id=snapshot_cohort_id,
+                snapshot_cohort_component_id=snapshot_cohort_component_id,
+            )
+            return existing
         return task
+
+    @staticmethod
+    def _validate_idempotency_owner(
+        task: CollectionTask,
+        *,
+        snapshot_cohort_id: int | None,
+        snapshot_cohort_component_id: int | None,
+    ) -> None:
+        if (
+            snapshot_cohort_id is not None
+            and task.snapshot_cohort_id != snapshot_cohort_id
+        ) or (
+            snapshot_cohort_component_id is not None
+            and task.snapshot_cohort_component_id != snapshot_cohort_component_id
+        ):
+            raise ValueError(
+                "Active task idempotency key belongs to another cohort component"
+            )
 
     async def lease_next(
         self,

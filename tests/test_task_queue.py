@@ -2,11 +2,42 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from books_of_time.db.models import Base, CollectionTask
 from books_of_time.db.repositories import CollectionTaskRepository
 from books_of_time.domain.enums import TaskKind, TaskStatus
+
+
+class _NestedTransaction:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, traceback):
+        return False
+
+
+class _IdempotencyRaceSession:
+    def __init__(self, existing: CollectionTask) -> None:
+        self.existing = existing
+        self.scalar_calls = 0
+        self.nested_transactions = 0
+        self.added: list[CollectionTask] = []
+
+    async def scalar(self, statement):
+        self.scalar_calls += 1
+        return None if self.scalar_calls == 1 else self.existing
+
+    def add(self, task: CollectionTask) -> None:
+        self.added.append(task)
+
+    def begin_nested(self) -> _NestedTransaction:
+        self.nested_transactions += 1
+        return _NestedTransaction()
+
+    async def flush(self) -> None:
+        raise IntegrityError("INSERT", {}, RuntimeError("unique conflict"))
 
 
 @pytest.mark.asyncio
@@ -92,6 +123,37 @@ async def test_task_repository_reuses_active_task_with_same_idempotency_key() ->
         assert tasks[0].payload["attempt"] == 1
 
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_task_repository_recovers_from_concurrent_idempotency_insert() -> None:
+    now = datetime(2026, 7, 14, 4, 0, tzinfo=UTC)
+    existing = CollectionTask(
+        id=41,
+        kind=TaskKind.FETCH_VIDEO_STATS,
+        target_type="video",
+        target_id="BV-RACE",
+        idempotency_key="fetch_video_stats:video:BV-RACE",
+        priority=10,
+        payload={"bvid": "BV-RACE", "winner": True},
+        not_before=now,
+        status=TaskStatus.PENDING,
+    )
+    session = _IdempotencyRaceSession(existing)
+
+    task = await CollectionTaskRepository(session).enqueue(
+        kind=TaskKind.FETCH_VIDEO_STATS,
+        target_type="video",
+        target_id="BV-RACE",
+        priority=99,
+        payload={"bvid": "BV-RACE", "winner": False},
+        not_before=now,
+        idempotency_key="fetch_video_stats:video:BV-RACE",
+    )
+
+    assert task is existing
+    assert session.scalar_calls == 2
+    assert session.nested_transactions == 1
 
 
 @pytest.mark.asyncio
