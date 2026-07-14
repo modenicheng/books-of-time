@@ -160,6 +160,8 @@ class HttpRequestAttemptRepository:
         self,
         *,
         collection_task_id: int | None,
+        snapshot_cohort_id: int | None = None,
+        snapshot_cohort_component_id: int | None = None,
         request_type: BilibiliRequestType,
         method: str,
         url: str,
@@ -175,6 +177,8 @@ class HttpRequestAttemptRepository:
             raise ValueError("HTTP attempt URL must not be empty")
         attempt = HttpRequestAttempt(
             collection_task_id=collection_task_id,
+            snapshot_cohort_id=snapshot_cohort_id,
+            snapshot_cohort_component_id=snapshot_cohort_component_id,
             status="started",
             request_type=request_type,
             attempt_started_at=attempt_started_at,
@@ -512,6 +516,8 @@ class CollectionCoverageRepository:
     ) -> CollectionCoverageStat:
         stat = CollectionCoverageStat(
             collection_task_id=task.id,
+            snapshot_cohort_id=task.snapshot_cohort_id,
+            snapshot_cohort_component_id=task.snapshot_cohort_component_id,
             run_id=run_id,
             task_kind=draft.task_kind,
             target_type=draft.target_type,

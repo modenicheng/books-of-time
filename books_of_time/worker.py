@@ -8,6 +8,7 @@ from typing import Protocol
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from books_of_time.coverage import CoverageDraft
+from books_of_time.db.cohort_repositories import SnapshotCohortExecutionRepository
 from books_of_time.db.http_evidence import DatabaseHttpEvidenceSink
 from books_of_time.db.models import CollectionTask
 from books_of_time.db.repositories import (
@@ -81,17 +82,19 @@ class Worker:
 
             run_repo = CollectionRunRepository(session)
             coverage_repo = CollectionCoverageRepository(session)
+            cohort_repo = SnapshotCohortExecutionRepository(session)
             run = await run_repo.get_or_create_running(
                 run_id=self.run_id,
                 worker_id=self.lease_owner,
                 now=effective_now,
             )
             await run_repo.record_task_started(run, now=effective_now)
+            await cohort_repo.mark_task_started(task, now=effective_now)
 
             collector = self.collectors.get(task.kind)
             if collector is None:
                 finished_at = datetime.now(UTC)
-                await coverage_repo.insert_failed(
+                coverage = await coverage_repo.insert_failed(
                     task=task,
                     run_id=self.run_id,
                     started_at=effective_now,
@@ -103,6 +106,12 @@ class Worker:
                 task.status = TaskStatus.FAILED
                 task.lease_owner = None
                 task.lease_until = None
+                await cohort_repo.record_task_failed(
+                    task,
+                    coverage,
+                    terminal=True,
+                    finished_at=finished_at,
+                )
                 await session.commit()
                 return True
             evidence_sink = (
@@ -111,6 +120,8 @@ class Worker:
                     raw_store=self.raw_store,
                     run_id=self.run_id,
                     collection_task_id=task.id,
+                    snapshot_cohort_id=task.snapshot_cohort_id,
+                    snapshot_cohort_component_id=task.snapshot_cohort_component_id,
                 )
                 if self.raw_store is not None
                 else None
@@ -151,7 +162,7 @@ class Worker:
                         "exception_type": type(exc).__name__,
                         "message": str(exc),
                     }
-                await coverage_repo.insert_failed(
+                coverage = await coverage_repo.insert_failed(
                     task=task,
                     run_id=self.run_id,
                     started_at=effective_now,
@@ -168,11 +179,17 @@ class Worker:
                     task.status = TaskStatus.FAILED
                 task.lease_owner = None
                 task.lease_until = None
+                await cohort_repo.record_task_failed(
+                    task,
+                    coverage,
+                    terminal=task.status is TaskStatus.FAILED,
+                    finished_at=finished_at,
+                )
                 await session.commit()
                 return True
 
             finished_at = datetime.now(UTC)
-            await coverage_repo.insert_from_draft(
+            coverage = await coverage_repo.insert_from_draft(
                 task=task,
                 run_id=self.run_id,
                 draft=draft,
@@ -188,6 +205,11 @@ class Worker:
             task.status = TaskStatus.SUCCEEDED
             task.lease_owner = None
             task.lease_until = None
+            await cohort_repo.record_task_succeeded(
+                task,
+                coverage,
+                finished_at=finished_at,
+            )
             await session.commit()
             return True
 

@@ -68,6 +68,8 @@ async def test_collection_coverage_repository_inserts_and_lists_by_target() -> N
                 priority=80,
                 payload={"bvid": "BV1xx"},
                 not_before=now,
+                snapshot_cohort_id=11,
+                snapshot_cohort_component_id=22,
             )
             draft = CoverageDraft(
                 task_kind=TaskKind.FETCH_HOT_COMMENTS,
@@ -95,6 +97,8 @@ async def test_collection_coverage_repository_inserts_and_lists_by_target() -> N
             )
             assert len(rows) == 1
             assert rows[0].status == "succeeded"
+            assert rows[0].snapshot_cohort_id == 11
+            assert rows[0].snapshot_cohort_component_id == 22
             assert rows[0].pages_requested == 1
             assert rows[0].pages_succeeded == 1
             assert rows[0].items_observed == 2

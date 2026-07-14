@@ -11,6 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from books_of_time.db.models import (
+    CollectionCoverageStat,
     CollectionPolicyVersion,
     CollectionScheduleGap,
     CollectionTask,
@@ -26,8 +27,10 @@ from books_of_time.domain.cohort_policy import (
     CohortRolloutMode,
     CohortStatus,
     CollectionTier,
+    ComponentOutcome,
     TierAssessment,
     VideoLifeStage,
+    aggregate_cohort_status,
     component_key,
 )
 from books_of_time.domain.enums import TaskKind
@@ -685,6 +688,211 @@ class SnapshotCohortRepository:
             if existing is None:
                 raise
             return existing, False
+
+
+class SnapshotCohortExecutionRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def mark_task_started(
+        self,
+        task: CollectionTask,
+        *,
+        now: datetime,
+    ) -> SnapshotCohortComponent | None:
+        linked = await self._load_linked(task)
+        if linked is None:
+            return None
+        cohort, component = linked
+        if component.status not in {
+            CohortComponentStatus.PENDING.value,
+            CohortComponentStatus.RUNNING.value,
+        }:
+            raise ValueError(
+                f"Cohort component is not executable: {component.id}:{component.status}"
+            )
+        if component.started_at is None:
+            component.started_at = now
+            component.skew_seconds = int(
+                (now - component.scheduled_for).total_seconds()
+            )
+        component.status = CohortComponentStatus.RUNNING.value
+        component.finished_at = None
+        cohort.status = CohortStatus.RUNNING.value
+        cohort.started_at = cohort.started_at or now
+        cohort.finished_at = None
+        cohort.updated_at = now
+        await self.session.flush()
+        return component
+
+    async def record_task_succeeded(
+        self,
+        task: CollectionTask,
+        coverage: CollectionCoverageStat,
+        *,
+        finished_at: datetime,
+    ) -> SnapshotCohortComponent | None:
+        linked = await self._load_linked(task)
+        if linked is None:
+            return None
+        cohort, component = linked
+        self._add_coverage(component, coverage)
+        if coverage.status == "corrupted":
+            component.status = CohortComponentStatus.CORRUPTED.value
+            component.failure_reason = coverage.reason or "corrupted"
+        elif coverage.status == "partial":
+            component.status = CohortComponentStatus.PARTIAL.value
+            component.failure_reason = coverage.reason or "partial"
+        else:
+            component.status = CohortComponentStatus.COMPLETE.value
+            component.failure_reason = None
+        component.finished_at = finished_at
+        await self._recompute_cohort(cohort, finished_at=finished_at)
+        return component
+
+    async def record_task_failed(
+        self,
+        task: CollectionTask,
+        coverage: CollectionCoverageStat,
+        *,
+        terminal: bool,
+        finished_at: datetime,
+    ) -> SnapshotCohortComponent | None:
+        linked = await self._load_linked(task)
+        if linked is None:
+            return None
+        cohort, component = linked
+        self._add_coverage(component, coverage)
+        component.extra = {
+            **component.extra,
+            "failure_attempts": int(component.extra.get("failure_attempts") or 0) + 1,
+            "last_failure_reason": coverage.reason,
+        }
+        component.failure_reason = coverage.reason
+        if terminal:
+            component.status = CohortComponentStatus.FAILED.value
+            component.finished_at = finished_at
+        else:
+            component.status = CohortComponentStatus.RUNNING.value
+            component.finished_at = None
+        await self._recompute_cohort(cohort, finished_at=finished_at)
+        return component
+
+    async def _load_linked(
+        self,
+        task: CollectionTask,
+    ) -> tuple[SnapshotCohort, SnapshotCohortComponent] | None:
+        if (
+            task.snapshot_cohort_id is None
+            and task.snapshot_cohort_component_id is None
+        ):
+            return None
+        if task.snapshot_cohort_id is None or task.snapshot_cohort_component_id is None:
+            raise ValueError("Cohort task must carry both cohort and component IDs")
+        component = await self.session.scalar(
+            select(SnapshotCohortComponent)
+            .where(SnapshotCohortComponent.id == task.snapshot_cohort_component_id)
+            .with_for_update()
+        )
+        if component is None:
+            raise LookupError(
+                f"Snapshot cohort component not found: {task.snapshot_cohort_component_id}"
+            )
+        cohort = await self.session.scalar(
+            select(SnapshotCohort)
+            .where(SnapshotCohort.id == task.snapshot_cohort_id)
+            .with_for_update()
+        )
+        if cohort is None:
+            raise LookupError(f"Snapshot cohort not found: {task.snapshot_cohort_id}")
+        if component.cohort_id != cohort.id:
+            raise ValueError("Task cohort/component linkage is inconsistent")
+        if cohort.status == CohortStatus.SHADOW_PLANNED.value:
+            raise ValueError("Shadow cohort cannot execute collection tasks")
+        return cohort, component
+
+    def _add_coverage(
+        self,
+        component: SnapshotCohortComponent,
+        coverage: CollectionCoverageStat,
+    ) -> None:
+        component.requested_pages += coverage.pages_requested
+        component.succeeded_pages += coverage.pages_succeeded
+        component.items_observed += coverage.items_observed
+        component.raw_payloads_saved += coverage.raw_payloads_saved
+
+    async def _recompute_cohort(
+        self,
+        cohort: SnapshotCohort,
+        *,
+        finished_at: datetime,
+    ) -> None:
+        components = list(
+            await self.session.scalars(
+                select(SnapshotCohortComponent)
+                .where(SnapshotCohortComponent.cohort_id == cohort.id)
+                .order_by(SnapshotCohortComponent.id.asc())
+                .with_for_update()
+            )
+        )
+        status = aggregate_cohort_status(
+            [
+                ComponentOutcome(
+                    status=CohortComponentStatus(component.status),
+                    required=component.required,
+                    started=component.started_at is not None,
+                )
+                for component in components
+            ]
+        )
+        cohort.status = status.value
+        cohort.expected_component_count = len(components)
+        cohort.completed_component_count = sum(
+            component.status
+            in {
+                CohortComponentStatus.COMPLETE.value,
+                CohortComponentStatus.NOT_APPLICABLE.value,
+            }
+            for component in components
+        )
+        cohort.started_at = cohort.started_at or min(
+            (
+                component.started_at
+                for component in components
+                if component.started_at is not None
+            ),
+            default=None,
+        )
+        if status in {
+            CohortStatus.COMPLETE,
+            CohortStatus.PARTIAL,
+            CohortStatus.MISSED,
+            CohortStatus.CORRUPTED,
+            CohortStatus.NOT_APPLICABLE,
+        }:
+            cohort.finished_at = finished_at
+        else:
+            cohort.finished_at = None
+        if status is CohortStatus.COMPLETE:
+            cohort.status_reason = None
+            state = await self.session.get(VideoCollectionState, cohort.bvid)
+            if state is not None and (
+                state.last_completed_cohort_at is None
+                or finished_at > state.last_completed_cohort_at
+            ):
+                state.last_completed_cohort_at = finished_at
+                state.updated_at = finished_at
+        elif status in {CohortStatus.PARTIAL, CohortStatus.CORRUPTED}:
+            cohort.status_reason = next(
+                (
+                    component.failure_reason
+                    for component in components
+                    if component.failure_reason
+                ),
+                cohort.status_reason,
+            )
+        cohort.updated_at = finished_at
+        await self.session.flush()
 
 
 def _normalize_scope(scope_type: str, scope_id: str | None) -> tuple[str, str]:

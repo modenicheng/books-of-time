@@ -23,11 +23,15 @@ class DatabaseHttpEvidenceSink:
         raw_store: RawPayloadStore,
         run_id: str,
         collection_task_id: int | None,
+        snapshot_cohort_id: int | None = None,
+        snapshot_cohort_component_id: int | None = None,
     ) -> None:
         self.session = session
         self.raw_store = raw_store
         self.run_id = run_id
         self.collection_task_id = collection_task_id
+        self.snapshot_cohort_id = snapshot_cohort_id
+        self.snapshot_cohort_component_id = snapshot_cohort_component_id
         self._attempt_ids: set[int] = set()
 
     async def begin(
@@ -41,6 +45,8 @@ class DatabaseHttpEvidenceSink:
     ) -> int:
         attempt = await HttpRequestAttemptRepository(self.session).begin(
             collection_task_id=self.collection_task_id,
+            snapshot_cohort_id=self.snapshot_cohort_id,
+            snapshot_cohort_component_id=self.snapshot_cohort_component_id,
             request_type=request_type,
             method=method,
             url=url,

@@ -70,6 +70,8 @@ async def test_http_request_attempt_repository_covers_terminal_lifecycle() -> No
         repository = HttpRequestAttemptRepository(session)
         succeeded = await repository.begin(
             collection_task_id=None,
+            snapshot_cohort_id=11,
+            snapshot_cohort_component_id=22,
             request_type=BilibiliRequestType.VIDEO_STATS,
             method="get",
             url=url,
@@ -79,6 +81,8 @@ async def test_http_request_attempt_repository_covers_terminal_lifecycle() -> No
         )
 
         assert succeeded.status == "started"
+        assert succeeded.snapshot_cohort_id == 11
+        assert succeeded.snapshot_cohort_component_id == 22
         assert succeeded.raw_payload_id is None
         assert succeeded.method == "GET"
         assert succeeded.url_hash == hashlib.sha256(url.encode()).digest()

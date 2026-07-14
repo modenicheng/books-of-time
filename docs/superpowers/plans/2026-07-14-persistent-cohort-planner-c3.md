@@ -344,7 +344,7 @@ git commit -m "feat(planner): plan persistent snapshot cohorts"
 - Coverage and HTTP attempt rows copy `task.snapshot_cohort_id` and `task.snapshot_cohort_component_id`.
 - `DatabaseHttpEvidenceSink` accepts nullable cohort/component IDs from the worker.
 
-- [ ] **Step 1: Write failing execution and evidence tests**
+- [x] **Step 1: Write failing execution and evidence tests**
 
 Materialize one live `video_metrics` task and run a real `Worker` with a deterministic collector. Assert:
 
@@ -357,7 +357,7 @@ Materialize one live `video_metrics` task and run a real `Worker` with a determi
 7. `CollectionCoverageStat` and every `HttpRequestAttempt` created under the task carry both IDs.
 8. The first request attempt, not task lease acquisition, remains the authoritative network timestamp; no fabricated attempt is created for a collector that never calls HTTP.
 
-- [ ] **Step 2: Run focused tests to verify RED**
+- [x] **Step 2: Run focused tests to verify RED**
 
 ```powershell
 uv run pytest tests/test_worker_cohort_lifecycle.py tests/test_coverage_repositories.py tests/test_http_request_attempts.py -q
@@ -365,11 +365,11 @@ uv run pytest tests/test_worker_cohort_lifecycle.py tests/test_coverage_reposito
 
 Expected: cohort execution APIs and evidence-link assertions fail.
 
-- [ ] **Step 3: Propagate task identity into durable evidence**
+- [x] **Step 3: Propagate task identity into durable evidence**
 
 Set `snapshot_cohort_id` and `snapshot_cohort_component_id` in both coverage insert paths. Extend `HttpRequestAttemptRepository.begin` and `DatabaseHttpEvidenceSink` with nullable IDs and have the worker pass the leased task's values. Existing direct callers retain defaults of `None`.
 
-- [ ] **Step 4: Implement component/cohort transitions in the worker transaction**
+- [x] **Step 4: Implement component/cohort transitions in the worker transaction**
 
 After lease and before collector dispatch, call `mark_task_started`. On every success/failure/no-collector branch, insert coverage first, then update the component from that persisted coverage object, then commit task/run/component/cohort changes together.
 
@@ -385,14 +385,14 @@ retry scheduled    -> component running
 
 Recompute the parent with C2 `aggregate_cohort_status`; shadow cohorts never reach the worker. Update a video's `last_completed_cohort_at` only for a complete cohort.
 
-- [ ] **Step 5: Verify GREEN**
+- [x] **Step 5: Verify GREEN**
 
 ```powershell
 uv run pytest tests/test_worker_cohort_lifecycle.py tests/test_worker_loop.py tests/test_worker_coverage.py tests/test_coverage_repositories.py tests/test_http_request_attempts.py -q
 uv run ruff check books_of_time/db/cohort_repositories.py books_of_time/db/repositories.py books_of_time/db/http_evidence.py books_of_time/worker.py tests/test_worker_cohort_lifecycle.py tests/test_coverage_repositories.py tests/test_http_request_attempts.py
 ```
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```powershell
 git add books_of_time/db/cohort_repositories.py books_of_time/db/repositories.py books_of_time/db/http_evidence.py books_of_time/worker.py tests/test_worker_cohort_lifecycle.py tests/test_coverage_repositories.py tests/test_http_request_attempts.py docs/superpowers/plans/2026-07-14-persistent-cohort-planner-c3.md
