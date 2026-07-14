@@ -3,10 +3,12 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping
+from copy import deepcopy
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import case, func, or_, select
+from sqlalchemy import case, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
@@ -52,6 +54,7 @@ from books_of_time.domain.events import (
     validate_event_status,
     validate_event_window,
 )
+from books_of_time.domain.latest_frontier import normalize_anchor_set
 from books_of_time.domain.watchlist import (
     WatchlistPolicy,
     calculate_watchlist_priority,
@@ -2447,6 +2450,24 @@ class CommentRepository:
         )
 
 
+class FrontierVersionConflict(RuntimeError):  # noqa: N818 - public plan contract
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class FrontierStateUpdate:
+    frontier_rpid: int | None
+    frontier_time: datetime | None
+    frontier_anchor_set: object
+    active_scan_run_id: int | None
+    cursor: str | None
+    last_scan_at: datetime | None
+    last_scan_status: str | None
+    last_scan_pages: int
+    last_scan_truncated: bool
+    extra: Mapping[str, Any]
+
+
 class FrontierStateRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -2458,12 +2479,17 @@ class FrontierStateRepository:
         target_id: str,
         frontier_type: str,
         now: datetime,
+        lock: bool = False,
     ) -> FrontierState:
+        _validate_frontier_identity(target_type, target_id, frontier_type)
+        _require_aware_frontier_time(now, "now")
         stmt = select(FrontierState).where(
             FrontierState.target_type == target_type,
             FrontierState.target_id == target_id,
             FrontierState.frontier_type == frontier_type,
         )
+        if lock:
+            stmt = stmt.with_for_update().execution_options(populate_existing=True)
         state = await self.session.scalar(stmt)
         if state is not None:
             return state
@@ -2474,6 +2500,9 @@ class FrontierStateRepository:
             frontier_type=frontier_type,
             frontier_rpid=None,
             frontier_time=None,
+            frontier_anchor_set=[],
+            active_scan_run_id=None,
+            version=0,
             cursor=None,
             last_scan_at=None,
             last_scan_status=None,
@@ -2483,14 +2512,130 @@ class FrontierStateRepository:
             created_at=now,
             updated_at=now,
         )
-        self.session.add(state)
-        await self.session.flush()
+        try:
+            async with self.session.begin_nested():
+                self.session.add(state)
+                await self.session.flush()
+            return state
+        except IntegrityError:
+            winner = await self.session.scalar(stmt)
+            if winner is None:
+                raise
+            return winner
+
+    async def compare_and_swap(
+        self,
+        state_id: int,
+        expected_version: int,
+        state_update: FrontierStateUpdate,
+        *,
+        now: datetime,
+    ) -> FrontierState:
+        if isinstance(state_id, bool) or state_id <= 0:
+            raise ValueError("state_id must be positive")
+        if isinstance(expected_version, bool) or expected_version < 0:
+            raise ValueError("expected_version must be non-negative")
+        _require_aware_frontier_time(now, "now")
+        values = _frontier_update_values(state_update)
+        values.update(
+            {
+                "version": FrontierState.version + 1,
+                "updated_at": now,
+            }
+        )
+        result = await self.session.execute(
+            update(FrontierState)
+            .where(
+                FrontierState.id == state_id,
+                FrontierState.version == expected_version,
+            )
+            .values(**values)
+            .execution_options(synchronize_session=False)
+        )
+        if result.rowcount != 1:
+            raise FrontierVersionConflict(
+                f"Frontier state {state_id} version changed from {expected_version}"
+            )
+        state = await self.session.scalar(
+            select(FrontierState)
+            .where(FrontierState.id == state_id)
+            .execution_options(populate_existing=True)
+        )
+        if state is None:
+            raise LookupError(f"Frontier state not found: {state_id}")
         return state
 
     async def save(self, state: FrontierState) -> FrontierState:
         flag_modified(state, "extra")
+        flag_modified(state, "frontier_anchor_set")
         await self.session.flush()
         return state
+
+
+def _validate_frontier_identity(
+    target_type: str,
+    target_id: str,
+    frontier_type: str,
+) -> None:
+    for value, name in (
+        (target_type, "target_type"),
+        (target_id, "target_id"),
+        (frontier_type, "frontier_type"),
+    ):
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"{name} must not be empty")
+
+
+def _frontier_update_values(state_update: FrontierStateUpdate) -> dict[str, Any]:
+    if state_update.frontier_rpid is not None and (
+        isinstance(state_update.frontier_rpid, bool) or state_update.frontier_rpid <= 0
+    ):
+        raise ValueError("frontier_rpid must be positive")
+    if state_update.active_scan_run_id is not None and (
+        isinstance(state_update.active_scan_run_id, bool)
+        or state_update.active_scan_run_id <= 0
+    ):
+        raise ValueError("active_scan_run_id must be positive")
+    if state_update.frontier_time is not None:
+        _require_aware_frontier_time(state_update.frontier_time, "frontier_time")
+    if state_update.last_scan_at is not None:
+        _require_aware_frontier_time(state_update.last_scan_at, "last_scan_at")
+    if state_update.cursor is not None and not isinstance(state_update.cursor, str):
+        raise ValueError("cursor must be a string or null")
+    if state_update.last_scan_status is not None and not isinstance(
+        state_update.last_scan_status, str
+    ):
+        raise ValueError("last_scan_status must be a string or null")
+    if (
+        isinstance(state_update.last_scan_pages, bool)
+        or state_update.last_scan_pages < 0
+    ):
+        raise ValueError("last_scan_pages must be non-negative")
+    if not isinstance(state_update.last_scan_truncated, bool):
+        raise ValueError("last_scan_truncated must be a boolean")
+    if not isinstance(state_update.extra, Mapping):
+        raise ValueError("extra must be a mapping")
+    anchors = [
+        deepcopy(item)
+        for item in normalize_anchor_set(state_update.frontier_anchor_set)
+    ]
+    return {
+        "frontier_rpid": state_update.frontier_rpid,
+        "frontier_time": state_update.frontier_time,
+        "frontier_anchor_set": anchors,
+        "active_scan_run_id": state_update.active_scan_run_id,
+        "cursor": state_update.cursor,
+        "last_scan_at": state_update.last_scan_at,
+        "last_scan_status": state_update.last_scan_status,
+        "last_scan_pages": state_update.last_scan_pages,
+        "last_scan_truncated": state_update.last_scan_truncated,
+        "extra": deepcopy(dict(state_update.extra)),
+    }
+
+
+def _require_aware_frontier_time(value: datetime, name: str) -> None:
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError(f"{name} must be timezone-aware")
 
 
 def _hash_params(params: dict[str, Any] | None) -> bytes | None:

@@ -191,7 +191,7 @@ git commit -m "feat(scans): add latest frontier ownership"
 - Produces `LatestScanRunRepository.claim_or_join(plan, *, frontier_state, expected_version, now) -> LatestScanClaim`.
 - Produces latest scan counter/status methods that flush but never commit.
 
-- [ ] **Step 1: Write failing CAS and claim tests**
+- [x] **Step 1: Write failing CAS and claim tests**
 
 Cover:
 
@@ -204,7 +204,7 @@ Cover:
 7. Latest scan request/success counters are monotonic; success requires a recorded request and updates `result_cursor`, anchor evidence, item/raw counts once.
 8. Terminal scans cannot be resumed or mutated.
 
-- [ ] **Step 2: Run repository tests and verify RED**
+- [x] **Step 2: Run repository tests and verify RED**
 
 ```powershell
 uv run pytest tests/test_latest_scan_repositories.py -q
@@ -212,19 +212,19 @@ uv run pytest tests/test_latest_scan_repositories.py -q
 
 Expected: repository module/interfaces do not exist.
 
-- [ ] **Step 3: Implement compare-and-swap**
+- [x] **Step 3: Implement compare-and-swap**
 
 Use one SQL `UPDATE frontier_states SET ..., version=version+1 WHERE id=:id AND version=:expected`. Require `rowcount == 1`, then refresh the ORM row. The update replaces `extra` and `frontier_anchor_set` with validated copies so in-place JSON mutation cannot bypass versioning.
 
-- [ ] **Step 4: Implement active scan claim/join**
+- [x] **Step 4: Implement active scan claim/join**
 
 Allowed modes are the five latest modes from Task 2; C5 callers create only baseline tail/head/incremental. Lock the frontier row, prefer its valid active owner, otherwise query the partial-index domain, then insert under a savepoint. On unique conflict reload the active winner. Validate BVID, mode domain, immutable scan key identity, parent relation, policy version, and normalized anchors.
 
-- [ ] **Step 5: Add opt-in PostgreSQL concurrency test**
+- [x] **Step 5: Add opt-in PostgreSQL concurrency test**
 
 When `BOT_TEST_POSTGRESQL_URL` is set, create an isolated disposable schema at Alembic head. Use two independent sessions to race different `scan_key` values for the same BVID. Assert both callers resolve to one active latest scan, one frontier owner, monotonic versioning, and usable surrounding transactions. Skip clearly when the environment variable is absent.
 
-- [ ] **Step 6: Run repository verification**
+- [x] **Step 6: Run repository verification**
 
 ```powershell
 uv run pytest tests/test_latest_scan_repositories.py -q
@@ -233,7 +233,7 @@ uv run ruff check books_of_time/db/latest_scan_repositories.py books_of_time/db/
 
 If local PostgreSQL is configured, also run the isolated test with `BOT_TEST_POSTGRESQL_URL` set from the configured database URL.
 
-- [ ] **Step 7: Commit the repository unit**
+- [x] **Step 7: Commit the repository unit**
 
 ```powershell
 git add books_of_time/db/latest_scan_repositories.py books_of_time/db/repositories.py tests/test_latest_scan_repositories.py tests/test_latest_scan_postgresql.py
