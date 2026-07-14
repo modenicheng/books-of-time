@@ -1944,9 +1944,11 @@ class RawPageObservationRepository:
         parsed: ParsedCommentPage,
         *,
         request_type: BilibiliRequestType,
+        scan_run_id: int | None = None,
     ) -> RawPageObservation:
         observation = RawPageObservation(
             raw_payload_id=parsed.raw_payload_id,
+            scan_run_id=scan_run_id,
             captured_at=parsed.captured_at,
             request_type=request_type,
             target_type="video",
@@ -1979,6 +1981,7 @@ class CommentRepository:
         parsed: ParsedCommentPage,
         *,
         raw_page_observation_id: int,
+        scan_run_id: int | None = None,
     ) -> list[CommentObservation]:
         observations: list[CommentObservation] = []
         for comment in parsed.comments:
@@ -1998,6 +2001,7 @@ class CommentRepository:
                 captured_at=parsed.captured_at,
                 raw_payload_id=parsed.raw_payload_id,
                 raw_page_observation_id=raw_page_observation_id,
+                scan_run_id=scan_run_id,
                 sort_mode=parsed.sort_mode,
                 page_number=parsed.page_number,
                 position=comment.position,

@@ -383,7 +383,7 @@ git commit -m "feat(planner): plan hot core and deep scans"
 - `RawPageObservationRepository.insert_from_parsed_page(..., scan_run_id=None)` and `CommentRepository.upsert_page(..., scan_run_id=None)` persist direct scan evidence.
 - `HotCommentCollector` accepts injectable `monotonic` and `now` callables for deterministic slicing tests.
 
-- [ ] **Step 1: Write failing multi-slice collector tests**
+- [x] **Step 1: Write failing multi-slice collector tests**
 
 Use a fake 20-page client and deterministic clocks to assert:
 
@@ -395,7 +395,7 @@ Use a fake 20-page client and deterministic clocks to assert:
 6. Repeated RPID appearances across pages retain append-only observations with direct `scan_run_id` evidence.
 7. Existing non-scan `page_limit=2` behavior remains unchanged.
 
-- [ ] **Step 2: Run hot collector tests and verify RED**
+- [x] **Step 2: Run hot collector tests and verify RED**
 
 ```powershell
 uv run pytest tests/test_hot_comments_worker.py tests/test_comment_repositories.py -q
@@ -403,11 +403,11 @@ uv run pytest tests/test_hot_comments_worker.py tests/test_comment_repositories.
 
 Expected: scan-run fields are ignored, all target pages run in one task, and evidence has no scan ID.
 
-- [ ] **Step 3: Implement scan-aware page persistence**
+- [x] **Step 3: Implement scan-aware page persistence**
 
 Refactor `_collect_page()` to return `ParsedCommentPage` plus observation count. Pass `scan_run_id` into raw-page and comment observation writes. Treat `parsed.extra.get("is_end") is True` or `len(parsed.comments) == 0` as server end; do not infer end solely from `all_count`.
 
-- [ ] **Step 4: Implement bounded numbered slices**
+- [x] **Step 4: Implement bounded numbered slices**
 
 For scan tasks:
 
@@ -424,11 +424,11 @@ otherwise mark paused and enqueue slice_no + 1 in the same session
 
 The follow-up copies priority, budget, max retries, cohort IDs, run ID, and immutable range settings. Its ordinary idempotency key is `{scan.scan_key}:{mode}:active:{next_slice_no}` and its all-status key is `{scan.id}:{mode}:{next_slice_no}`.
 
-- [ ] **Step 5: Preserve partial progress on request/parse failures**
+- [x] **Step 5: Preserve partial progress on request/parse failures**
 
 Catch page-level exceptions only to update run counters and bounded `last_error_type`/`last_error_message`, then re-raise so the worker's existing retry/backoff path remains active. Already durable pages and `next_page_number` stay in the same outer transaction and are committed with failed coverage; a retry of the same task resumes from run state instead of replaying successful pages.
 
-- [ ] **Step 6: Run hot and evidence tests**
+- [x] **Step 6: Run hot and evidence tests**
 
 ```powershell
 uv run pytest tests/test_hot_comments_worker.py tests/test_comment_repositories.py tests/test_http_request_attempts.py -q
@@ -437,7 +437,7 @@ uv run ruff check books_of_time/collectors/hot_comments.py books_of_time/db/repo
 
 Expected: numbered slices, early server end, direct evidence IDs, and legacy tasks all pass.
 
-- [ ] **Step 7: Commit the collector unit**
+- [x] **Step 7: Commit the collector unit**
 
 ```powershell
 git add books_of_time/collectors/hot_comments.py books_of_time/db/repositories.py books_of_time/app.py tests/test_hot_comments_worker.py tests/test_comment_repositories.py

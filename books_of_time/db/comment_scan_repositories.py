@@ -167,6 +167,25 @@ class CommentScanRunRepository:
         await self.session.flush()
         return scan
 
+    async def record_page_failed(
+        self,
+        scan_run_id: int,
+        *,
+        page_number: int,
+        error_type: str,
+        error_message: str,
+        now: datetime,
+    ) -> CommentScanRun:
+        _require_aware(now, "now")
+        scan = await self.lock(scan_run_id)
+        _require_running(scan)
+        _validate_current_page(scan, page_number)
+        scan.last_error_type = _bounded_optional_text(error_type, 120)
+        scan.last_error_message = _bounded_optional_text(error_message, 2000)
+        scan.updated_at = now
+        await self.session.flush()
+        return scan
+
     async def mark_paused(
         self,
         scan_run_id: int,

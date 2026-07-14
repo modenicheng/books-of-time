@@ -127,14 +127,17 @@ async def test_comment_repository_upserts_entity_and_appends_observations() -> N
         page = await RawPageObservationRepository(session).insert_from_parsed_page(
             parsed,
             request_type=BilibiliRequestType.COMMENT_HOT,
+            scan_run_id=77,
         )
         await CommentRepository(session).upsert_page(
             parsed,
             raw_page_observation_id=page.id,
+            scan_run_id=77,
         )
         await CommentRepository(session).upsert_page(
             parsed,
             raw_page_observation_id=page.id,
+            scan_run_id=77,
         )
         await session.commit()
 
@@ -165,6 +168,7 @@ async def test_comment_repository_upserts_entity_and_appends_observations() -> N
         assert state_events[0].old_value == {}
         assert state_events[0].new_value == {"rpid": 1001, "bvid": "BV1abc"}
         assert raw_page is not None
+        assert raw_page.scan_run_id == 77
         assert raw_page.item_count == 1
         assert raw_page.extra == {"all_count": 1}
         assert entity is not None
@@ -174,6 +178,7 @@ async def test_comment_repository_upserts_entity_and_appends_observations() -> N
         assert entity.first_content == "first comment"
         assert entity.first_content_hash == content_hash
         assert observations[0].raw_page_observation_id == raw_page.id
+        assert {observation.scan_run_id for observation in observations} == {77}
         assert observations[0].content == "first comment"
         assert observations[0].author_name == "Alice"
 
