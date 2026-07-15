@@ -606,18 +606,22 @@ git commit -m "feat(cohorts): resolve shared latest scans"
 - Documents legacy versus scan-backed latest behavior, active ownership, CAS, anchors, automatic baseline, slice timing, cohort joining, failure/deadline semantics, and C5/C6/C7 boundaries.
 - Marks only C5 complete; C6-C9 remain unchecked.
 
-- [ ] **Step 1: Run opt-in PostgreSQL tests**
+- [x] **Step 1: Run opt-in PostgreSQL tests**
 
 Use the configured PostgreSQL URL only through `BOT_TEST_POSTGRESQL_URL`; tests create and remove an isolated schema. Run both latest active-claim concurrency and the existing hot slice race. Never run migration downgrade against the configured schema.
 
-- [ ] **Step 2: Run migration and focused C5 verification**
+本次收尾执行了两个测试文件；当前环境未设置 `BOT_TEST_POSTGRESQL_URL`，结果为
+`2 skipped`，因此本轮没有新增实际 PostgreSQL 连接验收证据。此前已通过的 PG 结果仍保留，
+后续在配置该变量的环境中应重新执行。
+
+- [x] **Step 2: Run migration and focused C5 verification**
 
 ```powershell
 uv run pytest tests/test_schema_migrations.py::test_latest_comment_scan_revision_round_trip -q
 uv run pytest tests/test_latest_frontier_policy.py tests/test_comment_scan_models.py tests/test_latest_scan_repositories.py tests/test_snapshot_cohort_planner.py tests/test_cohort_materialization.py tests/test_latest_scan_worker.py tests/test_latest_comments_worker.py tests/test_worker_cohort_lifecycle.py -q
 ```
 
-- [ ] **Step 3: Document the complete flow**
+- [x] **Step 3: Document the complete flow**
 
 Document:
 
@@ -637,11 +641,11 @@ C7 owns live activation, legacy draining/mapping, short page transactions, and l
 PostgreSQL multi-worker versus SQLite single-process expectations
 ```
 
-- [ ] **Step 4: Perform main-thread P0/P1 audit**
+- [x] **Step 4: Perform main-thread P0/P1 audit**
 
 Review active partial-index coverage, claim races, stale CAS, tail child duplication, empty frontier, primary-anchor deletion resilience, retry persistence, cursor-loop terminalization, official frontier mutation only on terminal outcomes, current-head window boundaries, fan-out across multiple cohorts, deadline finalization, terminal worker cleanup, legacy task compatibility, shadow no-run/no-task, and scan evidence propagation.
 
-- [ ] **Step 5: Run complete verification**
+- [x] **Step 5: Run complete verification**
 
 ```powershell
 uv run pytest
@@ -652,11 +656,11 @@ git diff --check
 
 Expected: full suite passes, Ruff is clean, every Python file is formatted, and no whitespace errors exist.
 
-- [ ] **Step 6: Mark C5 complete and C6 next**
+- [x] **Step 6: Mark C5 complete and C6 next**
 
 Change C5 to `[x]`, leave C6-C9 unchecked, and update Near-term Sprint to identify C6 Visibility And Reconciliation as the next stage. Do not mark the overall Collection-First Snapshot Cohorts mainline complete or enable live rollout.
 
-- [ ] **Step 7: Commit documentation and completion state**
+- [x] **Step 7: Commit documentation and completion state**
 
 ```powershell
 git add config/config.yaml.example docs/CONFIGURATION.md docs/COLLECTION.md docs/DATA_MODEL.md docs/OPERATIONS.md docs/TODO.md docs/superpowers/plans/2026-07-14-latest-scan-baseline-c5.md

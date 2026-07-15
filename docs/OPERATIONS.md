@@ -111,7 +111,7 @@ scheduler 启动时 bootstrap 以下稳定 job：
 | `uid-discovery` | `scheduler.discovery_scan_seconds`，默认 60 秒 | 仅在 10:00（含）到 22:00（不含）为静态/event UID 生成 discovery task；每个重点时点生成 T+0/T+30 两次高优先级检查 |
 | `video-snapshot-sweep` | 60 秒 | 全天为到期 known video 生成指标 task |
 | `daily-terminal-snapshot` | 60 秒检查 | 22:00 后生成额外的当日日终快照，不停止常规 sweep |
-| `snapshot-cohort-planning` | `snapshot_cohorts.planning_seconds`，默认 30 秒 | 仅在 `snapshot_cohorts.enabled=true` 时注册；C4 写入含热门页范围的 shadow planning 证据，不创建 scan/task |
+| `snapshot-cohort-planning` | `snapshot_cohorts.planning_seconds`，默认 30 秒 | 仅在 `snapshot_cohorts.enabled=true` 时注册；C5 写入热门范围和 latest current-head shadow 证据，不创建 scan/task |
 | `operational-alert-evaluation` | 默认 60 秒 | 评估持久告警，可关闭 |
 | `account-cookie-refresh:<id>` | 默认 21600 秒 | 校验/刷新 Cookie，可关闭 |
 
@@ -127,7 +127,7 @@ snapshot_cohorts:
   planning_seconds: 30
 ```
 
-重启 scheduler 后检查 `snapshot-cohort-planning` 连续成功，并确认 `snapshot_cohorts.status='shadow_planned'` 持续增加、`comment_scan_runs` 没有新增行、`collection_tasks.snapshot_cohort_id` 没有新增非 NULL 行。C4 明确拒绝 `rollout_mode: live`；不要修改代码绕过检查，因为旧 sweep/外部评论调度 owner 尚未迁移，会产生重复请求。
+重启 scheduler 后检查 `snapshot-cohort-planning` 连续成功，并确认 `snapshot_cohorts.status='shadow_planned'` 持续增加、`comment_scan_runs` 没有新增行、`collection_tasks.snapshot_cohort_id` 没有新增非 NULL 行。C5 明确拒绝 `rollout_mode: live`；不要修改代码绕过检查，因为旧 sweep/外部评论调度 owner 尚未迁移，会产生重复请求。
 
 planner 使用 UTC 30 秒 bucket 和持久化 `video_collection_states`，重启不会重置 pubdate anchor、tier、checkpoint 或下一到期时间。停机期间漏过的普通 routine 被压缩为 `collection_schedule_gaps`，逾期 checkpoint 保留 missed/not-applicable 证据并生成一个当前 recovery，而不是瞬间补发整段历史请求。有限候选批次先接管尚无 state 的视频，再按最早 `next_due_at` 处理已接管视频，避免长期服务中较老视频永久占满批次。
 
@@ -213,11 +213,11 @@ ORDER BY last_planned_at DESC NULLS LAST
 LIMIT 50;
 ```
 
-在纯 C4 shadow 运行中，第二、三个计数都应为 0；若不为 0，先区分测试/手工底层 live 数据，再确认没有绕过 service 配置边界。不要删除 shadow 历史来“清零”。component 的 `extra` 应能看到 `hot_core` / `hot_deep` 固定页范围：routine S/A/B/C 为 3/2/1/1 页，checkpoint 和首次 active 采纳总量为 20/10/3/1 页，deep 只保存扣除 core 后的余量。
+在纯 C5 shadow 运行中，第二、三个计数都应为 0；若不为 0，先区分测试/手工底层 live 数据，再确认没有绕过 service 配置边界。不要删除 shadow 历史来“清零”。component 的 `extra` 应能看到 `hot_core` / `hot_deep` 固定页范围，以及 latest 的 `max_scan_seconds`、`current_head_required=true`：routine S/A/B/C 热门为 3/2/1/1 页，checkpoint 和首次 active 采纳总量为 20/10/3/1 页，deep 只保存扣除 core 后的余量。
 
 ## 6. Comment Collection Scheduling
 
-内置 scheduler 当前不自动周期入队 hot/latest comments。cohort shadow planner 只记录本应采集的组件，不执行它们。长期评论归档仍需要外部 timer 调用入队 CLI：
+内置 scheduler 当前不自动周期入队 hot/latest comments。cohort shadow planner 只记录本应采集的组件，不执行它们。长期评论归档仍需要外部 timer 调用 legacy 入队 CLI：
 
 ```bash
 uv run python main.py video comments <BVID> --mode hot --tier c
@@ -228,13 +228,20 @@ uv run python main.py collect-latest-comments <BVID> --max-scan-seconds 55
 
 活动 idempotency key 会吸收重叠调用：上次同目标任务仍 pending/running 时，不会再插入第二条活动任务。任务结束后，下一次 timer 可创建新快照。
 
-C4 的 scan-backed hot task 目前只在底层 live 验收中启用，service 仍保持 shadow。C7 迁移所有权后，一个逻辑 `hot_core` / `hot_deep` scan 会按最多 10 页、最多 55 秒拆成编号 slice。每次成功页立即推进 `comment_scan_runs.next_page_number`；请求失败后同一 task 重试该页，服务重启后也从该字段继续。下一 slice 的插入和 scan 暂停状态在同一 worker 事务提交，`scan_slice_key` 对所有 task 状态唯一，因此不要手工复制、删除或改号来“恢复”续片。
+C5 的 scan-backed hot/latest task 目前只在底层 live 验收中启用，service 仍保持 shadow。C7 迁移所有权后：
+
+- `hot_core` / `hot_deep` 按最多 10 页、最多 55 秒拆成编号 slice，成功页推进 `next_page_number`。
+- latest routine 按有效 interval 得到 10-55 秒 slice，checkpoint/recovery 为 55 秒；成功页通过 CAS 推进 `frontier_states.cursor/version`。
+- 一个 BVID 只有一个 active latest scan，其他 cohort component 以 `joined_active_task` 共享，不会创建重叠 baseline/incremental。
+- baseline tail 到末尾时自动创建 child head sweep；空 tail 直接建立空 frontier。
+- `scan_slice_key` 在所有 task 状态唯一。不要手工复制、删除、改号或直接改 cursor 来“恢复”续片。
 
 届时可用以下只读查询核对逻辑扫描，而不是只看最后一个 task：
 
 ```sql
 SELECT id, bvid, mode, status, outcome,
-       target_pages, next_page_number,
+       parent_scan_run_id, start_frontier_rpid, result_frontier_rpid,
+       target_pages, next_page_number, result_cursor,
        pages_requested, pages_succeeded,
        items_observed, raw_payloads_saved, slice_count,
        last_error_type, updated_at
@@ -247,18 +254,59 @@ SELECT comment_scan_run_id, scan_slice_no, scan_slice_key,
 FROM collection_tasks
 WHERE comment_scan_run_id IS NOT NULL
 ORDER BY comment_scan_run_id, scan_slice_no;
+
+SELECT target_id AS bvid, active_scan_run_id, version, cursor,
+       frontier_rpid, frontier_anchor_set,
+       last_scan_status, last_scan_pages, last_scan_truncated, extra
+FROM frontier_states
+WHERE frontier_type = 'latest_comments'
+ORDER BY updated_at DESC
+LIMIT 100;
+
+SELECT c.id AS component_id, c.cohort_id, c.component_kind,
+       c.status, c.scheduled_for, c.deadline, c.finished_at,
+       c.comment_scan_run_id, c.failure_reason,
+       c.requested_pages, c.succeeded_pages
+FROM snapshot_cohort_components c
+WHERE c.component_kind IN ('latest_current_head', 'latest_reconciliation')
+ORDER BY c.scheduled_for DESC, c.id DESC
+LIMIT 200;
 ```
 
-`paused/time_slice_yield` 是正常的非终态；`complete/server_end` 表示平台明确末页或成功空页，末页仍计入 requested/succeeded；`failed` 与 `corrupted` 才需要结合 task、coverage、HTTP attempt 和 raw 检查。若 scan 为 running/paused 且没有可继续的 pending/running/backoff task，不要直接改数据库进度，应先保留现场并按故障处理。PostgreSQL 支持多 worker 竞争和全局唯一键；SQLite 没有足够的行锁语义，只允许单进程开发与确定性测试。
+`paused/time_slice_yield` 是正常非终态。latest 的正常终态包括
+`complete/start_anchor_reached`、`complete/frontier_reached` 和
+`partial/frontier_missing`；后者表示旧锚点未出现，不等于请求失败。`failed`、
+`corrupted`、`start_anchor_missing`、`cursor_loop` 和 `retry_exhausted` 必须结合 task、
+coverage、HTTP attempt、raw page 和 scan evidence 检查。
+
+current-head component 只在 `head_captured_at` 落在 `[scheduled_for, deadline)` 时 complete。
+到期仍在历史 tail 为 `partial/baseline_tail_in_progress`；其他无有效头页为
+`partial/current_head_not_captured`。同一 scan 的不同 cohort 可能一个 complete、一个仍
+joined，这是正常的时间窗差异。
+
+若 planned/paused latest scan 缺少对应 numbered task，30 秒 planner 会按稳定 slice key
+修复并保留原 priority/budget/retry 参数。若 scan 为 running 且 task/lease 异常，不要
+直接改数据库进度：先停止相关 worker、保存 task/scan/frontier/attempt/raw 现场，等待
+lease 过期恢复或修复根因。worker 终态失败只在 task 携带的 frontier version 仍匹配时
+CAS 清 owner；版本更高说明另一个 worker 已推进，陈旧 worker 不应人工强制覆盖。
+
+PostgreSQL 才是多 worker 验收目标：partial unique index、行锁、savepoint 和 CAS 共同
+协调 active latest。SQLite 的 `FOR UPDATE` 语义不足，只允许单进程开发和确定性测试。
+可使用 `BOT_TEST_POSTGRESQL_URL` 运行隔离 schema 并发测试；测试会创建并删除随机
+schema，绝不能对配置业务 schema 执行 downgrade。
 
 建议按研究优先级设频率：
 
 - 热点事件核心视频：更频繁的热门第 1 页和 latest 增量。
 - 普通 active 视频：较低频率。
-- baseline 未 complete：重复 latest 入队，直至 tail + head sweep 完成。
+- legacy baseline 未 complete：重复手工 latest 入队；scan-backed baseline 在 C7 live 后自动 tail -> child head。
 - closed/archived 事件：停止外部评论 timer，但保留历史数据。
 
 每次改变频率后同时检查平台请求预算、pending backlog 和 event coverage。完整状态机见 [COLLECTION](COLLECTION.md)。
+
+C6 将补 full/segmented reconciliation、visibility watchlist 和两次独立删除确认；C7 才
+启用 live owner 迁移、page-level 短事务、长任务 lease renewal、容量/公平性和 raw
+storage gate。C5 完成不等于可以取消现有外部 timer 或打开 `rollout_mode: live`。
 
 ## 7. Task Queue Operations
 

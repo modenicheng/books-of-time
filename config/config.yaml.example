@@ -128,7 +128,8 @@ request_budget:
     reply_roots: 0
 
 snapshot_cohorts:
-  # C3 may be enabled only in shadow mode; live ownership moves in C7.
+  # C5 may be enabled only in shadow mode; live ownership moves in C7.
+  # Latest scan-backed slices derive a 10-55 second budget from the cohort interval.
   enabled: false
   policy_version: cohort-default-v2
   rollout_mode: shadow
