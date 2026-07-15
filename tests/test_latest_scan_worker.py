@@ -645,6 +645,58 @@ async def test_baseline_tail_yields_and_resumes_from_saved_cursor(tmp_path) -> N
 
 
 @pytest.mark.asyncio
+async def test_retry_success_uses_post_failure_frontier_state(tmp_path) -> None:
+    engine, session_factory = await _database()
+    now = datetime(2026, 7, 14, 8, 0, tzinfo=UTC)
+    client = FakeLatestClient(
+        {"": latest_body(rpids=[1291], next_offset="", is_end=True)},
+        failures={"": [RuntimeError("temporary failure")]},
+    )
+    collector = _collector(
+        tmp_path,
+        client,
+        page_retry_attempts=3,
+        page_retry_backoff_seconds=[0, 0, 0],
+    )
+    original_cas = collector.scan_collector._cas_frontier
+    cas_calls = 0
+
+    async def replace_identity_on_first_cas(task, session, frontier, **kwargs):
+        nonlocal cas_calls
+        if cas_calls == 0:
+            session.sync_session.expunge(frontier)
+        cas_calls += 1
+        return await original_cas(task, session, frontier, **kwargs)
+
+    collector.scan_collector._cas_frontier = replace_identity_on_first_cas
+
+    async with session_factory.begin() as session:
+        scan, _frontier, task = await _seed_scan_task(
+            session,
+            bvid="BV-RETRY-SAME-SLICE",
+            now=now,
+        )
+        scan_id = scan.id
+        task_id = task.id
+
+    async with session_factory.begin() as session:
+        task = await session.get(CollectionTask, task_id)
+        assert task is not None
+        draft = await collector.collect(task, session)
+        assert draft.reason == "tail_reached"
+
+    assert client.latest_offsets == ["", ""]
+    async with session_factory() as session:
+        scan = await session.get(CommentScanRun, scan_id)
+        assert scan is not None
+        assert scan.pages_requested == 2
+        assert scan.pages_succeeded == 1
+        assert scan.status is CommentScanStatus.COMPLETE
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_cursor_retry_count_persists_across_slices(tmp_path) -> None:
     engine, session_factory = await _database()
     now = datetime(2026, 7, 14, 8, 0, tzinfo=UTC)

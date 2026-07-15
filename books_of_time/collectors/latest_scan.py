@@ -221,7 +221,7 @@ class LatestScanCollector:
                     reason="cursor_loop",
                 )
 
-            result = await self._fetch_with_retry(
+            fetched = await self._fetch_with_retry(
                 task,
                 session,
                 scan=scan,
@@ -233,7 +233,7 @@ class LatestScanCollector:
                 started_at=started_at,
                 max_scan_seconds=max_scan_seconds,
             )
-            if result is None:
+            if fetched is None:
                 frontier = await self._reload_frontier(session, frontier.id)
                 scan = await scan_repository.lock(scan.id)
                 progress = _scan_progress(frontier, scan_id=scan.id)
@@ -255,6 +255,7 @@ class LatestScanCollector:
                     truncated=True,
                     reason="time_slice_yield",
                 )
+            result, frontier, progress = fetched
 
             parsed, observation_count, frontier, scan = await self._persist_page(
                 task,
@@ -365,7 +366,7 @@ class LatestScanCollector:
                     reason="cursor_loop",
                 )
 
-            result = await self._fetch_with_retry(
+            fetched = await self._fetch_with_retry(
                 task,
                 session,
                 scan=scan,
@@ -377,7 +378,7 @@ class LatestScanCollector:
                 started_at=started_at,
                 max_scan_seconds=max_scan_seconds,
             )
-            if result is None:
+            if fetched is None:
                 frontier = await self._reload_frontier(session, frontier.id)
                 scan = await scan_repository.lock(scan.id)
                 if scan.status is CommentScanStatus.CORRUPTED:
@@ -398,6 +399,7 @@ class LatestScanCollector:
                     truncated=True,
                     reason="time_slice_yield",
                 )
+            result, frontier, progress = fetched
 
             parsed, observation_count, frontier, scan = await self._persist_page(
                 task,
@@ -526,7 +528,7 @@ class LatestScanCollector:
                     reason="cursor_loop",
                 )
 
-            result = await self._fetch_with_retry(
+            fetched = await self._fetch_with_retry(
                 task,
                 session,
                 scan=scan,
@@ -538,7 +540,7 @@ class LatestScanCollector:
                 started_at=started_at,
                 max_scan_seconds=max_scan_seconds,
             )
-            if result is None:
+            if fetched is None:
                 frontier = await self._reload_frontier(session, frontier.id)
                 scan = await scan_repository.lock(scan.id)
                 if scan.status is CommentScanStatus.CORRUPTED:
@@ -559,6 +561,7 @@ class LatestScanCollector:
                     truncated=True,
                     reason="time_slice_yield",
                 )
+            result, frontier, progress = fetched
 
             parsed, observation_count, frontier, scan = await self._persist_page(
                 task,
@@ -732,7 +735,7 @@ class LatestScanCollector:
         aid: int,
         started_at: float,
         max_scan_seconds: float,
-    ) -> FetchResult | None:
+    ) -> tuple[FetchResult, FrontierState, dict[str, object]] | None:
         failed_cursor = progress.get("failed_cursor")
         attempts = (
             int(progress.get("failed_attempts") or 0) if failed_cursor == cursor else 0
@@ -762,7 +765,8 @@ class LatestScanCollector:
             )
             counters.pages_requested += 1
             try:
-                return await self.client.get_latest_comments(aid=aid, offset=cursor)
+                result = await self.client.get_latest_comments(aid=aid, offset=cursor)
+                return result, frontier, progress
             except Exception as exc:
                 attempts += 1
                 progress = {
