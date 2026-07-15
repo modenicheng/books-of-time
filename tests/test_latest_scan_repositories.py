@@ -380,6 +380,22 @@ async def test_latest_scan_progress_is_monotonic_and_terminal_is_immutable() -> 
         assert scan.result_anchor_set == anchors
         assert scan.slice_count == 1
 
+        await repository.record_page_requested(
+            scan.id,
+            now=now + timedelta(seconds=4),
+        )
+        await repository.record_page_succeeded(
+            scan.id,
+            result_cursor="offset-3",
+            result_anchor_set=[],
+            items_observed=1,
+            raw_payloads_saved=1,
+            now=now + timedelta(seconds=5),
+        )
+        assert scan.result_cursor == "offset-3"
+        assert scan.result_frontier_rpid == 2001
+        assert scan.result_anchor_set == anchors
+
         with pytest.raises(ValueError, match="recorded request"):
             await repository.record_page_succeeded(
                 scan.id,
@@ -387,23 +403,23 @@ async def test_latest_scan_progress_is_monotonic_and_terminal_is_immutable() -> 
                 result_anchor_set=anchors,
                 items_observed=20,
                 raw_payloads_saved=1,
-                now=now + timedelta(seconds=4),
+                now=now + timedelta(seconds=6),
             )
 
         await repository.mark_complete(
             scan.id,
             outcome="frontier_reached",
-            now=now + timedelta(seconds=5),
+            now=now + timedelta(seconds=7),
         )
         with pytest.raises(ValueError, match="terminal"):
             await repository.mark_running(
                 scan.id,
-                now=now + timedelta(seconds=6),
+                now=now + timedelta(seconds=8),
             )
         with pytest.raises(ValueError, match="terminal"):
             await repository.record_page_requested(
                 scan.id,
-                now=now + timedelta(seconds=6),
+                now=now + timedelta(seconds=8),
             )
 
     await engine.dispose()

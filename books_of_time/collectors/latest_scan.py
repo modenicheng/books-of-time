@@ -108,6 +108,7 @@ class LatestScanCollector:
         if scan.mode not in {
             CommentScanMode.BASELINE_TAIL,
             CommentScanMode.BASELINE_HEAD_SWEEP,
+            CommentScanMode.INCREMENTAL,
         }:
             raise ValueError(f"Unsupported latest scan mode: {scan.mode.value}")
 
@@ -143,6 +144,19 @@ class LatestScanCollector:
         cursor = str(frontier.cursor or progress.get("failed_cursor") or "")
         if scan.mode is CommentScanMode.BASELINE_HEAD_SWEEP:
             return await self._collect_head_sweep(
+                task,
+                session,
+                scan=scan,
+                frontier=frontier,
+                progress=progress,
+                cursor=cursor,
+                counters=counters,
+                aid=aid,
+                started_at=started_at,
+                max_scan_seconds=max_scan_seconds,
+            )
+        if scan.mode is CommentScanMode.INCREMENTAL:
+            return await self._collect_incremental(
                 task,
                 session,
                 scan=scan,
@@ -445,6 +459,175 @@ class LatestScanCollector:
                 )
             cursor = str(parsed.extra["next_offset"])
 
+    async def _collect_incremental(
+        self,
+        task: CollectionTask,
+        session: AsyncSession,
+        *,
+        scan: CommentScanRun,
+        frontier: FrontierState,
+        progress: dict[str, object],
+        cursor: str,
+        counters: _SliceCounters,
+        aid: int,
+        started_at: float,
+        max_scan_seconds: float,
+    ) -> CoverageDraft:
+        scan_repository = LatestScanRunRepository(session)
+        while True:
+            if counters.pages_succeeded > 0 and self._time_expired(
+                started_at,
+                max_scan_seconds=max_scan_seconds,
+            ):
+                frontier = await self._pause_and_enqueue(
+                    task,
+                    session,
+                    scan=scan,
+                    frontier=frontier,
+                    cursor=cursor,
+                    progress=progress,
+                    counters=counters,
+                    aid=aid,
+                    outcome="time_slice_yield",
+                )
+                task.payload = {
+                    **task.payload,
+                    "frontier_version": frontier.version,
+                }
+                return _coverage(
+                    task,
+                    counters,
+                    truncated=True,
+                    reason="time_slice_yield",
+                )
+
+            seen_cursors = list(progress.get("seen_cursors") or [])
+            if cursor in seen_cursors:
+                await self._terminalize(
+                    task,
+                    session,
+                    scan=scan,
+                    frontier=frontier,
+                    progress={
+                        **progress,
+                        "failed_cursor": cursor,
+                        "failed_reason": "cursor repeated",
+                    },
+                    cursor=cursor,
+                    status=CommentScanStatus.CORRUPTED,
+                    outcome="cursor_loop",
+                    truncated=True,
+                )
+                return _coverage(
+                    task,
+                    counters,
+                    truncated=True,
+                    corrupted=True,
+                    reason="cursor_loop",
+                )
+
+            result = await self._fetch_with_retry(
+                task,
+                session,
+                scan=scan,
+                frontier=frontier,
+                cursor=cursor,
+                progress=progress,
+                counters=counters,
+                aid=aid,
+                started_at=started_at,
+                max_scan_seconds=max_scan_seconds,
+            )
+            if result is None:
+                frontier = await self._reload_frontier(session, frontier.id)
+                scan = await scan_repository.lock(scan.id)
+                if scan.status is CommentScanStatus.CORRUPTED:
+                    return _coverage(
+                        task,
+                        counters,
+                        truncated=True,
+                        corrupted=True,
+                        reason="retry_exhausted",
+                    )
+                task.payload = {
+                    **task.payload,
+                    "frontier_version": frontier.version,
+                }
+                return _coverage(
+                    task,
+                    counters,
+                    truncated=True,
+                    reason="time_slice_yield",
+                )
+
+            parsed, observation_count, frontier, scan = await self._persist_page(
+                task,
+                session,
+                scan=scan,
+                frontier=frontier,
+                cursor=cursor,
+                progress=progress,
+                result=result,
+            )
+            counters.pages_succeeded += 1
+            counters.items_observed += observation_count
+            counters.raw_payloads_saved += 1
+            progress = _scan_progress(frontier, scan_id=scan.id)
+            task.payload = {
+                **task.payload,
+                "frontier_version": frontier.version,
+            }
+
+            if page_matches_anchor(parsed.comments, scan.start_anchor_set):
+                await self._complete_incremental(
+                    task,
+                    session,
+                    scan=scan,
+                    frontier=frontier,
+                    progress=progress,
+                    missing=False,
+                )
+                return _coverage(
+                    task,
+                    counters,
+                    truncated=False,
+                    reason="frontier_reached",
+                    frontier_reached=True,
+                )
+            if parsed.extra["is_end"]:
+                if not scan.start_anchor_set:
+                    await self._complete_incremental(
+                        task,
+                        session,
+                        scan=scan,
+                        frontier=frontier,
+                        progress=progress,
+                        missing=False,
+                    )
+                    return _coverage(
+                        task,
+                        counters,
+                        truncated=False,
+                        reason="frontier_reached",
+                        frontier_reached=True,
+                    )
+                await self._complete_incremental(
+                    task,
+                    session,
+                    scan=scan,
+                    frontier=frontier,
+                    progress=progress,
+                    missing=True,
+                )
+                return _coverage(
+                    task,
+                    counters,
+                    truncated=False,
+                    reason="frontier_missing",
+                    frontier_missing=True,
+                )
+            cursor = str(parsed.extra["next_offset"])
+
     async def _validate_task(
         self,
         task: CollectionTask,
@@ -691,7 +874,11 @@ class LatestScanCollector:
                     scan.start_anchor_set = anchors
                     scan.start_frontier_rpid, _ = primary_anchor(anchors)
                 if (
-                    scan.mode is CommentScanMode.BASELINE_HEAD_SWEEP
+                    scan.mode
+                    in {
+                        CommentScanMode.BASELINE_HEAD_SWEEP,
+                        CommentScanMode.INCREMENTAL,
+                    }
                     and scan.pages_succeeded == 0
                 ):
                     scan.result_anchor_set = anchors
@@ -778,6 +965,78 @@ class LatestScanCollector:
             now=self.now(),
         )
         task.payload = {**task.payload, "frontier_version": updated.version}
+        return updated
+
+    async def _complete_incremental(
+        self,
+        task: CollectionTask,
+        session: AsyncSession,
+        *,
+        scan: CommentScanRun,
+        frontier: FrontierState,
+        progress: dict[str, object],
+        missing: bool,
+    ) -> FrontierState:
+        now = self.now()
+        missing_rpids = [int(item["rpid"]) for item in scan.start_anchor_set]
+        repository = LatestScanRunRepository(session)
+        if missing:
+            scan = await repository.mark_failed(
+                scan.id,
+                outcome="frontier_missing",
+                now=now,
+                status=CommentScanStatus.PARTIAL,
+                truncated=False,
+            )
+            scan.extra = {
+                **scan.extra,
+                "missing_anchor_rpids": missing_rpids,
+            }
+            primary_rpid, _ = primary_anchor(scan.start_anchor_set)
+            if primary_rpid is not None:
+                await CommentRepository(session).mark_disappeared(
+                    rpid=primary_rpid,
+                    bvid=scan.bvid,
+                    missing_reason="missing_after_seen",
+                    created_at=now,
+                )
+        else:
+            scan = await repository.mark_complete(
+                scan.id,
+                outcome="frontier_reached",
+                now=now,
+            )
+
+        anchors = [deepcopy(item) for item in scan.result_anchor_set]
+        frontier_rpid, frontier_time = primary_anchor(anchors)
+        extra = deepcopy(dict(frontier.extra))
+        extra["latest_scan_progress"] = deepcopy(progress)
+        extra["baseline_status"] = "baseline_complete"
+        if missing:
+            extra["missing_anchor_rpids"] = missing_rpids
+        else:
+            extra.pop("missing_anchor_rpids", None)
+        updated = await FrontierStateRepository(session).compare_and_swap(
+            frontier.id,
+            frontier.version,
+            FrontierStateUpdate(
+                frontier_rpid=frontier_rpid,
+                frontier_time=frontier_time,
+                frontier_anchor_set=anchors,
+                active_scan_run_id=None,
+                cursor=None,
+                last_scan_at=now,
+                last_scan_status=(
+                    "frontier_missing" if missing else "incremental_complete"
+                ),
+                last_scan_pages=scan.pages_succeeded,
+                last_scan_truncated=False,
+                extra=extra,
+            ),
+            now=now,
+        )
+        task.payload = {**task.payload, "frontier_version": updated.version}
+        await session.flush()
         return updated
 
     def _parse_page(
@@ -1045,6 +1304,7 @@ def _coverage(
     reason: str,
     corrupted: bool = False,
     frontier_reached: bool = False,
+    frontier_missing: bool = False,
 ) -> CoverageDraft:
     return CoverageDraft(
         task_kind=TaskKind.FETCH_LATEST_COMMENTS,
@@ -1056,7 +1316,7 @@ def _coverage(
         raw_payloads_saved=counters.raw_payloads_saved,
         request_errors=counters.pages_requested - counters.pages_succeeded,
         frontier_reached=frontier_reached,
-        frontier_missing=False,
+        frontier_missing=frontier_missing,
         truncated=truncated,
         corrupted=corrupted,
         reason=reason,

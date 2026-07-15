@@ -458,12 +458,14 @@ class LatestScanRunRepository:
         _require_running(scan)
         if scan.pages_succeeded >= scan.pages_requested:
             raise ValueError("Comment scan page success requires a recorded request")
+        first_successful_page = scan.pages_succeeded == 0
         scan.pages_succeeded += 1
         scan.items_observed += items_observed
         scan.raw_payloads_saved += raw_payloads_saved
         scan.result_cursor = result_cursor
-        scan.result_frontier_rpid = result_frontier_rpid
-        scan.result_anchor_set = anchors
+        if first_successful_page:
+            scan.result_frontier_rpid = result_frontier_rpid
+            scan.result_anchor_set = anchors
         scan.updated_at = now
         await self.session.flush()
         return scan

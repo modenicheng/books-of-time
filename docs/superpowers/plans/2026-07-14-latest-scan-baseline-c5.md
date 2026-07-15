@@ -471,7 +471,7 @@ git commit -m "feat(latest): automate baseline head sweep"
 - Implements scan-backed `incremental` mode using the persisted multi-anchor frontier.
 - Produces `complete/frontier_reached`, `partial/frontier_missing`, `paused/time_slice_yield`, and `corrupted` outcomes without placing outcome text in status.
 
-- [ ] **Step 1: Write failing incremental tests**
+- [x] **Step 1: Write failing incremental tests**
 
 Cover:
 
@@ -482,7 +482,7 @@ Cover:
 5. Reaching server end with non-empty old anchors absent marks `partial/frontier_missing`, records all missing anchor RPIDs in scan/state evidence, updates the current frontier candidate, and preserves the existing `missing_after_seen` visibility event behavior for the compatibility primary anchor.
 6. Cursor loop/retry exhaustion is corrupted and never advances the official frontier.
 
-- [ ] **Step 2: Run incremental tests and verify RED**
+- [x] **Step 2: Run incremental tests and verify RED**
 
 ```powershell
 uv run pytest tests/test_latest_scan_worker.py -q
@@ -490,18 +490,18 @@ uv run pytest tests/test_latest_scan_worker.py -q
 
 Expected: unsupported scan mode or missing frontier update behavior.
 
-- [ ] **Step 3: Implement incremental mode**
+- [x] **Step 3: Implement incremental mode**
 
 Use `scan.start_anchor_set` as immutable old frontier evidence and `scan.result_anchor_set` as the first successful current head candidate. Only a terminal reached/missing decision changes official `frontier_anchor_set`; paused/corrupted scans leave the official frontier unchanged. Continue to use `frontier_states.cursor` and CAS for physical resume.
 
-- [ ] **Step 4: Run collector and visibility regression tests**
+- [x] **Step 4: Run collector and visibility regression tests**
 
 ```powershell
 uv run pytest tests/test_latest_scan_worker.py tests/test_latest_comments_worker.py tests/test_comment_repositories.py -q
 uv run ruff check books_of_time/collectors/latest_scan.py books_of_time/db/latest_scan_repositories.py tests/test_latest_scan_worker.py
 ```
 
-- [ ] **Step 5: Commit the incremental unit**
+- [x] **Step 5: Commit the incremental unit**
 
 ```powershell
 git add books_of_time/collectors/latest_scan.py books_of_time/db/latest_scan_repositories.py tests/test_latest_scan_worker.py tests/test_comment_repositories.py

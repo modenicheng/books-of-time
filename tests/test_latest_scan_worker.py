@@ -19,6 +19,7 @@ from books_of_time.db.models import (
     CommentObservation,
     CommentObservationMedia,
     CommentScanRun,
+    CommentVisibilityEvent,
     FrontierState,
     KnownVideo,
     RawPageObservation,
@@ -268,6 +269,83 @@ async def _seed_head_scan_task(
     )
     assert task is not None
     return handoff.scan, handoff.frontier_state, task
+
+
+async def _seed_incremental_scan_task(
+    session,
+    *,
+    bvid: str,
+    now: datetime,
+    anchors: list[dict[str, object]],
+) -> tuple[CommentScanRun, FrontierState, CollectionTask]:
+    await _seed_policy_and_video(session, bvid=bvid, now=now)
+    frontier_repository = FrontierStateRepository(session)
+    frontier = await frontier_repository.get_or_create(
+        target_type="video",
+        target_id=bvid,
+        frontier_type="latest_comments",
+        now=now,
+    )
+    primary_rpid = int(anchors[0]["rpid"]) if anchors else None
+    primary_time = None
+    frontier = await frontier_repository.compare_and_swap(
+        frontier.id,
+        frontier.version,
+        FrontierStateUpdate(
+            frontier_rpid=primary_rpid,
+            frontier_time=primary_time,
+            frontier_anchor_set=anchors,
+            active_scan_run_id=None,
+            cursor=None,
+            last_scan_at=now,
+            last_scan_status="baseline_complete",
+            last_scan_pages=1,
+            last_scan_truncated=False,
+            extra={"baseline_status": "baseline_complete"},
+        ),
+        now=now,
+    )
+    claim = await LatestScanRunRepository(session).claim_or_join(
+        LatestScanRunPlan(
+            scan_key=f"snapshot:{bvid}:latest:incremental",
+            bvid=bvid,
+            snapshot_cohort_id=None,
+            parent_scan_run_id=None,
+            mode=CommentScanMode.INCREMENTAL,
+            policy_version="cohort-default-v2",
+            reason="routine",
+            start_frontier_rpid=primary_rpid,
+            start_anchor_set=anchors,
+            start_cursor=None,
+            extra={
+                "max_scan_seconds": 55,
+                "current_head_required": True,
+            },
+        ),
+        frontier_state=frontier,
+        expected_version=frontier.version,
+        now=now,
+    )
+    task = await CollectionTaskRepository(session).enqueue(
+        kind=TaskKind.FETCH_LATEST_COMMENTS,
+        target_type="video",
+        target_id=bvid,
+        priority=100,
+        payload={
+            "bvid": bvid,
+            "aid": 777,
+            "scan_mode": CommentScanMode.INCREMENTAL.value,
+            "frontier_version": claim.frontier_state.version,
+            "max_scan_seconds": 55,
+            "current_head_required": True,
+        },
+        not_before=now,
+        idempotency_key=f"{claim.scan.id}:incremental:0",
+        comment_scan_run_id=claim.scan.id,
+        scan_slice_no=0,
+        scan_slice_key=f"{claim.scan.id}:incremental:0",
+    )
+    return claim.scan, claim.frontier_state, task
 
 
 def _collector(
@@ -1014,5 +1092,300 @@ async def test_head_sweep_corrupts_when_all_start_anchors_are_missing(tmp_path) 
         assert frontier.frontier_anchor_set == []
         assert frontier.active_scan_run_id is None
         assert await session.scalar(select(func.count(CollectionTask.id))) == 2
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_incremental_matches_any_anchor_and_replaces_official_frontier(
+    tmp_path,
+) -> None:
+    engine, session_factory = await _database()
+    now = datetime(2026, 7, 14, 8, 0, tzinfo=UTC)
+    old_anchors = [
+        {"rpid": 3005 - index, "platform_created_at": None} for index in range(5)
+    ]
+    client = FakeLatestClient(
+        {
+            "": latest_body(
+                rpids=[3105, 3104, 3103, 3102, 3101],
+                next_offset="inc-2",
+            ),
+            "inc-2": latest_body(
+                rpids=[3001],
+                next_offset="",
+                is_end=True,
+            ),
+        }
+    )
+
+    async with session_factory.begin() as session:
+        scan, _frontier, task = await _seed_incremental_scan_task(
+            session,
+            bvid="BV-INCREMENTAL-MATCH",
+            now=now,
+            anchors=old_anchors,
+        )
+        scan_id = scan.id
+        task_id = task.id
+
+    async with session_factory.begin() as session:
+        task = await session.get(CollectionTask, task_id)
+        assert task is not None
+        draft = await _collector(tmp_path, client).collect(task, session)
+        assert draft.reason == "frontier_reached"
+        assert draft.frontier_reached is True
+        assert draft.frontier_missing is False
+
+    async with session_factory() as session:
+        scan = await session.get(CommentScanRun, scan_id)
+        frontier = await session.scalar(select(FrontierState))
+        assert scan is not None
+        assert frontier is not None
+        assert scan.status is CommentScanStatus.COMPLETE
+        assert scan.outcome == "frontier_reached"
+        assert [item["rpid"] for item in scan.start_anchor_set] == [
+            3005,
+            3004,
+            3003,
+            3002,
+            3001,
+        ]
+        assert [item["rpid"] for item in scan.result_anchor_set] == [
+            3105,
+            3104,
+            3103,
+            3102,
+            3101,
+        ]
+        assert [item["rpid"] for item in frontier.frontier_anchor_set] == [
+            3105,
+            3104,
+            3103,
+            3102,
+            3101,
+        ]
+        assert frontier.frontier_rpid == 3105
+        assert frontier.active_scan_run_id is None
+        assert frontier.cursor is None
+        assert frontier.last_scan_status == "incremental_complete"
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_incremental_pause_preserves_candidate_and_resumes(tmp_path) -> None:
+    engine, session_factory = await _database()
+    now = datetime(2026, 7, 14, 8, 0, tzinfo=UTC)
+    clock = MutableClock()
+    client = FakeLatestClient(
+        {
+            "": latest_body(rpids=[3202, 3201], next_offset="inc-2"),
+            "inc-2": latest_body(rpids=[3199], next_offset="", is_end=True),
+        },
+        clock=clock,
+        advance_after_offsets={""},
+    )
+
+    async with session_factory.begin() as session:
+        scan, _frontier, task = await _seed_incremental_scan_task(
+            session,
+            bvid="BV-INCREMENTAL-RESUME",
+            now=now,
+            anchors=[{"rpid": 3199, "platform_created_at": None}],
+        )
+        scan_id = scan.id
+        task_id = task.id
+
+    async with session_factory.begin() as session:
+        task = await session.get(CollectionTask, task_id)
+        assert task is not None
+        first = await _collector(tmp_path, client, clock=clock).collect(task, session)
+        assert first.reason == "time_slice_yield"
+
+    async with session_factory() as session:
+        scan = await session.get(CommentScanRun, scan_id)
+        frontier = await session.scalar(select(FrontierState))
+        followup = await session.scalar(
+            select(CollectionTask).where(
+                CollectionTask.comment_scan_run_id == scan_id,
+                CollectionTask.scan_slice_no == 1,
+            )
+        )
+        assert scan is not None
+        assert scan.status is CommentScanStatus.PAUSED
+        assert [item["rpid"] for item in scan.result_anchor_set] == [3202, 3201]
+        assert frontier is not None
+        assert frontier.frontier_rpid == 3199
+        assert frontier.cursor == "inc-2"
+        assert followup is not None
+        followup_id = followup.id
+
+    clock.value = 0
+    client.advance_after_offsets.clear()
+    async with session_factory.begin() as session:
+        followup = await session.get(CollectionTask, followup_id)
+        assert followup is not None
+        second = await _collector(tmp_path, client, clock=clock).collect(
+            followup,
+            session,
+        )
+        assert second.reason == "frontier_reached"
+
+    assert client.latest_offsets == ["", "inc-2"]
+    async with session_factory() as session:
+        scan = await session.get(CommentScanRun, scan_id)
+        frontier = await session.scalar(select(FrontierState))
+        assert scan is not None and scan.status is CommentScanStatus.COMPLETE
+        assert [item["rpid"] for item in scan.result_anchor_set] == [3202, 3201]
+        assert frontier is not None and frontier.frontier_rpid == 3202
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("new_rpids", "expected_frontier"),
+    [([3302, 3301], [3302, 3301]), ([], [])],
+)
+async def test_incremental_explicit_empty_frontier_completes_at_server_end(
+    tmp_path,
+    new_rpids: list[int],
+    expected_frontier: list[int],
+) -> None:
+    engine, session_factory = await _database()
+    now = datetime(2026, 7, 14, 8, 0, tzinfo=UTC)
+    client = FakeLatestClient(
+        {"": latest_body(rpids=new_rpids, next_offset="", is_end=True)}
+    )
+
+    async with session_factory.begin() as session:
+        scan, _frontier, task = await _seed_incremental_scan_task(
+            session,
+            bvid=f"BV-INCREMENTAL-EMPTY-{len(new_rpids)}",
+            now=now,
+            anchors=[],
+        )
+        scan_id = scan.id
+        task_id = task.id
+
+    async with session_factory.begin() as session:
+        task = await session.get(CollectionTask, task_id)
+        assert task is not None
+        draft = await _collector(tmp_path, client).collect(task, session)
+        assert draft.reason == "frontier_reached"
+        assert draft.frontier_reached is True
+        assert draft.frontier_missing is False
+
+    async with session_factory() as session:
+        scan = await session.get(CommentScanRun, scan_id)
+        frontier = await session.scalar(select(FrontierState))
+        assert scan is not None and scan.status is CommentScanStatus.COMPLETE
+        assert scan.outcome == "frontier_reached"
+        assert frontier is not None
+        assert [item["rpid"] for item in frontier.frontier_anchor_set] == (
+            expected_frontier
+        )
+        assert frontier.frontier_rpid == (
+            expected_frontier[0] if expected_frontier else None
+        )
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_incremental_missing_updates_candidate_and_records_all_missing_anchors(
+    tmp_path,
+) -> None:
+    engine, session_factory = await _database()
+    now = datetime(2026, 7, 14, 8, 0, tzinfo=UTC)
+    old_anchors = [
+        {"rpid": 3403, "platform_created_at": None},
+        {"rpid": 3402, "platform_created_at": None},
+        {"rpid": 3401, "platform_created_at": None},
+    ]
+    client = FakeLatestClient(
+        {"": latest_body(rpids=[3502, 3501], next_offset="", is_end=True)}
+    )
+
+    async with session_factory.begin() as session:
+        scan, _frontier, task = await _seed_incremental_scan_task(
+            session,
+            bvid="BV-INCREMENTAL-MISSING",
+            now=now,
+            anchors=old_anchors,
+        )
+        scan_id = scan.id
+        task_id = task.id
+
+    async with session_factory.begin() as session:
+        task = await session.get(CollectionTask, task_id)
+        assert task is not None
+        draft = await _collector(tmp_path, client).collect(task, session)
+        assert draft.reason == "frontier_missing"
+        assert draft.frontier_missing is True
+        assert draft.frontier_reached is False
+        assert draft.truncated is False
+
+    async with session_factory() as session:
+        scan = await session.get(CommentScanRun, scan_id)
+        frontier = await session.scalar(select(FrontierState))
+        visibility = await session.scalar(select(CommentVisibilityEvent))
+        assert scan is not None
+        assert frontier is not None
+        assert scan.status is CommentScanStatus.PARTIAL
+        assert scan.outcome == "frontier_missing"
+        assert scan.extra["missing_anchor_rpids"] == [3403, 3402, 3401]
+        assert [item["rpid"] for item in frontier.frontier_anchor_set] == [3502, 3501]
+        assert frontier.frontier_rpid == 3502
+        assert frontier.extra["missing_anchor_rpids"] == [3403, 3402, 3401]
+        assert frontier.active_scan_run_id is None
+        assert frontier.last_scan_status == "frontier_missing"
+        assert visibility is not None
+        assert visibility.rpid == 3403
+        assert visibility.missing_reason == "missing_after_seen"
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_incremental_cursor_loop_does_not_advance_official_frontier(
+    tmp_path,
+) -> None:
+    engine, session_factory = await _database()
+    now = datetime(2026, 7, 14, 8, 0, tzinfo=UTC)
+    old_anchors = [{"rpid": 3601, "platform_created_at": None}]
+    client = FakeLatestClient(
+        {
+            "": latest_body(rpids=[3702], next_offset="inc-2"),
+            "inc-2": latest_body(rpids=[3701], next_offset="inc-2"),
+        }
+    )
+
+    async with session_factory.begin() as session:
+        scan, _frontier, task = await _seed_incremental_scan_task(
+            session,
+            bvid="BV-INCREMENTAL-LOOP",
+            now=now,
+            anchors=old_anchors,
+        )
+        scan_id = scan.id
+        task_id = task.id
+
+    async with session_factory.begin() as session:
+        task = await session.get(CollectionTask, task_id)
+        assert task is not None
+        draft = await _collector(tmp_path, client).collect(task, session)
+        assert draft.corrupted is True
+        assert draft.reason == "cursor_loop"
+
+    async with session_factory() as session:
+        scan = await session.get(CommentScanRun, scan_id)
+        frontier = await session.scalar(select(FrontierState))
+        assert scan is not None and scan.status is CommentScanStatus.CORRUPTED
+        assert frontier is not None
+        assert [item["rpid"] for item in frontier.frontier_anchor_set] == [3601]
+        assert frontier.frontier_rpid == 3601
+        assert frontier.active_scan_run_id is None
 
     await engine.dispose()
