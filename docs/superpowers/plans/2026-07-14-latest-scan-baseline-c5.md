@@ -525,7 +525,7 @@ git commit -m "feat(latest): continue multi-anchor incremental scans"
 - Produces planner repair/finalization for linked components whose active scan changed, closed, or crossed their deadline.
 - Clears `frontier_states.active_scan_run_id` through CAS when a worker terminally fails an active latest task.
 
-- [ ] **Step 1: Write failing component fan-out tests**
+- [x] **Step 1: Write failing component fan-out tests**
 
 Materialize several cohorts linked to one scan and assert:
 
@@ -536,7 +536,7 @@ Materialize several cohorts linked to one scan and assert:
 5. At deadline, an unresolved tail consumer becomes partial `baseline_tail_in_progress`; another latest consumer becomes partial `current_head_not_captured`.
 6. All affected parent cohorts are recomputed, not only the task-owning cohort.
 
-- [ ] **Step 2: Write failing terminal failure tests**
+- [x] **Step 2: Write failing terminal failure tests**
 
 Assert retryable task failure keeps scan/frontier ownership and components active. On retry exhaustion:
 
@@ -550,17 +550,17 @@ all parent cohorts          -> recomputed terminal state
 
 A stale worker version conflict must not clear a newer active owner.
 
-- [ ] **Step 3: Run lifecycle tests and verify RED**
+- [x] **Step 3: Run lifecycle tests and verify RED**
 
 ```powershell
 uv run pytest tests/test_worker_cohort_lifecycle.py tests/test_snapshot_cohort_planner.py tests/test_latest_scan_worker.py -q
 ```
 
-- [ ] **Step 4: Implement scan-consumer synchronization**
+- [x] **Step 4: Implement scan-consumer synchronization**
 
 For latest modes, do not use the C4 one-component exact-link shortcut. Load the task scan, allow the task's completed tail to point at its deterministic child, then synchronize every component linked to the effective scan. Copy cumulative counters, evaluate head capture windows, and recompute each distinct cohort under row locks.
 
-- [ ] **Step 5: Implement planner repair and deadline finalization**
+- [x] **Step 5: Implement planner repair and deadline finalization**
 
 On each 30-second plan cycle, process a bounded set of non-terminal latest components:
 
@@ -571,18 +571,18 @@ On each 30-second plan cycle, process a bounded set of non-terminal latest compo
 
 This path remains inert for shadow cohorts and does not activate live service ownership.
 
-- [ ] **Step 6: Implement terminal worker cleanup**
+- [x] **Step 6: Implement terminal worker cleanup**
 
 When task retries exhaust, terminalize the active latest scan, CAS-clear only the matching frontier owner, synchronize all linked components, and preserve failed coverage with the task scan ID. Keep the C4 hot failure path unchanged.
 
-- [ ] **Step 7: Run lifecycle verification**
+- [x] **Step 7: Run lifecycle verification**
 
 ```powershell
 uv run pytest tests/test_worker_cohort_lifecycle.py tests/test_snapshot_cohort_planner.py tests/test_latest_scan_worker.py tests/test_cohort_materialization.py -q
 uv run ruff check books_of_time/db/cohort_repositories.py books_of_time/task_orchestrator/snapshot_cohort_planner.py books_of_time/worker.py tests/test_worker_cohort_lifecycle.py tests/test_snapshot_cohort_planner.py
 ```
 
-- [ ] **Step 8: Commit the cohort lifecycle unit**
+- [x] **Step 8: Commit the cohort lifecycle unit**
 
 ```powershell
 git add books_of_time/db/cohort_repositories.py books_of_time/task_orchestrator/snapshot_cohort_planner.py books_of_time/worker.py tests/test_worker_cohort_lifecycle.py tests/test_snapshot_cohort_planner.py tests/test_latest_scan_worker.py

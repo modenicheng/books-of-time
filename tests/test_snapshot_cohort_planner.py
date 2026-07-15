@@ -7,11 +7,18 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from books_of_time.db.base import Base
+from books_of_time.db.cohort_repositories import (
+    CohortComponentPlan,
+    CollectionPolicyVersionRepository,
+    SnapshotCohortPlan,
+    SnapshotCohortRepository,
+)
 from books_of_time.db.models import (
     CollectionPolicyVersion,
     CollectionScheduleGap,
     CollectionTask,
     CommentScanRun,
+    FrontierState,
     KnownVideo,
     KnownVideoSource,
     SnapshotCohort,
@@ -19,12 +26,22 @@ from books_of_time.db.models import (
     VideoCollectionState,
     VideoMetricSnapshot,
 )
+from books_of_time.db.repositories import (
+    FrontierStateRepository,
+    FrontierStateUpdate,
+)
 from books_of_time.domain.cohort_policy import (
     CohortComponentStatus,
     CohortPolicy,
     CohortRolloutMode,
     CohortStatus,
     CollectionTier,
+)
+from books_of_time.domain.enums import (
+    CommentScanMode,
+    CommentScanStatus,
+    TaskKind,
+    TaskStatus,
 )
 from books_of_time.task_orchestrator.snapshot_cohort_planner import (
     SnapshotCohortPlanner,
@@ -102,6 +119,318 @@ async def _cohorts(session, bvid: str) -> list[SnapshotCohort]:
             .order_by(SnapshotCohort.scheduled_for, SnapshotCohort.id)
         )
     )
+
+
+async def _materialize_latest_for_repair(
+    session,
+    *,
+    policy: CohortPolicy,
+    bvid: str,
+    now: datetime,
+    deadline: datetime,
+    baseline_complete: bool,
+    rollout_mode: CohortRolloutMode = CohortRolloutMode.LIVE,
+    priority: int = 100,
+    budget_cost: int = 1,
+    max_retries: int = 3,
+):
+    await CollectionPolicyVersionRepository(session).ensure_configured(
+        policy,
+        now=now,
+    )
+    await _seed_video(
+        session,
+        bvid=bvid,
+        pubdate=now - timedelta(hours=1),
+    )
+    session.add(
+        VideoCollectionState(
+            bvid=bvid,
+            desired_tier=CollectionTier.S.value,
+            effective_tier=CollectionTier.S.value,
+            candidate_downgrade_tier=None,
+            consecutive_downgrade_count=0,
+            pinned_tier=CollectionTier.S.value,
+            life_stage="active",
+            schedule_anchor_at=now - timedelta(hours=1),
+            next_due_at=now + timedelta(hours=1),
+            last_planned_at=now,
+            last_completed_cohort_at=None,
+            last_checkpoint_hours=None,
+            policy_version=policy.policy_version,
+            extra={},
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    await session.flush()
+    if baseline_complete:
+        frontier_repository = FrontierStateRepository(session)
+        frontier = await frontier_repository.get_or_create(
+            target_type="video",
+            target_id=bvid,
+            frontier_type="latest_comments",
+            now=now,
+        )
+        frontier.frontier_rpid = 8001
+        frontier.frontier_time = now - timedelta(minutes=1)
+        frontier.frontier_anchor_set = [
+            {
+                "rpid": 8001,
+                "platform_created_at": (now - timedelta(minutes=1)).isoformat(),
+            }
+        ]
+        frontier.extra = {"baseline_status": "baseline_complete"}
+        await frontier_repository.save(frontier)
+
+    plan = SnapshotCohortPlan(
+        cohort_key=f"snapshot:{bvid}:repair",
+        bvid=bvid,
+        scheduled_for=now,
+        reason="routine",
+        age_checkpoint_hours=None,
+        desired_tier=CollectionTier.S,
+        effective_tier=CollectionTier.S,
+        policy_version=policy.policy_version,
+        deadline=deadline,
+        status=CohortStatus.PLANNED,
+        status_reason=None,
+        extra={},
+        components=(
+            CohortComponentPlan(
+                "latest_current_head",
+                TaskKind.FETCH_LATEST_COMMENTS,
+                1,
+                priority=priority,
+                budget_cost=budget_cost,
+                max_retries=max_retries,
+                payload={
+                    "max_scan_seconds": 48,
+                    "current_head_required": True,
+                },
+                extra={
+                    "max_scan_seconds": 48,
+                    "current_head_required": True,
+                },
+            ),
+        ),
+    )
+    return await SnapshotCohortRepository(session).materialize(
+        plan,
+        rollout_mode=rollout_mode,
+        now=now,
+    )
+
+
+@pytest.mark.asyncio
+async def test_live_planner_repair_ignores_shadow_latest_components() -> None:
+    engine, session_factory = await _database()
+    now = datetime(2026, 7, 14, 6, 0, tzinfo=UTC)
+    policy = _policy(rollout_mode="live")
+    try:
+        async with session_factory.begin() as session:
+            shadow = await _materialize_latest_for_repair(
+                session,
+                policy=policy,
+                bvid="BV-LATEST-SHADOW-REPAIR",
+                now=now,
+                deadline=now + timedelta(minutes=5),
+                baseline_complete=False,
+                rollout_mode=CohortRolloutMode.SHADOW,
+            )
+
+            await SnapshotCohortPlanner(policy).plan_due(
+                session,
+                now=now + timedelta(seconds=30),
+                rollout_mode=CohortRolloutMode.LIVE,
+            )
+
+            cohort = await session.get(SnapshotCohort, shadow.cohort.id)
+            component = await session.get(
+                SnapshotCohortComponent,
+                shadow.components[0].id,
+            )
+            assert cohort is not None
+            assert cohort.status == CohortStatus.SHADOW_PLANNED.value
+            assert component is not None
+            assert component.status == CohortComponentStatus.PENDING.value
+            assert component.comment_scan_run_id is None
+            assert await session.scalar(select(func.count(CommentScanRun.id))) == 0
+            assert await session.scalar(select(func.count(CollectionTask.id))) == 0
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_live_planner_finalizes_expired_latest_consumers_by_scan_phase() -> None:
+    engine, session_factory = await _database()
+    now = datetime(2026, 7, 14, 6, 0, tzinfo=UTC)
+    policy = _policy(rollout_mode="live")
+    try:
+        async with session_factory.begin() as session:
+            tail = await _materialize_latest_for_repair(
+                session,
+                policy=policy,
+                bvid="BV-LATEST-DEADLINE-TAIL",
+                now=now,
+                deadline=now + timedelta(seconds=20),
+                baseline_complete=False,
+            )
+            incremental = await _materialize_latest_for_repair(
+                session,
+                policy=policy,
+                bvid="BV-LATEST-DEADLINE-INCREMENTAL",
+                now=now,
+                deadline=now + timedelta(seconds=20),
+                baseline_complete=True,
+            )
+
+            await SnapshotCohortPlanner(policy).plan_due(
+                session,
+                now=now + timedelta(seconds=20),
+                rollout_mode=CohortRolloutMode.LIVE,
+            )
+
+            tail_component = await session.get(
+                SnapshotCohortComponent,
+                tail.components[0].id,
+            )
+            incremental_component = await session.get(
+                SnapshotCohortComponent,
+                incremental.components[0].id,
+            )
+            tail_cohort = await session.get(SnapshotCohort, tail.cohort.id)
+            incremental_cohort = await session.get(
+                SnapshotCohort,
+                incremental.cohort.id,
+            )
+
+            assert tail_component is not None
+            assert tail_component.status == CohortComponentStatus.PARTIAL.value
+            assert tail_component.failure_reason == "baseline_tail_in_progress"
+            assert incremental_component is not None
+            assert incremental_component.status == CohortComponentStatus.PARTIAL.value
+            assert incremental_component.failure_reason == "current_head_not_captured"
+            assert tail_cohort is not None
+            assert tail_cohort.status == CohortStatus.PARTIAL.value
+            assert incremental_cohort is not None
+            assert incremental_cohort.status == CohortStatus.PARTIAL.value
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_live_planner_repairs_latest_tasks_and_rebinds_terminal_scan() -> None:
+    engine, session_factory = await _database()
+    now = datetime(2026, 7, 14, 6, 0, tzinfo=UTC)
+    policy = _policy(rollout_mode="live")
+    bvid = "BV-LATEST-PLANNER-REPAIR"
+    try:
+        async with session_factory.begin() as session:
+            materialized = await _materialize_latest_for_repair(
+                session,
+                policy=policy,
+                bvid=bvid,
+                now=now,
+                deadline=now + timedelta(minutes=5),
+                baseline_complete=True,
+                priority=117,
+                budget_cost=4,
+                max_retries=6,
+            )
+            original_scan_id = materialized.components[0].comment_scan_run_id
+            assert original_scan_id is not None
+            await session.delete(materialized.tasks[0])
+            await session.flush()
+
+            planner = SnapshotCohortPlanner(policy)
+            await planner.plan_due(
+                session,
+                now=now + timedelta(seconds=30),
+                rollout_mode=CohortRolloutMode.LIVE,
+            )
+
+            repaired_task = await session.scalar(
+                select(CollectionTask).where(
+                    CollectionTask.comment_scan_run_id == original_scan_id
+                )
+            )
+            assert repaired_task is not None
+            assert repaired_task.scan_slice_no == 0
+            assert repaired_task.scan_slice_key == (f"{original_scan_id}:incremental:0")
+            assert repaired_task.priority == 117
+            assert repaired_task.budget_cost == 4
+            assert repaired_task.max_retries == 6
+
+            original_scan = await session.get(CommentScanRun, original_scan_id)
+            frontier = await session.scalar(
+                select(FrontierState).where(FrontierState.target_id == bvid)
+            )
+            assert original_scan is not None
+            assert frontier is not None
+            original_scan.status = CommentScanStatus.COMPLETE
+            original_scan.outcome = "frontier_reached"
+            original_scan.finished_at = now + timedelta(seconds=40)
+            repaired_task.status = TaskStatus.SUCCEEDED
+            await FrontierStateRepository(session).compare_and_swap(
+                frontier.id,
+                frontier.version,
+                FrontierStateUpdate(
+                    frontier_rpid=frontier.frontier_rpid,
+                    frontier_time=frontier.frontier_time,
+                    frontier_anchor_set=frontier.frontier_anchor_set,
+                    active_scan_run_id=None,
+                    cursor=None,
+                    last_scan_at=now + timedelta(seconds=40),
+                    last_scan_status=CommentScanStatus.COMPLETE.value,
+                    last_scan_pages=0,
+                    last_scan_truncated=False,
+                    extra=frontier.extra,
+                ),
+                now=now + timedelta(seconds=40),
+            )
+
+            await planner.plan_due(
+                session,
+                now=now + timedelta(seconds=60),
+                rollout_mode=CohortRolloutMode.LIVE,
+            )
+
+            component = await session.get(
+                SnapshotCohortComponent,
+                materialized.components[0].id,
+            )
+            scans = list(
+                await session.scalars(
+                    select(CommentScanRun)
+                    .where(CommentScanRun.bvid == bvid)
+                    .order_by(CommentScanRun.id)
+                )
+            )
+            tasks = list(
+                await session.scalars(
+                    select(CollectionTask)
+                    .where(CollectionTask.target_id == bvid)
+                    .order_by(CollectionTask.id)
+                )
+            )
+            frontier = await session.scalar(
+                select(FrontierState).where(FrontierState.target_id == bvid)
+            )
+
+            assert component is not None
+            assert len(scans) == 2
+            assert scans[1].mode is CommentScanMode.INCREMENTAL
+            assert scans[1].status is CommentScanStatus.PLANNED
+            assert component.comment_scan_run_id == scans[1].id
+            assert component.status == CohortComponentStatus.JOINED_ACTIVE_TASK.value
+            assert frontier is not None
+            assert frontier.active_scan_run_id == scans[1].id
+            assert len(tasks) == 2
+            assert tasks[1].comment_scan_run_id == scans[1].id
+            assert tasks[1].scan_slice_key == f"{scans[1].id}:incremental:0"
+    finally:
+        await engine.dispose()
 
 
 @pytest.mark.parametrize(
@@ -654,10 +983,18 @@ async def test_live_pending_checkpoint_expires_as_capacity_miss_before_recovery(
                 )
             )
         )
-        assert checkpoint.status == CohortStatus.MISSED.value
+        components_by_kind = {
+            component.component_kind: component for component in components
+        }
+        latest = components_by_kind["latest_reconciliation"]
+        assert checkpoint.status == CohortStatus.PARTIAL.value
         assert checkpoint.status_reason == "missed_due_to_capacity"
+        assert latest.status == CohortComponentStatus.PARTIAL.value
+        assert latest.failure_reason == "baseline_tail_in_progress"
         assert all(
-            component.status == "missed_due_to_capacity" for component in components
+            component.status == CohortComponentStatus.MISSED_DUE_TO_CAPACITY.value
+            for kind, component in components_by_kind.items()
+            if kind != "latest_reconciliation"
         )
         assert recovery.status == CohortStatus.PLANNED.value
 

@@ -36,6 +36,8 @@ from books_of_time.db.models import (
 from books_of_time.db.repositories import (
     CollectionTaskRepository,
     FrontierStateRepository,
+    FrontierStateUpdate,
+    FrontierVersionConflict,
 )
 from books_of_time.domain.cohort_policy import (
     CohortComponentStatus,
@@ -877,6 +879,13 @@ class SnapshotCohortRepository:
                 else None
             ),
         }
+        if _is_managed_latest_component(component_plan):
+            extra["repair_task"] = {
+                "priority": component_plan.priority,
+                "budget_cost": component_plan.budget_cost,
+                "max_retries": component_plan.max_retries,
+                "payload": deepcopy(dict(component_plan.payload)),
+            }
         row = SnapshotCohortComponent(
             cohort_id=cohort.id,
             component_kind=_required_text(
@@ -936,6 +945,7 @@ class SnapshotCohortExecutionRepository:
         if component.status not in {
             CohortComponentStatus.PENDING.value,
             CohortComponentStatus.RUNNING.value,
+            CohortComponentStatus.JOINED_ACTIVE_TASK.value,
         }:
             raise ValueError(
                 f"Cohort component is not executable: {component.id}:{component.status}"
@@ -978,6 +988,14 @@ class SnapshotCohortExecutionRepository:
         *,
         finished_at: datetime,
     ) -> SnapshotCohortComponent | None:
+        latest_scan = await self._load_latest_task_scan(task)
+        if latest_scan is not None:
+            await self.sync_latest_scan_consumers(
+                latest_scan.id,
+                finished_at=finished_at,
+            )
+            return await self._task_component(task)
+
         linked = await self._load_linked(task)
         if linked is None:
             return None
@@ -1016,6 +1034,31 @@ class SnapshotCohortExecutionRepository:
         terminal: bool,
         finished_at: datetime,
     ) -> SnapshotCohortComponent | None:
+        latest_scan = await self._load_latest_task_scan(task)
+        if latest_scan is not None:
+            component = await self._task_component(task)
+            if component is not None:
+                component.extra = {
+                    **component.extra,
+                    "failure_attempts": int(
+                        component.extra.get("failure_attempts") or 0
+                    )
+                    + 1,
+                    "last_failure_reason": coverage.reason,
+                }
+            if terminal:
+                await self._terminalize_latest_task_failure(
+                    task,
+                    latest_scan,
+                    coverage,
+                    finished_at=finished_at,
+                )
+            await self.sync_latest_scan_consumers(
+                latest_scan.id,
+                finished_at=finished_at,
+            )
+            return await self._task_component(task)
+
         linked = await self._load_linked(task)
         if linked is None:
             return None
@@ -1074,6 +1117,520 @@ class SnapshotCohortExecutionRepository:
                 component.finished_at = None
         await self._recompute_cohort(cohort, finished_at=finished_at)
         return component
+
+    async def sync_latest_scan_consumers(
+        self,
+        scan_run_id: int,
+        *,
+        finished_at: datetime,
+    ) -> int:
+        _require_aware(finished_at, "finished_at")
+        scan = await LatestScanRunRepository(self.session).lock(scan_run_id)
+        effective_scan = await self._effective_latest_scan(scan)
+        linked_scan_ids = {scan.id, effective_scan.id}
+        if effective_scan.parent_scan_run_id is not None:
+            linked_scan_ids.add(effective_scan.parent_scan_run_id)
+
+        components = list(
+            await self.session.scalars(
+                select(SnapshotCohortComponent)
+                .where(
+                    SnapshotCohortComponent.comment_scan_run_id.in_(linked_scan_ids),
+                    SnapshotCohortComponent.component_kind.in_(
+                        {"latest_current_head", "latest_reconciliation"}
+                    ),
+                    SnapshotCohortComponent.status.in_(
+                        {
+                            CohortComponentStatus.PENDING.value,
+                            CohortComponentStatus.RUNNING.value,
+                            CohortComponentStatus.JOINED_ACTIVE_TASK.value,
+                        }
+                    ),
+                )
+                .order_by(SnapshotCohortComponent.id.asc())
+                .with_for_update()
+            )
+        )
+        if not components:
+            return 0
+
+        (
+            requested,
+            succeeded,
+            items,
+            raw_payloads,
+        ) = await self._latest_cumulative_counters(effective_scan)
+        head_captured_at = _latest_head_captured_at(effective_scan)
+        cohort_ids: set[int] = set()
+        for component in components:
+            component.comment_scan_run_id = effective_scan.id
+            component.requested_pages = requested
+            component.succeeded_pages = succeeded
+            component.items_observed = items
+            component.raw_payloads_saved = raw_payloads
+            cohort_ids.add(component.cohort_id)
+
+            if _head_capture_satisfies(component, head_captured_at):
+                component.status = CohortComponentStatus.COMPLETE.value
+                component.started_at = component.started_at or head_captured_at
+                component.finished_at = finished_at
+                component.failure_reason = None
+            elif effective_scan.status is CommentScanStatus.FAILED:
+                component.status = CohortComponentStatus.FAILED.value
+                component.finished_at = effective_scan.finished_at or finished_at
+                component.failure_reason = (
+                    effective_scan.outcome
+                    or effective_scan.last_error_type
+                    or CommentScanStatus.FAILED.value
+                )
+            elif effective_scan.status is CommentScanStatus.CORRUPTED:
+                component.status = CohortComponentStatus.CORRUPTED.value
+                component.finished_at = effective_scan.finished_at or finished_at
+                component.failure_reason = (
+                    effective_scan.outcome
+                    or effective_scan.last_error_type
+                    or CommentScanStatus.CORRUPTED.value
+                )
+            else:
+                component.status = CohortComponentStatus.JOINED_ACTIVE_TASK.value
+                component.finished_at = None
+                component.failure_reason = None
+
+        for cohort_id in sorted(cohort_ids):
+            cohort = await self.session.scalar(
+                select(SnapshotCohort)
+                .where(SnapshotCohort.id == cohort_id)
+                .with_for_update()
+            )
+            if cohort is None:
+                raise LookupError(f"Snapshot cohort not found: {cohort_id}")
+            await self._recompute_cohort(cohort, finished_at=finished_at)
+        return len(components)
+
+    async def repair_latest_consumers(
+        self,
+        *,
+        now: datetime,
+        limit: int = 100,
+    ) -> int:
+        _require_aware(now, "now")
+        if isinstance(limit, bool) or limit <= 0:
+            raise ValueError("repair limit must be positive")
+        component_ids = list(
+            await self.session.scalars(
+                select(SnapshotCohortComponent.id)
+                .join(
+                    SnapshotCohort,
+                    SnapshotCohort.id == SnapshotCohortComponent.cohort_id,
+                )
+                .where(
+                    SnapshotCohort.status != CohortStatus.SHADOW_PLANNED.value,
+                    SnapshotCohortComponent.component_kind.in_(
+                        {"latest_current_head", "latest_reconciliation"}
+                    ),
+                    SnapshotCohortComponent.status.in_(
+                        {
+                            CohortComponentStatus.PENDING.value,
+                            CohortComponentStatus.RUNNING.value,
+                            CohortComponentStatus.JOINED_ACTIVE_TASK.value,
+                        }
+                    ),
+                )
+                .order_by(
+                    SnapshotCohortComponent.deadline.asc(),
+                    SnapshotCohortComponent.id.asc(),
+                )
+                .limit(limit)
+            )
+        )
+        repaired = 0
+        synchronized_scan_ids: set[int] = set()
+        for component_id in component_ids:
+            component = await self.session.scalar(
+                select(SnapshotCohortComponent)
+                .where(SnapshotCohortComponent.id == component_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+            if component is None or component.status not in {
+                CohortComponentStatus.PENDING.value,
+                CohortComponentStatus.RUNNING.value,
+                CohortComponentStatus.JOINED_ACTIVE_TASK.value,
+            }:
+                continue
+
+            scan = await self._component_latest_scan(component)
+            if scan is not None and scan.id not in synchronized_scan_ids:
+                await self.sync_latest_scan_consumers(scan.id, finished_at=now)
+                synchronized_scan_ids.add(scan.id)
+                component = await self.session.scalar(
+                    select(SnapshotCohortComponent)
+                    .where(SnapshotCohortComponent.id == component_id)
+                    .with_for_update()
+                    .execution_options(populate_existing=True)
+                )
+                if component is None or component.status not in {
+                    CohortComponentStatus.PENDING.value,
+                    CohortComponentStatus.RUNNING.value,
+                    CohortComponentStatus.JOINED_ACTIVE_TASK.value,
+                }:
+                    continue
+                scan = await self._component_latest_scan(component)
+
+            if component.deadline is not None and now >= component.deadline:
+                component.status = CohortComponentStatus.PARTIAL.value
+                component.finished_at = now
+                component.failure_reason = (
+                    "baseline_tail_in_progress"
+                    if scan is not None and scan.mode is CommentScanMode.BASELINE_TAIL
+                    else "current_head_not_captured"
+                )
+                cohort = await self._lock_cohort(component.cohort_id)
+                await self._recompute_cohort(cohort, finished_at=now)
+                repaired += 1
+                continue
+
+            if await self._ensure_latest_consumer_active(
+                component,
+                scan=scan,
+                now=now,
+            ):
+                repaired += 1
+        return repaired
+
+    async def _task_component(
+        self,
+        task: CollectionTask,
+    ) -> SnapshotCohortComponent | None:
+        linked = await self._load_linked(task)
+        return linked[1] if linked is not None else None
+
+    async def _component_latest_scan(
+        self,
+        component: SnapshotCohortComponent,
+    ) -> CommentScanRun | None:
+        if component.comment_scan_run_id is None:
+            return None
+        scan = await self.session.scalar(
+            select(CommentScanRun)
+            .where(CommentScanRun.id == component.comment_scan_run_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        if scan is None:
+            return None
+        if scan.mode not in _LATEST_COMMENT_SCAN_MODES:
+            raise ValueError("Latest component references an incompatible scan mode")
+        return scan
+
+    async def _lock_cohort(self, cohort_id: int) -> SnapshotCohort:
+        cohort = await self.session.scalar(
+            select(SnapshotCohort)
+            .where(SnapshotCohort.id == cohort_id)
+            .with_for_update()
+        )
+        if cohort is None:
+            raise LookupError(f"Snapshot cohort not found: {cohort_id}")
+        return cohort
+
+    async def _ensure_latest_consumer_active(
+        self,
+        component: SnapshotCohortComponent,
+        *,
+        scan: CommentScanRun | None,
+        now: datetime,
+    ) -> bool:
+        cohort = await self._lock_cohort(component.cohort_id)
+        if (
+            cohort.status == CohortStatus.SHADOW_PLANNED.value
+            or cohort.extra.get("rollout_mode") != CohortRolloutMode.LIVE.value
+        ):
+            return False
+        frontier_repository = FrontierStateRepository(self.session)
+        frontier = await frontier_repository.get_or_create(
+            target_type="video",
+            target_id=cohort.bvid,
+            frontier_type="latest_comments",
+            now=now,
+            lock=True,
+        )
+        scan_is_active_owner = (
+            scan is not None
+            and scan.status
+            in {
+                CommentScanStatus.PLANNED,
+                CommentScanStatus.RUNNING,
+                CommentScanStatus.PAUSED,
+            }
+            and frontier.active_scan_run_id == scan.id
+        )
+        changed = False
+        if not scan_is_active_owner:
+            plan = _latest_repair_scan_plan(
+                cohort,
+                component,
+                frontier=frontier,
+            )
+            claim = await LatestScanRunRepository(self.session).claim_or_join(
+                plan,
+                frontier_state=frontier,
+                expected_version=frontier.version,
+                now=now,
+            )
+            scan = claim.scan
+            frontier = claim.frontier_state
+            if component.comment_scan_run_id != scan.id:
+                component.comment_scan_run_id = scan.id
+                changed = True
+        if component.status != CohortComponentStatus.JOINED_ACTIVE_TASK.value:
+            component.status = CohortComponentStatus.JOINED_ACTIVE_TASK.value
+            component.finished_at = None
+            component.failure_reason = None
+            changed = True
+        if scan is None:
+            raise RuntimeError("Latest consumer repair did not resolve a scan")
+        task_created = await self._repair_latest_scan_task(
+            cohort,
+            component,
+            scan=scan,
+            frontier=frontier,
+            now=now,
+        )
+        if changed or task_created:
+            await self._recompute_cohort(cohort, finished_at=now)
+        return changed or task_created
+
+    async def _repair_latest_scan_task(
+        self,
+        cohort: SnapshotCohort,
+        component: SnapshotCohortComponent,
+        *,
+        scan: CommentScanRun,
+        frontier: FrontierState,
+        now: datetime,
+    ) -> bool:
+        if scan.status not in {
+            CommentScanStatus.PLANNED,
+            CommentScanStatus.PAUSED,
+        }:
+            return False
+        slice_no = 0 if scan.status is CommentScanStatus.PLANNED else scan.slice_count
+        slice_key = f"{scan.id}:{scan.mode.value}:{slice_no}"
+        existing = await self.session.scalar(
+            select(CollectionTask)
+            .where(CollectionTask.scan_slice_key == slice_key)
+            .with_for_update()
+        )
+        if existing is not None:
+            return False
+        template = await self.session.scalar(
+            select(CollectionTask)
+            .where(
+                CollectionTask.kind == TaskKind.FETCH_LATEST_COMMENTS,
+                CollectionTask.target_type == "video",
+                CollectionTask.target_id == cohort.bvid,
+            )
+            .order_by(CollectionTask.id.desc())
+            .limit(1)
+        )
+        repair_task = component.extra.get("repair_task")
+        if not isinstance(repair_task, Mapping):
+            repair_task = {}
+        payload = {
+            **(
+                deepcopy(dict(template.payload))
+                if template is not None
+                else deepcopy(dict(repair_task.get("payload") or {}))
+            ),
+            "bvid": cohort.bvid,
+            "reason": cohort.reason,
+            "scheduled_for": component.scheduled_for.isoformat(),
+            "cohort_key": cohort.cohort_key,
+            "component_kind": component.component_kind,
+            "max_scan_seconds": component.extra["max_scan_seconds"],
+            "current_head_required": True,
+            "scan_mode": scan.mode.value,
+            "frontier_version": frontier.version,
+        }
+        await CollectionTaskRepository(self.session).enqueue(
+            kind=TaskKind.FETCH_LATEST_COMMENTS,
+            target_type="video",
+            target_id=cohort.bvid,
+            priority=(
+                template.priority
+                if template is not None
+                else int(repair_task.get("priority", 100))
+            ),
+            budget_cost=(
+                template.budget_cost
+                if template is not None
+                else int(repair_task.get("budget_cost", 1))
+            ),
+            payload=payload,
+            not_before=now,
+            max_retries=(
+                template.max_retries
+                if template is not None
+                else int(repair_task.get("max_retries", 3))
+            ),
+            idempotency_key=slice_key,
+            snapshot_cohort_id=cohort.id,
+            snapshot_cohort_component_id=component.id,
+            comment_scan_run_id=scan.id,
+            scan_slice_no=slice_no,
+            scan_slice_key=slice_key,
+        )
+        return True
+
+    async def _load_latest_task_scan(
+        self,
+        task: CollectionTask,
+    ) -> CommentScanRun | None:
+        if task.comment_scan_run_id is None:
+            return None
+        scan = await self.session.scalar(
+            select(CommentScanRun)
+            .where(CommentScanRun.id == task.comment_scan_run_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        if scan is None:
+            raise LookupError(f"Comment scan run not found: {task.comment_scan_run_id}")
+        if scan.mode not in _LATEST_COMMENT_SCAN_MODES:
+            return None
+        if scan.bvid != task.target_id:
+            raise ValueError("Latest task and scan reference different videos")
+        return scan
+
+    async def _effective_latest_scan(
+        self,
+        scan: CommentScanRun,
+    ) -> CommentScanRun:
+        if (
+            scan.mode is not CommentScanMode.BASELINE_TAIL
+            or scan.status is not CommentScanStatus.COMPLETE
+            or scan.outcome != "tail_reached"
+        ):
+            return scan
+        child = await self.session.scalar(
+            select(CommentScanRun)
+            .where(CommentScanRun.parent_scan_run_id == scan.id)
+            .order_by(CommentScanRun.id.asc())
+            .limit(1)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        return child or scan
+
+    async def _latest_cumulative_counters(
+        self,
+        scan: CommentScanRun,
+    ) -> tuple[int, int, int, int]:
+        requested = scan.pages_requested
+        succeeded = scan.pages_succeeded
+        items = scan.items_observed
+        raw_payloads = scan.raw_payloads_saved
+        parent_id = scan.parent_scan_run_id
+        visited = {scan.id}
+        while parent_id is not None:
+            if parent_id in visited:
+                raise ValueError("Latest scan parent chain contains a cycle")
+            visited.add(parent_id)
+            parent = await self.session.scalar(
+                select(CommentScanRun)
+                .where(CommentScanRun.id == parent_id)
+                .with_for_update()
+            )
+            if parent is None:
+                raise LookupError(f"Comment scan run not found: {parent_id}")
+            if parent.mode not in _LATEST_COMMENT_SCAN_MODES:
+                raise ValueError("Latest scan parent has an incompatible mode")
+            requested += parent.pages_requested
+            succeeded += parent.pages_succeeded
+            items += parent.items_observed
+            raw_payloads += parent.raw_payloads_saved
+            parent_id = parent.parent_scan_run_id
+        return requested, succeeded, items, raw_payloads
+
+    async def _terminalize_latest_task_failure(
+        self,
+        task: CollectionTask,
+        scan: CommentScanRun,
+        coverage: CollectionCoverageStat,
+        *,
+        finished_at: datetime,
+    ) -> bool:
+        frontier = await FrontierStateRepository(self.session).get_or_create(
+            target_type="video",
+            target_id=scan.bvid,
+            frontier_type="latest_comments",
+            now=finished_at,
+            lock=True,
+        )
+        expected_version = task.payload.get("frontier_version")
+        if isinstance(expected_version, bool) or not isinstance(expected_version, int):
+            raise ValueError("Latest task frontier_version must be an integer")
+        if expected_version < 0:
+            raise ValueError("Latest task frontier_version must be non-negative")
+        if frontier.active_scan_run_id not in {None, scan.id}:
+            return False
+        if (
+            frontier.active_scan_run_id == scan.id
+            and frontier.version != expected_version
+        ):
+            return False
+
+        status = (
+            CommentScanStatus.CORRUPTED
+            if coverage.reason == "parse_error"
+            else CommentScanStatus.FAILED
+        )
+        try:
+            async with self.session.begin_nested():
+                if scan.status in {
+                    CommentScanStatus.PLANNED,
+                    CommentScanStatus.RUNNING,
+                    CommentScanStatus.PAUSED,
+                }:
+                    scan = await LatestScanRunRepository(self.session).mark_failed(
+                        scan.id,
+                        outcome="retry_exhausted",
+                        error_type=str(
+                            coverage.extra.get("exception_type")
+                            or coverage.reason
+                            or "collector_error"
+                        ),
+                        error_message=str(coverage.extra.get("message") or ""),
+                        status=status,
+                        now=finished_at,
+                    )
+                if frontier.active_scan_run_id == scan.id:
+                    updated = await FrontierStateRepository(
+                        self.session
+                    ).compare_and_swap(
+                        frontier.id,
+                        expected_version,
+                        FrontierStateUpdate(
+                            frontier_rpid=frontier.frontier_rpid,
+                            frontier_time=frontier.frontier_time,
+                            frontier_anchor_set=frontier.frontier_anchor_set,
+                            active_scan_run_id=None,
+                            cursor=None,
+                            last_scan_at=finished_at,
+                            last_scan_status=status.value,
+                            last_scan_pages=scan.pages_succeeded,
+                            last_scan_truncated=True,
+                            extra=deepcopy(dict(frontier.extra)),
+                        ),
+                        now=finished_at,
+                    )
+                    task.payload = {
+                        **task.payload,
+                        "frontier_version": updated.version,
+                    }
+        except FrontierVersionConflict:
+            return False
+        return True
 
     async def _load_linked(
         self,
@@ -1251,6 +1808,42 @@ class SnapshotCohortExecutionRepository:
             )
         cohort.updated_at = finished_at
         await self.session.flush()
+
+
+_LATEST_COMMENT_SCAN_MODES = frozenset(
+    {
+        CommentScanMode.BASELINE_TAIL,
+        CommentScanMode.BASELINE_HEAD_SWEEP,
+        CommentScanMode.INCREMENTAL,
+        CommentScanMode.FULL_RECONCILIATION,
+        CommentScanMode.SEGMENTED_RECONCILIATION,
+    }
+)
+
+
+def _latest_head_captured_at(scan: CommentScanRun) -> datetime | None:
+    if scan.mode is CommentScanMode.BASELINE_TAIL:
+        return None
+    value = scan.extra.get("head_captured_at")
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError("Latest scan head_captured_at must be an ISO-8601 string")
+    try:
+        captured_at = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise ValueError("Latest scan head_captured_at is invalid") from exc
+    _require_aware(captured_at, "head_captured_at")
+    return captured_at
+
+
+def _head_capture_satisfies(
+    component: SnapshotCohortComponent,
+    captured_at: datetime | None,
+) -> bool:
+    if captured_at is None or captured_at < component.scheduled_for:
+        return False
+    return component.deadline is None or captured_at < component.deadline
 
 
 def _normalize_scope(scope_type: str, scope_id: str | None) -> tuple[str, str]:
@@ -1443,6 +2036,43 @@ def _latest_scan_run_plan(
         start_anchor_set=anchors,
         start_cursor=frontier.cursor,
         extra=component_plan.extra,
+    )
+
+
+def _latest_repair_scan_plan(
+    cohort: SnapshotCohort,
+    component: SnapshotCohortComponent,
+    *,
+    frontier: FrontierState,
+) -> LatestScanRunPlan:
+    baseline_status = frontier.extra.get("baseline_status")
+    if baseline_status == "baseline_complete":
+        mode = CommentScanMode.INCREMENTAL
+    elif baseline_status == "baseline_tail_complete":
+        mode = CommentScanMode.BASELINE_HEAD_SWEEP
+    else:
+        mode = CommentScanMode.BASELINE_TAIL
+    anchors = _latest_start_anchors(frontier, mode=mode)
+    start_frontier_rpid, _ = primary_anchor(anchors)
+    extra = {
+        "max_scan_seconds": component.extra["max_scan_seconds"],
+        "current_head_required": True,
+    }
+    return LatestScanRunPlan(
+        scan_key=(
+            f"{component_key(cohort.cohort_key, component.component_kind)}"
+            f":continuation:{frontier.version}"
+        ),
+        bvid=cohort.bvid,
+        snapshot_cohort_id=cohort.id,
+        parent_scan_run_id=None,
+        mode=mode,
+        policy_version=cohort.policy_version,
+        reason=cohort.reason,
+        start_frontier_rpid=start_frontier_rpid,
+        start_anchor_set=anchors,
+        start_cursor=frontier.cursor,
+        extra=extra,
     )
 
 

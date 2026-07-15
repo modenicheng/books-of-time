@@ -12,6 +12,7 @@ from books_of_time.db.cohort_repositories import (
     CohortMaterializationResult,
     CollectionPolicyVersionRepository,
     CollectionScheduleGapRepository,
+    SnapshotCohortExecutionRepository,
     SnapshotCohortPlan,
     SnapshotCohortRepository,
     VideoCollectionStateRepository,
@@ -97,6 +98,10 @@ class SnapshotCohortPlanner:
         )
         if effective_rollout is CohortRolloutMode.LIVE:
             await SnapshotCohortRepository(session).repair_latest_tail_handoffs(
+                now=now,
+                limit=self.batch_limit,
+            )
+            await SnapshotCohortExecutionRepository(session).repair_latest_consumers(
                 now=now,
                 limit=self.batch_limit,
             )

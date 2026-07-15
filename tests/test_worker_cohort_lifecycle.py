@@ -11,15 +11,18 @@ from books_of_time.coverage import CoverageDraft
 from books_of_time.db.base import Base
 from books_of_time.db.cohort_repositories import (
     CohortComponentPlan,
+    SnapshotCohortExecutionRepository,
     SnapshotCohortPlan,
     SnapshotCohortRepository,
 )
 from books_of_time.db.comment_scan_repositories import CommentScanRunRepository
+from books_of_time.db.latest_scan_repositories import LatestScanRunRepository
 from books_of_time.db.models import (
     CollectionCoverageStat,
     CollectionPolicyVersion,
     CollectionTask,
     CommentScanRun,
+    FrontierState,
     HttpRequestAttempt,
     KnownVideo,
     RawPayload,
@@ -27,7 +30,11 @@ from books_of_time.db.models import (
     SnapshotCohortComponent,
     VideoCollectionState,
 )
-from books_of_time.db.repositories import CollectionTaskRepository
+from books_of_time.db.repositories import (
+    CollectionTaskRepository,
+    FrontierStateRepository,
+    FrontierStateUpdate,
+)
 from books_of_time.domain.cohort_policy import (
     CohortComponentStatus,
     CohortRolloutMode,
@@ -224,6 +231,132 @@ async def _materialize_hot_scan_task(
     assert scan_id is not None
     await session.commit()
     return result.tasks[0].id, result.cohort.id, result.components[0].id, scan_id
+
+
+async def _seed_latest_graph(session, *, now: datetime, bvid: str) -> None:
+    session.add(
+        CollectionPolicyVersion(
+            version="cohort-latest-v1",
+            policy_kind="snapshot_cohort",
+            scope_type="global",
+            scope_id="global",
+            timezone="Asia/Shanghai",
+            policy={},
+            algorithm="configured-fixed-v1",
+            created_at=now,
+            activated_at=now,
+            active=True,
+        )
+    )
+    session.add(
+        KnownVideo(
+            bvid=bvid,
+            source_mid="42",
+            pubdate=now - timedelta(hours=1),
+            first_seen_at=now - timedelta(hours=1),
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    await session.flush()
+    session.add(
+        VideoCollectionState(
+            bvid=bvid,
+            desired_tier="s",
+            effective_tier="s",
+            consecutive_downgrade_count=0,
+            life_stage="active",
+            schedule_anchor_at=now - timedelta(hours=1),
+            policy_version="cohort-latest-v1",
+            extra={},
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    await session.flush()
+
+
+def _latest_cohort_plan(
+    *,
+    bvid: str,
+    scheduled_for: datetime,
+    deadline: datetime,
+    suffix: str,
+    max_retries: int = 3,
+) -> SnapshotCohortPlan:
+    return SnapshotCohortPlan(
+        cohort_key=f"snapshot:{bvid}:{suffix}",
+        bvid=bvid,
+        scheduled_for=scheduled_for,
+        reason="routine",
+        age_checkpoint_hours=None,
+        desired_tier=CollectionTier.S,
+        effective_tier=CollectionTier.S,
+        policy_version="cohort-latest-v1",
+        deadline=deadline,
+        status=CohortStatus.PLANNED,
+        status_reason=None,
+        extra={},
+        components=(
+            CohortComponentPlan(
+                "latest_current_head",
+                TaskKind.FETCH_LATEST_COMMENTS,
+                1,
+                priority=100,
+                max_retries=max_retries,
+                payload={
+                    "max_scan_seconds": 48,
+                    "current_head_required": True,
+                },
+                extra={
+                    "max_scan_seconds": 48,
+                    "current_head_required": True,
+                },
+            ),
+        ),
+    )
+
+
+async def _materialize_shared_latest_task(
+    session,
+    *,
+    now: datetime,
+    bvid: str,
+    max_retries: int,
+) -> tuple[int, int, tuple[int, int], tuple[int, int]]:
+    await _seed_latest_graph(session, now=now, bvid=bvid)
+    repository = SnapshotCohortRepository(session)
+    first = await repository.materialize(
+        _latest_cohort_plan(
+            bvid=bvid,
+            scheduled_for=now,
+            deadline=now + timedelta(minutes=2),
+            suffix="first",
+            max_retries=max_retries,
+        ),
+        rollout_mode=CohortRolloutMode.LIVE,
+        now=now,
+    )
+    second = await repository.materialize(
+        _latest_cohort_plan(
+            bvid=bvid,
+            scheduled_for=now + timedelta(seconds=10),
+            deadline=now + timedelta(minutes=2, seconds=10),
+            suffix="second",
+            max_retries=max_retries,
+        ),
+        rollout_mode=CohortRolloutMode.LIVE,
+        now=now + timedelta(seconds=10),
+    )
+    scan_id = first.components[0].comment_scan_run_id
+    assert scan_id is not None
+    assert second.components[0].comment_scan_run_id == scan_id
+    return (
+        first.tasks[0].id,
+        scan_id,
+        (first.cohort.id, first.components[0].id),
+        (second.cohort.id, second.components[0].id),
+    )
 
 
 class SuccessfulCollector:
@@ -445,6 +578,392 @@ class ParseFailingScanCollector:
             message="invalid comment page",
             status_code=200,
         )
+
+
+class FailingLatestScanCollector:
+    def __init__(self, now: datetime, *, parse_failure: bool = False) -> None:
+        self.now = now
+        self.parse_failure = parse_failure
+
+    async def collect(self, task: CollectionTask, session) -> CoverageDraft:
+        assert task.comment_scan_run_id is not None
+        repository = LatestScanRunRepository(session)
+        scan = await repository.mark_running(
+            task.comment_scan_run_id,
+            now=self.now,
+            oid=777,
+        )
+        await repository.record_page_requested(scan.id, now=self.now)
+        if self.parse_failure:
+            raise ParseFailure(
+                request_type=BilibiliRequestType.COMMENT_LATEST,
+                message="invalid latest comment page",
+                status_code=200,
+            )
+        raise RuntimeError("latest collector failed")
+
+
+class StaleFailingLatestScanCollector:
+    def __init__(self, now: datetime) -> None:
+        self.now = now
+
+    async def collect(self, task: CollectionTask, session) -> CoverageDraft:
+        assert task.comment_scan_run_id is not None
+        scan_repository = LatestScanRunRepository(session)
+        scan = await scan_repository.mark_running(
+            task.comment_scan_run_id,
+            now=self.now,
+            oid=777,
+        )
+        await scan_repository.record_page_requested(scan.id, now=self.now)
+        frontier_repository = FrontierStateRepository(session)
+        frontier = await frontier_repository.get_or_create(
+            target_type="video",
+            target_id=scan.bvid,
+            frontier_type="latest_comments",
+            now=self.now,
+            lock=True,
+        )
+        await frontier_repository.compare_and_swap(
+            frontier.id,
+            frontier.version,
+            FrontierStateUpdate(
+                frontier_rpid=frontier.frontier_rpid,
+                frontier_time=frontier.frontier_time,
+                frontier_anchor_set=frontier.frontier_anchor_set,
+                active_scan_run_id=scan.id,
+                cursor=frontier.cursor,
+                last_scan_at=self.now,
+                last_scan_status=CommentScanStatus.RUNNING.value,
+                last_scan_pages=scan.pages_succeeded,
+                last_scan_truncated=True,
+                extra=frontier.extra,
+            ),
+            now=self.now,
+        )
+        raise RuntimeError("stale latest worker failed")
+
+
+@pytest.mark.asyncio
+async def test_latest_head_capture_fans_out_to_each_consumer_window() -> None:
+    engine, session_factory = await _database()
+    now = datetime(2099, 1, 1, tzinfo=UTC)
+    bvid = "BV-LATEST-FANOUT"
+    try:
+        async with session_factory.begin() as session:
+            await _seed_latest_graph(session, now=now, bvid=bvid)
+            repository = SnapshotCohortRepository(session)
+            first = await repository.materialize(
+                _latest_cohort_plan(
+                    bvid=bvid,
+                    scheduled_for=now,
+                    deadline=now + timedelta(minutes=2),
+                    suffix="first",
+                ),
+                rollout_mode=CohortRolloutMode.LIVE,
+                now=now,
+            )
+            second = await repository.materialize(
+                _latest_cohort_plan(
+                    bvid=bvid,
+                    scheduled_for=now + timedelta(seconds=10),
+                    deadline=now + timedelta(minutes=2, seconds=10),
+                    suffix="second",
+                ),
+                rollout_mode=CohortRolloutMode.LIVE,
+                now=now + timedelta(seconds=10),
+            )
+            parent_id = first.components[0].comment_scan_run_id
+            assert parent_id is not None
+            assert second.components[0].comment_scan_run_id == parent_id
+
+            latest_repository = LatestScanRunRepository(session)
+            parent = await latest_repository.mark_running(parent_id, now=now)
+            parent.start_anchor_set = [
+                {"rpid": 9001, "platform_created_at": now.isoformat()}
+            ]
+            parent.start_frontier_rpid = 9001
+            parent.pages_requested = 2
+            parent.pages_succeeded = 2
+            parent.items_observed = 5
+            parent.raw_payloads_saved = 2
+            frontier = await session.scalar(select(FrontierState))
+            assert frontier is not None
+            handoff = await latest_repository.complete_tail_and_create_head(
+                parent.id,
+                frontier_state=frontier,
+                expected_version=frontier.version,
+                now=now + timedelta(seconds=30),
+            )
+            assert handoff is not None
+            child = handoff.scan
+
+            execution = SnapshotCohortExecutionRepository(session)
+            await execution.sync_latest_scan_consumers(
+                parent.id,
+                finished_at=now + timedelta(seconds=30),
+            )
+            early_components = list(
+                await session.scalars(
+                    select(SnapshotCohortComponent).order_by(SnapshotCohortComponent.id)
+                )
+            )
+            early_cohorts = list(
+                await session.scalars(
+                    select(SnapshotCohort).order_by(SnapshotCohort.id)
+                )
+            )
+            assert all(
+                component.comment_scan_run_id == child.id
+                for component in early_components
+            )
+            assert all(
+                component.status == CohortComponentStatus.JOINED_ACTIVE_TASK.value
+                for component in early_components
+            )
+            assert all(
+                cohort.status == CohortStatus.RUNNING.value for cohort in early_cohorts
+            )
+
+            captured_at = now + timedelta(seconds=40)
+            child.status = CommentScanStatus.PAUSED
+            child.started_at = now + timedelta(seconds=30)
+            child.pages_requested = 1
+            child.pages_succeeded = 1
+            child.items_observed = 3
+            child.raw_payloads_saved = 1
+            child.extra = {
+                **child.extra,
+                "head_captured_at": captured_at.isoformat(),
+            }
+            third = await repository.materialize(
+                _latest_cohort_plan(
+                    bvid=bvid,
+                    scheduled_for=now + timedelta(seconds=50),
+                    deadline=now + timedelta(minutes=2, seconds=50),
+                    suffix="third",
+                ),
+                rollout_mode=CohortRolloutMode.LIVE,
+                now=now + timedelta(seconds=50),
+            )
+            assert third.components[0].comment_scan_run_id == child.id
+
+            await execution.sync_latest_scan_consumers(
+                child.id,
+                finished_at=now + timedelta(seconds=55),
+            )
+            components = list(
+                await session.scalars(
+                    select(SnapshotCohortComponent).order_by(SnapshotCohortComponent.id)
+                )
+            )
+            cohorts = list(
+                await session.scalars(
+                    select(SnapshotCohort).order_by(SnapshotCohort.id)
+                )
+            )
+
+            assert [component.status for component in components] == [
+                CohortComponentStatus.COMPLETE.value,
+                CohortComponentStatus.COMPLETE.value,
+                CohortComponentStatus.JOINED_ACTIVE_TASK.value,
+            ]
+            assert all(component.requested_pages == 3 for component in components)
+            assert all(component.succeeded_pages == 3 for component in components)
+            assert all(component.items_observed == 8 for component in components)
+            assert all(component.raw_payloads_saved == 3 for component in components)
+            assert components[2].finished_at is None
+            assert [cohort.status for cohort in cohorts] == [
+                CohortStatus.COMPLETE.value,
+                CohortStatus.COMPLETE.value,
+                CohortStatus.RUNNING.value,
+            ]
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_latest_retry_failure_keeps_all_consumers_and_owner_active() -> None:
+    engine, session_factory = await _database()
+    now = datetime(2099, 1, 1, tzinfo=UTC)
+    try:
+        async with session_factory.begin() as session:
+            task_id, scan_id, first, second = await _materialize_shared_latest_task(
+                session,
+                now=now,
+                bvid="BV-LATEST-RETRY",
+                max_retries=1,
+            )
+
+        worker = Worker(
+            session_factory=session_factory,
+            collectors={
+                TaskKind.FETCH_LATEST_COMMENTS: FailingLatestScanCollector(now),
+            },
+            run_id="latest-retry-active",
+            lease_owner="worker-c5",
+            retry_delay_seconds=1,
+        )
+        assert await worker.run_once(now=now) is True
+
+        async with session_factory() as session:
+            task = await session.get(CollectionTask, task_id)
+            scan = await session.get(CommentScanRun, scan_id)
+            frontier = await session.scalar(select(FrontierState))
+            components = [
+                await session.get(SnapshotCohortComponent, component_id)
+                for _cohort_id, component_id in (first, second)
+            ]
+            cohorts = [
+                await session.get(SnapshotCohort, cohort_id)
+                for cohort_id, _component_id in (first, second)
+            ]
+
+            assert task is not None and task.status is TaskStatus.PENDING
+            assert scan is not None and scan.status is CommentScanStatus.RUNNING
+            assert frontier is not None and frontier.active_scan_run_id == scan_id
+            assert all(component is not None for component in components)
+            assert all(
+                component.status
+                in {
+                    CohortComponentStatus.RUNNING.value,
+                    CohortComponentStatus.JOINED_ACTIVE_TASK.value,
+                }
+                for component in components
+                if component is not None
+            )
+            assert all(
+                cohort is not None and cohort.status == CohortStatus.RUNNING.value
+                for cohort in cohorts
+            )
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("parse_failure", "scan_status", "component_status", "cohort_status"),
+    [
+        (
+            False,
+            CommentScanStatus.FAILED,
+            CohortComponentStatus.FAILED.value,
+            CohortStatus.PARTIAL.value,
+        ),
+        (
+            True,
+            CommentScanStatus.CORRUPTED,
+            CohortComponentStatus.CORRUPTED.value,
+            CohortStatus.CORRUPTED.value,
+        ),
+    ],
+)
+async def test_latest_terminal_failure_clears_owner_and_fans_out(
+    parse_failure: bool,
+    scan_status: CommentScanStatus,
+    component_status: str,
+    cohort_status: str,
+) -> None:
+    engine, session_factory = await _database()
+    now = datetime(2099, 1, 1, tzinfo=UTC)
+    try:
+        async with session_factory.begin() as session:
+            task_id, scan_id, first, second = await _materialize_shared_latest_task(
+                session,
+                now=now,
+                bvid=f"BV-LATEST-TERMINAL-{int(parse_failure)}",
+                max_retries=0,
+            )
+
+        worker = Worker(
+            session_factory=session_factory,
+            collectors={
+                TaskKind.FETCH_LATEST_COMMENTS: FailingLatestScanCollector(
+                    now,
+                    parse_failure=parse_failure,
+                ),
+            },
+            run_id=f"latest-terminal-{int(parse_failure)}",
+            lease_owner="worker-c5",
+        )
+        assert await worker.run_once(now=now) is True
+
+        async with session_factory() as session:
+            task = await session.get(CollectionTask, task_id)
+            scan = await session.get(CommentScanRun, scan_id)
+            frontier = await session.scalar(select(FrontierState))
+            components = [
+                await session.get(SnapshotCohortComponent, component_id)
+                for _cohort_id, component_id in (first, second)
+            ]
+            cohorts = [
+                await session.get(SnapshotCohort, cohort_id)
+                for cohort_id, _component_id in (first, second)
+            ]
+            coverage = await session.scalar(select(CollectionCoverageStat))
+
+            assert task is not None and task.status is TaskStatus.FAILED
+            assert scan is not None and scan.status is scan_status
+            assert scan.outcome == "retry_exhausted"
+            assert frontier is not None and frontier.active_scan_run_id is None
+            assert all(
+                component is not None and component.status == component_status
+                for component in components
+            )
+            assert all(
+                cohort is not None and cohort.status == cohort_status
+                for cohort in cohorts
+            )
+            assert coverage is not None
+            assert coverage.comment_scan_run_id == scan_id
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_stale_latest_worker_cannot_clear_newer_frontier_version() -> None:
+    engine, session_factory = await _database()
+    now = datetime(2099, 1, 1, tzinfo=UTC)
+    try:
+        async with session_factory.begin() as session:
+            task_id, scan_id, first, second = await _materialize_shared_latest_task(
+                session,
+                now=now,
+                bvid="BV-LATEST-STALE-WORKER",
+                max_retries=0,
+            )
+
+        worker = Worker(
+            session_factory=session_factory,
+            collectors={
+                TaskKind.FETCH_LATEST_COMMENTS: StaleFailingLatestScanCollector(now),
+            },
+            run_id="latest-stale-worker",
+            lease_owner="worker-c5-stale",
+        )
+        assert await worker.run_once(now=now) is True
+
+        async with session_factory() as session:
+            task = await session.get(CollectionTask, task_id)
+            scan = await session.get(CommentScanRun, scan_id)
+            frontier = await session.scalar(select(FrontierState))
+            components = [
+                await session.get(SnapshotCohortComponent, component_id)
+                for _cohort_id, component_id in (first, second)
+            ]
+
+            assert task is not None and task.status is TaskStatus.FAILED
+            assert scan is not None and scan.status is CommentScanStatus.RUNNING
+            assert frontier is not None
+            assert frontier.active_scan_run_id == scan_id
+            assert frontier.version > int(task.payload["frontier_version"])
+            assert all(
+                component is not None
+                and component.status == CohortComponentStatus.JOINED_ACTIVE_TASK.value
+                for component in components
+            )
+    finally:
+        await engine.dispose()
 
 
 @pytest.mark.asyncio
